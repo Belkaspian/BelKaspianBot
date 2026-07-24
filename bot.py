@@ -35,7 +35,6 @@ DIRECTIONS = [
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    # Таблица пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -69,11 +68,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
     conn.close()
 
     if not user:
-        # Если пользователя нет в базе — запускаем регистрацию
         await message.answer("Здравствуйте! Для доступа к системе необходима регистрация.\n\nШаг 1 из 3: Введите название вашей компании:")
         await state.set_state(RegistrationStates.waiting_for_company)
     else:
-        # Если зарегистрирован — показываем главное меню
         await show_main_menu(message)
 
 
@@ -88,35 +85,33 @@ async def process_company(message: types.Message, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     
-    # Создаем кнопку для отправки контакта в один клик
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="📱 Поделиться номером телефона", request_contact=True))
     
     await message.answer(
-        "Шаг 3 из 3: Нажмите на кнопку ниже, чтобы поделиться номером телефона:",
+        "Шаг 3 из 3: Нажмите кнопку ниже для отправки номера в 1 клик, "
+        "либо просто введите его текстом (или отправьте `-`, чтобы пропустить):",
         reply_markup=builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
     )
     await state.set_state(RegistrationStates.waiting_for_phone)
 
 
-@dp.message(RegistrationStates.waiting_for_phone, F.contact)
+# Обработка получения телефона (либо через кнопку контакта, либо текстом)
+@dp.message(RegistrationStates.waiting_for_phone)
 async def process_phone(message: types.Message, state: FSMContext):
-    contact = message.contact
-    phone = contact.phone_number
+    if message.contact:
+        phone = message.contact.phone_number
+    else:
+        text_input = message.text.strip()
+        phone = "Не указан" if text_input == "-" else text_input
+
     data = await state.get_data()
-    
     company = data.get("company")
     name = data.get("name")
     user_id = message.from_user.id
     
-    # Сохраняем в базу данных
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        OR.INSERT INTO users (user_id, company, name, phone, subscriptions)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_id, company, name, phone, ""))
-    # Исправление синтаксиса на стандартный INSERT OR REPLACE
     cursor.execute("""
         INSERT OR REPLACE INTO users (user_id, company, name, phone, subscriptions)
         VALUES (?, ?, ?, ?, COALESCE((SELECT subscriptions FROM users WHERE user_id = ?), ''))
@@ -126,7 +121,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     
     await state.clear()
     
-    # Убираем клавиатуру с кнопкой телефона и показываем меню
     await message.answer("Регистрация успешно завершена! 🎉", reply_markup=types.ReplyKeyboardRemove())
     await show_main_menu(message)
 
@@ -161,8 +155,7 @@ async def show_main_menu(message: types.Message):
         f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
     )
     
-    if message.from_user.id == message.chat.id:
-        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data.startswith("toggle_dir_"))
@@ -188,7 +181,6 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
     
-    # Перестраиваем клавиатуру с учетом изменений
     builder = InlineKeyboardBuilder()
     for d in DIRECTIONS:
         is_selected = d in current_subs
@@ -221,10 +213,8 @@ async def health_check(request):
     return web.Response(text="Bot is running!")
 
 async def main():
-    # Очищаем вебхук перед стартом поллинга
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Поднимаем фейковый сервер для удержания порта Render
     app = web.Application()
     app.router.add_get('/', health_check)
     runner = web.AppRunner(app)
@@ -235,7 +225,6 @@ async def main():
     await site.start()
     logging.info(f"Dummy web server started on port {port}")
 
-    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
