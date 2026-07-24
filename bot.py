@@ -207,7 +207,7 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                 )
             else:
                 builder = InlineKeyboardBuilder()
-                # Кнопки РЯДОМ в одну строку
+                # Кнопки друг под другом
                 btn_confirm = types.InlineKeyboardButton(
                     text=f"✅ Подтвердить за {price_str}",
                     callback_data=f"confirm_{cargo_id}"
@@ -216,7 +216,8 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                     text="💰 Своя ставка",
                     callback_data=f"bid_{cargo_id}"
                 )
-                builder.row(btn_confirm, btn_bid)
+                builder.row(btn_confirm)
+                builder.row(btn_bid)
                 
                 await bot.edit_message_text(
                     chat_id=u_id,
@@ -253,7 +254,8 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
             text="💰 Своя ставка",
             callback_data=f"bid_{cargo_id}"
         )
-        builder.row(btn_confirm, btn_bid)
+        builder.row(btn_confirm)
+        builder.row(btn_bid)
     
     try:
         msg = await bot.send_message(
@@ -518,6 +520,12 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     requested_cars_match = re.search(r'\d+', qty_input)
     requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
     
+    # Проверка на превышение доступного лимита машин
+    warning_text = ""
+    if requested_cars > total_cars:
+        requested_cars = total_cars
+        warning_text = f"⚠️ Столько грузов нет, доступно только {total_cars} авто. Берем в работу {total_cars} авто.\n\n"
+
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
     carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
     
@@ -541,7 +549,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         admin_notification = (
             f"🎯 **Заявка на груз!**\n\n"
             f"📦 Описание:\n{raw_cargo_text}\n\n"
-            f"🚛 Забирает авто: **{qty_input}**\n"
+            f"🚛 Забирает авто: **{requested_cars}**\n"
             f"{carrier_info}"
         )
         try:
@@ -550,7 +558,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             pass
             
         await state.clear()
-        await message.answer("✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
+        await message.answer(f"{warning_text}✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
         
     elif action_type == "bid":
         rate = data.get("custom_rate")
@@ -559,14 +567,16 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         bid_notification = (
             f"💰 **Новая ставка от перевозчика!**\n\n"
             f"📦 Груз:\n{raw_cargo_text}\n\n"
-            f"💵 Ставка: **{rate}** | 🚛 Авто: **{qty_input}**\n"
+            f"💵 Ставка: **{rate}** | 🚛 Авто: **{requested_cars}**\n"
             f"{carrier_info}\n\n"
             f"*(Груз остается активным для других участников)*"
         )
         
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_{cargo_id}_{user_id}_{requested_cars}"),
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_{cargo_id}_{user_id}_{requested_cars}")
+        )
+        admin_builder.row(
             types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"adm_decline_{cargo_id}_{user_id}")
         )
 
@@ -581,7 +591,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             pass
                 
         await state.clear()
-        await message.answer("✅ Ваша ставка и количество авто отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
+        await message.answer(f"{warning_text}✅ Ваша ставка и количество авто ({requested_cars}) отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
 @dp.callback_query(F.data.startswith("adm_accept_"))
 async def admin_accept_bid(callback: types.CallbackQuery):
