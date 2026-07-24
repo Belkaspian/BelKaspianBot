@@ -88,16 +88,17 @@ def get_main_reply_markup():
     return builder.as_markup(resize_keyboard=True)
 
 def extract_price(text: str) -> str:
+    # Убираем возможные лишние запятые, пробелы и точки на концах/начале
     match = re.search(r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб))', text, re.IGNORECASE)
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip(' ,.')
     return ""
 
 def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     """
-    Преобразует сырой текст в новый компактный формат:
-    25.07 | 📍 Тбилиси → Москва, 1 авто
-    💰 124 000 руб.
+    Преобразует сырой текст в чистый формат:
+    25.07 | 📍 Тбилиси → Москва, 2 авто
+    💰 124.000 руб.
     📦 Тент, ДСП до 22т
     """
     lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
@@ -109,7 +110,7 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     details = []
     
     date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
-    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?))', re.IGNORECASE)
+    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?[е]?))', re.IGNORECASE)
     
     for line in lines:
         if not date_str:
@@ -133,19 +134,19 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
         elif not price_str and re.search(r'\d{2,}\s*[\.,]\d{3}', line):
             price_str = line.strip(' ,.')
 
-    # Если передано новое принудительное количество авто (например, остаток)
     if override_qty is not None:
         cars_str = override_qty
     elif not cars_str:
-        # Попробуем поискать во всем тексте цифру с авто, если в строке маршрута не нашлось
         full_match = cars_pattern.search(raw_text)
         if full_match:
             cars_str = full_match.group(1)
 
     for line in lines:
-        if line == date_str or line == route_str or line == price_str:
+        # Пропускаем служебные строки, чтобы они не дублировались в описании
+        if date_pattern.search(line) and ('-' in line or '→' in line or 'авт' in line):
             continue
-        # Исключаем чистые строки с авто из описания, чтобы они не дублировались
+        if re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and len(line) < 20:
+            continue
         if cars_pattern.search(line) and len(line) < 15:
             continue
         details.append(line)
@@ -157,7 +158,6 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     if not price_str:
         price_str = "По запросу"
     
-    # Собираем строку маршрута вместе с количеством авто, если оно есть
     route_part = route_str
     if cars_str:
         route_part += f", {cars_str}"
@@ -169,6 +169,44 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
         f"💰 {price_str}\n"
         f"📦 {details_text}"
     )
+
+async def update_cargo_messages_for_all_users(cargo_id: int, new_text: str, price: str, is_closed: bool = False):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
+    messages_to_edit = cursor.fetchall()
+    conn.close()
+
+    for u_id, msg_id in messages_to_edit:
+        try:
+            if is_closed:
+                await bot.edit_message_text(
+                    chat_id=u_id,
+                    message_id=msg_id,
+                    text=f"🚫 **Груз закрыт**\n\n{new_text}",
+                    reply_markup=None,
+                    parse_mode="Markdown"
+                )
+            else:
+                builder = InlineKeyboardBuilder()
+                if price:
+                    builder.row(types.InlineKeyboardButton(
+                        text=f"✅ Подтвердить авто за {price}",
+                        callback_data=f"confirm_{cargo_id}"
+                    ))
+                builder.row(types.InlineKeyboardButton(
+                    text="💰 Предложить авто по своей ставке",
+                    callback_data=f"bid_{cargo_id}"
+                ))
+                await bot.edit_message_text(
+                    chat_id=u_id,
+                    message_id=msg_id,
+                    text=new_text,
+                    reply_markup=builder.as_markup(),
+                    parse_mode="Markdown"
+                )
+        except Exception:
+            pass
 
 async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str):
     formatted_text = format_cargo_text(text)
@@ -383,13 +421,14 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
     
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT text FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text, price FROM cargo WHERE id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
     cargo_text = row[0] if row else callback.message.text
+    price = row[1] if row else ""
         
-    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text)
+    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text, cargo_price=price, action_type="confirm")
     await callback.message.answer("Напишите, сколько авто вы забираете?")
     await state.set_state(DealStates.waiting_for_quantity)
     await callback.answer()
@@ -401,6 +440,8 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cargo_id = data.get("cargo_id")
     cargo_text = data.get("cargo_text")
+    price = data.get("cargo_price")
+    action_type = data.get("action_type", "confirm")
     
     user_id = message.from_user.id
     conn = sqlite3.connect("bot_database.db")
@@ -409,89 +450,91 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     
-    # Пытаемся извлечь текущее число машин из исходного текста
-    current_cars_match = re.search(r'(\d+)\s*(?:авт[оа]|машин[аы]?)', cargo_text, re.IGNORECASE)
+    current_cars_match = re.search(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?)', cargo_text, re.IGNORECASE)
     total_cars = int(current_cars_match.group(1)) if current_cars_match else None
     
-    # Пытаемся понять, сколько запросил пользователь
     requested_cars_match = re.search(r'\d+', qty_input)
     requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
     
-    messages_to_edit = []
-    
-    if total_cars and total_cars > requested_cars:
-        # Остались еще машины -> обновляем текст груза в базе и у всех пользователей уменьшаем счетчик
-        left_cars = total_cars - requested_cars
-        new_cars_str = f"{left_cars} авто"
-        
-        new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
-        
-        cursor.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
-        
-        cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
-        messages_to_edit = cursor.fetchall()
-    else:
-        # Машин не осталось -> закрываем груз полностью
-        cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
-        cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
-        messages_to_edit = cursor.fetchall()
-
-    conn.commit()
-    conn.close()
-    
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
     
-    admin_notification = (
-        f"🎯 **Заявка на груз!**\n\n"
-        f"📦 Описание:\n{cargo_text}\n\n"
-        f"🚛 Перевозчик забирает авто: **{qty_input}**\n"
-        f"Компания: {company}\n"
-        f"Имя: {name}\n"
-        f"Телефон: {phone}"
-    )
-    try:
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
-    except Exception:
-        pass
-        
-    # Обновляем сообщения у пользователей
-    for u_id, msg_id in messages_to_edit:
+    if action_type == "confirm":
+        if total_cars and total_cars > requested_cars:
+            left_cars = total_cars - requested_cars
+            new_cars_str = f"{left_cars} авто"
+            new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
+            
+            cursor.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
+            conn.commit()
+            conn.close()
+            
+            await update_cargo_messages_for_all_users(cargo_id, new_formatted_text, price, is_closed=False)
+        else:
+            cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+            conn.commit()
+            conn.close()
+            
+            await update_cargo_messages_for_all_users(cargo_id, cargo_text, price, is_closed=True)
+            
+        admin_notification = (
+            f"🎯 **Заявка на груз!**\n\n"
+            f"📦 Описание:\n{cargo_text}\n\n"
+            f"🚛 Перевозчик забирает авто: **{qty_input}**\n"
+            f"Компания: {company}\n"
+            f"Имя: {name}\n"
+            f"Телефон: {phone}"
+        )
         try:
-            if total_cars and total_cars > requested_cars:
-                # Если остались машины, просто обновляем текст на уменьшенный остаток
-                builder = InlineKeyboardBuilder()
-                # Извлекаем цену из исходного текста для кнопки
-                price_match = extract_price(cargo_text)
-                if price_match:
-                    builder.row(types.InlineKeyboardButton(
-                        text=f"✅ Подтвердить авто за {price_match}",
-                        callback_data=f"confirm_{cargo_id}"
-                    ))
-                builder.row(types.InlineKeyboardButton(
-                    text="💰 Предложить авто по своей ставке",
-                    callback_data=f"bid_{cargo_id}"
-                ))
-                await bot.edit_message_text(
-                    chat_id=u_id,
-                    message_id=msg_id,
-                    text=new_formatted_text,
-                    reply_markup=builder.as_markup(),
-                    parse_mode="Markdown"
-                )
-            else:
-                # Если всё разобрали, закрываем плашку
-                await bot.edit_message_text(
-                    chat_id=u_id,
-                    message_id=msg_id,
-                    text=f"🚫 **Груз закрыт** (уже разобран перевозчиками)\n\n{cargo_text}",
-                    reply_markup=None,
-                    parse_mode="Markdown"
-                )
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
         except Exception:
             pass
             
-    await state.clear()
-    await message.answer("✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
+        await state.clear()
+        await message.answer("✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
+        
+    elif action_type == "bid":
+        rate = data.get("custom_rate")
+        conn.close()
+        
+        if total_cars and total_cars > requested_cars:
+            left_cars = total_cars - requested_cars
+            new_cars_str = f"{left_cars} авто"
+            new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
+            
+            conn_u = sqlite3.connect("bot_database.db")
+            cur_u = conn_u.cursor()
+            cur_u.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
+            conn_u.commit()
+            conn_u.close()
+            
+            await update_cargo_messages_for_all_users(cargo_id, new_formatted_text, price, is_closed=False)
+        else:
+            conn_u = sqlite3.connect("bot_database.db")
+            cur_u = conn_u.cursor()
+            cur_u.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+            conn_u.commit()
+            conn_u.close()
+            
+            await update_cargo_messages_for_all_users(cargo_id, cargo_text, price, is_closed=True)
+
+        bid_notification = (
+            f"💰 **Новая ставка от перевозчика!**\n\n"
+            f"📦 Груз:\n{cargo_text}\n\n"
+            f"💵 Предложенная ставка: **{rate}**\n"
+            f"🚛 Количество авто: **{qty_input}**\n\n"
+            f"👤 Перевозчик:\n"
+            f"Компания: {company}\n"
+            f"Имя: {name}\n"
+            f"Телефон: {phone}\n\n"
+            f"*(Груз остается активным для других участников)*"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=bid_notification, parse_mode="Markdown")
+        except Exception:
+            pass
+                
+        await state.clear()
+        await message.answer("✅ Ваша ставка и количество авто отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
 
 # --- ШАГ 2: ПРЕДЛОЖИТЬ АВТО ПО СВОЕЙ СТАВКЕ ---
@@ -501,13 +544,14 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT text FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text, price FROM cargo WHERE id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
     cargo_text = row[0] if row else callback.message.text
+    price = row[1] if row else ""
         
-    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text)
+    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text, cargo_price=price, action_type="bid")
     await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `125.000 руб`):", parse_mode="Markdown")
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
@@ -519,44 +563,7 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
     await state.update_data(custom_rate=rate)
     
     await message.answer("Сколько авто вы можете поставить по этой ставке?")
-    await state.set_state(DealStates.waiting_for_custom_quantity)
-
-
-@dp.message(DealStates.waiting_for_custom_quantity)
-async def process_custom_quantity(message: types.Message, state: FSMContext):
-    qty = message.text.strip()
-    data = await state.get_data()
-    cargo_id = data.get("cargo_id")
-    rate = data.get("custom_rate")
-    
-    user_id = message.from_user.id
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
-    user_info = cursor.fetchone()
-    conn.close()
-    
-    company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
-    
-    bid_notification = (
-        f"💰 **Новая ставка от перевозчика!**\n\n"
-        f"📦 Груз:\n{data.get('cargo_text')}\n\n"
-        f"💵 Предложенная ставка: **{rate}**\n"
-        f"🚛 Количество авто: **{qty}**\n\n"
-        f"👤 Перевозчик:\n"
-        f"Компания: {company}\n"
-        f"Имя: {name}\n"
-        f"Телефон: {phone}\n\n"
-        f"*(Груз остается активным для других участников)*"
-    )
-    try:
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=bid_notification, parse_mode="Markdown")
-    except Exception:
-        pass
-            
-    await state.clear()
-    await message.answer("✅ Ваша ставка и количество авто отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
+    await state.set_state(DealStates.waiting_for_quantity)
 
 
 # --- АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ПОСТОВ ИЗ КАНАЛОВ ---
