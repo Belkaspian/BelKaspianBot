@@ -85,9 +85,14 @@ class DealStates(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_custom_rate = State()
 
+class AdminEditStates(StatesGroup):
+    waiting_for_new_cargo_text = State()
+
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
+    builder.add(types.KeyboardButton(text="📋 Посмотреть актуальные грузы"))
+    builder.adjust(1, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def extract_price(text: str) -> str:
@@ -207,7 +212,6 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                 )
             else:
                 builder = InlineKeyboardBuilder()
-                # Кнопки друг под другом
                 btn_confirm = types.InlineKeyboardButton(
                     text=f"✅ Подтвердить за {price_str}",
                     callback_data=f"confirm_{cargo_id}"
@@ -411,9 +415,11 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     await callback.answer()
 
+@dp.message(F.text == "📋 Посмотреть актуальные грузы")
 @dp.callback_query(F.data == "show_cargo")
-async def callback_show_cargo(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
+async def show_cargo_handler(event: types.Message | types.CallbackQuery):
+    user_id = event.from_user.id
+    message = event.message if isinstance(event, types.CallbackQuery) else event
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -424,8 +430,9 @@ async def callback_show_cargo(callback: types.CallbackQuery):
     
     if not user_subs:
         conn.close()
-        await callback.message.answer("У вас не выбрано ни одно направление. Выберите их в меню выше ⬆️")
-        await callback.answer()
+        await message.answer("У вас не выбрано ни одно направление. Выберите их в меню выше ⬆️")
+        if isinstance(event, types.CallbackQuery):
+            await event.answer()
         return
         
     placeholders = ",".join(["?"] * len(user_subs))
@@ -434,13 +441,14 @@ async def callback_show_cargo(callback: types.CallbackQuery):
     conn.close()
     
     if not cargos:
-        await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
+        await message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
     else:
-        await callback.message.answer("📦 **Актуальные грузы:**", parse_mode="Markdown")
+        await message.answer("📦 **Актуальные грузы:**", parse_mode="Markdown")
         for (load_id,) in cargos:
             await send_cargo_to_user(user_id, load_id)
             
-    await callback.answer()
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
@@ -520,7 +528,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     requested_cars_match = re.search(r'\d+', qty_input)
     requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
     
-    # Проверка на превышение доступного лимита машин
     warning_text = ""
     if requested_cars > total_cars:
         requested_cars = total_cars
@@ -574,9 +581,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_{cargo_id}_{user_id}_{requested_cars}")
-        )
-        admin_builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_{cargo_id}_{user_id}_{requested_cars}"),
             types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"adm_decline_{cargo_id}_{user_id}")
         )
 
@@ -648,48 +653,115 @@ async def admin_decline_bid(callback: types.CallbackQuery):
     await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: Ставка отклонена ❌]**", reply_markup=None, parse_mode="Markdown")
     await callback.answer("Ставка отклонена.")
 
-@dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys()) + [ADMIN_CHANNEL_ID]))
+@dp.callback_query(F.data.startswith("adm_start_del_"))
+async def admin_delete_cargo(callback: types.CallbackQuery):
+    cargo_id = int(callback.data.replace("adm_start_del_", ""))
+    
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
+    conn.commit()
+    conn.close()
+    
+    await update_cargo_messages_for_all_users(cargo_id)
+    
+    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: ГРУЗ ЗАКРЫТ 🚫]**", reply_markup=None, parse_mode="Markdown")
+    await callback.answer("Груз успешно закрыт!")
+
+@dp.callback_query(F.data.startswith("adm_start_edit_"))
+async def admin_start_edit_cargo(callback: types.CallbackQuery, state: FSMContext):
+    cargo_id = int(callback.data.replace("adm_start_edit_", ""))
+    await state.update_data(editing_cargo_id=cargo_id)
+    
+    await callback.message.answer("✍️ Отправьте новый текст (карточку) для этого груза:")
+    await state.set_state(AdminEditStates.waiting_for_new_cargo_text)
+    await callback.answer()
+
+@dp.message(AdminEditStates.waiting_for_new_cargo_text)
+async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
+    new_raw_text = message.text
+    if not new_raw_text:
+        await message.answer("Текст не может быть пустым. Попробуйте еще раз:")
+        return
+        
+    data = await state.get_data()
+    cargo_id = data.get("editing_cargo_id")
+    
+    date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(new_raw_text)
+    
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE loads 
+        SET date = ?, route = ?, price = ?, cars_count = ?, text = ?, details = ?
+        WHERE load_id = ?
+    """, (date_str, route_str, price_str, cars_str, new_raw_text, details_text, cargo_id))
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    await message.answer("✅ Груз успешно обновлен! Рассылаю изменения перевозчикам...")
+    await update_cargo_messages_for_all_users(cargo_id)
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
+async def handle_admin_command(message: types.Message):
+    text = message.text or message.caption
+    if text and text.strip() == "!грузы":
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT load_id, text, status FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
+        active_loads = cursor.fetchall()
+        conn.close()
+        
+        if not active_loads:
+            await message.answer("📦 В системе нет активных грузов.")
+            return
+            
+        await message.answer("📋 **Активные грузы в базе (управление):**", parse_mode="Markdown")
+        for load_id, load_text, status in active_loads:
+            admin_kb = InlineKeyboardBuilder()
+            admin_kb.row(
+                types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{load_id}"),
+                types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{load_id}")
+            )
+            try:
+                await bot.send_message(
+                    chat_id=ADMIN_CHANNEL_ID,
+                    text=f"ID: #{load_id}\n\n{load_text}",
+                    reply_markup=admin_kb.as_markup(),
+                    parse_mode="Markdown"
+                )
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logging.error(f"Не удалось отправить карточку админу: {e}")
+
+@dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
     raw_text = message.text or message.caption
     if not raw_text:
         return
         
+    direction = CHANNEL_TO_DIRECTION.get(chat_id)
+    date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(raw_text)
+    
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-
-    if chat_id == ADMIN_CHANNEL_ID:
-        cursor.execute("SELECT user_id FROM users")
-        all_users = cursor.fetchall()
-        conn.close()
-        
-        for u in all_users:
-            try:
-                await bot.send_message(chat_id=u[0], text=raw_text, parse_mode="Markdown")
-                await asyncio.sleep(0.05)
-            except Exception as e:
-                logging.error(f"Не удалось отправить новость пользователю {u[0]}: {e}")
-
-    elif chat_id in CHANNEL_TO_DIRECTION:
-        direction = CHANNEL_TO_DIRECTION.get(chat_id)
-        
-        date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(raw_text)
-        
-        cursor.execute("""
-            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-        """, (direction, date_str, route_str, cars_str, price_str, raw_text, details_text))
-        cargo_id = cursor.lastrowid
-        conn.commit()
-        
-        cursor.execute("SELECT user_id, subscriptions FROM users")
-        all_users = cursor.fetchall()
-        conn.close()
-        
-        for u_id, subs_str in all_users:
-            if subs_str and direction in subs_str.split(","):
-                await send_cargo_to_user(u_id, cargo_id)
-                await asyncio.sleep(0.05)
+    cursor.execute("""
+        INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+    """, (direction, date_str, route_str, cars_str, price_str, raw_text, details_text))
+    cargo_id = cursor.lastrowid
+    conn.commit()
+    
+    cursor.execute("SELECT user_id, subscriptions FROM users")
+    all_users = cursor.fetchall()
+    conn.close()
+    
+    for u_id, subs_str in all_users:
+        if subs_str and direction in subs_str.split(","):
+            await send_cargo_to_user(u_id, cargo_id)
+            await asyncio.sleep(0.05)
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
