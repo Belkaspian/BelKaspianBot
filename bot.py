@@ -21,20 +21,24 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Список направлений с флагами
-DIRECTIONS = [
-    "Казахстан 🇰🇿",
-    "Узбекистан 🇺🇿",
-    "Кыргызстан 🇰🇬",
-    "Азербайджан 🇦🇿",
-    "Грузия 🇬🇪",
-    "Армения 🇦🇲"
-]
+# Список направлений и их привязка к ID каналов
+CHANNELS = {
+    "Казахстан 🇰🇿": -1004309918435,
+    "Узбекистан 🇺🇿": -1003470705929,
+    "Кыргызстан 🇰🇬": -1004470387295,
+    "Азербайджан 🇦🇿": -1004483200216,
+    "Грузия 🇬🇪": -1004340496095,
+    "Армения 🇦🇲": -1004335138909
+}
+
+# Обратный словарь: по ID канала узнаем название страны
+CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
 
 # Инициализация базы данных
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
+    # Таблица пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -42,6 +46,14 @@ def init_db():
             name TEXT,
             phone TEXT,
             subscriptions TEXT
+        )
+    """)
+    # Таблица грузов
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cargo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            direction TEXT,
+            text TEXT
         )
     """)
     conn.commit()
@@ -56,9 +68,18 @@ class RegistrationStates(StatesGroup):
     waiting_for_phone = State()
 
 
+# Постоянная клавиатура (меню внизу)
+def get_main_reply_markup():
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
+    return builder.as_markup(resize_keyboard=True)
+
+
 # --- КОМАНДА /START И РЕГИСТРАЦИЯ ---
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
+@dp.message(F.text == "🏠 Меню и направления")
+async def cmd_start_or_menu(message: types.Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     
     conn = sqlite3.connect("bot_database.db")
@@ -68,7 +89,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
     conn.close()
 
     if not user:
-        await message.answer("Здравствуйте! Для доступа к системе необходима регистрация.\n\nШаг 1 из 3: Введите название вашей компании:")
+        await message.answer(
+            "Здравствуйте! Для доступа к системе необходима регистрация.\n\nШаг 1 из 3: Введите название вашей компании:",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
         await state.set_state(RegistrationStates.waiting_for_company)
     else:
         await show_main_menu(message)
@@ -96,7 +120,6 @@ async def process_name(message: types.Message, state: FSMContext):
     await state.set_state(RegistrationStates.waiting_for_phone)
 
 
-# Обработка получения телефона (либо через кнопку контакта, либо текстом)
 @dp.message(RegistrationStates.waiting_for_phone)
 async def process_phone(message: types.Message, state: FSMContext):
     if message.contact:
@@ -121,7 +144,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     
     await state.clear()
     
-    await message.answer("Регистрация успешно завершена! 🎉", reply_markup=types.ReplyKeyboardRemove())
+    await message.answer("Регистрация успешно завершена! 🎉", reply_markup=get_main_reply_markup())
     await show_main_menu(message)
 
 
@@ -138,7 +161,7 @@ async def show_main_menu(message: types.Message):
     user_subs = row[0].split(",") if row and row[0] else []
     
     builder = InlineKeyboardBuilder()
-    for direction in DIRECTIONS:
+    for direction in CHANNELS.keys():
         is_selected = direction in user_subs
         mark = "✅ " if is_selected else "   "
         builder.row(types.InlineKeyboardButton(
@@ -149,9 +172,9 @@ async def show_main_menu(message: types.Message):
     builder.row(types.InlineKeyboardButton(text="📋 Посмотреть актуальные грузы", callback_data="show_cargo"))
     
     text = (
-        "⚙️ **Настройка направлений**\n\n"
+        "⚙️ **Главное меню и направления**\n\n"
         "Нажимайте на направления ниже, чтобы подписаться или отписаться от них. "
-        "В каталоге будут отображаться только выбранные варианты:\n\n"
+        "В ленте будут отображаться только выбранные варианты:\n\n"
         f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
     )
     
@@ -182,7 +205,7 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     conn.close()
     
     builder = InlineKeyboardBuilder()
-    for d in DIRECTIONS:
+    for d in CHANNELS.keys():
         is_selected = d in current_subs
         mark = "✅ " if is_selected else "   "
         builder.row(types.InlineKeyboardButton(
@@ -193,7 +216,7 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     builder.row(types.InlineKeyboardButton(text="📋 Посмотреть актуальные грузы", callback_data="show_cargo"))
     
     text = (
-        "⚙️ **Настройка направлений**\n\n"
+        "⚙️ **Главное меню и направления**\n\n"
         "Нажимайте на направления ниже, чтобы подписаться или отписаться от них:\n\n"
         f"Ваши текущие подписки: {', '.join(current_subs) if current_subs else 'ничего не выбрано'}"
     )
@@ -202,10 +225,82 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# --- ПРОСМОТР ГРУЗОВ ПО ПОДПИСКАМ ---
 @dp.callback_query(F.data == "show_cargo")
 async def callback_show_cargo(callback: types.CallbackQuery):
-    await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет. Скоро они появятся!")
+    user_id = callback.from_user.id
+    
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    user_subs = row[0].split(",") if row and row[0] else []
+    
+    if not user_subs:
+        conn.close()
+        await callback.message.answer("У вас не выбрано ни одно направление. Выберите их в меню выше ⬆️")
+        await callback.answer()
+        return
+        
+    placeholders = ",".join(["?"] * len(user_subs))
+    cursor.execute(f"SELECT direction, text FROM cargo WHERE direction IN ({placeholders}) ORDER BY id DESC LIMIT 10", user_subs)
+    cargos = cursor.fetchall()
+    conn.close()
+    
+    if not cargos:
+        await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
+    else:
+        response_text = "📦 **Актуальные грузы по вашим направлениям:**\n\n"
+        for direction, text in cargos:
+            response_text += f"🔹 **{direction}**\n{text}\n\n-------------------\n"
+        await callback.message.answer(response_text, parse_mode="Markdown")
+        
     await callback.answer()
+
+
+# --- АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ПОСТОВ ИЗ КАНАЛОВ ---
+@dp.channel_post(F.chat.id.in_(CHANNEL_TO_DIRECTION.keys()))
+async def handle_channel_post(message: types.Message):
+    chat_id = message.chat.id
+    direction = CHANNEL_TO_DIRECTION.get(chat_id)
+    
+    # Берем текст поста (или подпись к фото/видео, если груз отправлен с картинкой)
+    cargo_text = message.text or message.caption
+    if not cargo_text:
+        return # Если пост пустой (например, просто медиа без текста)
+        
+    # 1. Сохраняем груз в базу данных бота
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO cargo (direction, text) VALUES (?, ?)", (direction, cargo_text))
+    conn.commit()
+    
+    # 2. Находим всех пользователей, у которых подписано это направление
+    # Ищем пользователей, у которых в поле subscriptions есть наше направление
+    cursor.execute("SELECT user_id, subscriptions FROM users")
+    all_users = cursor.fetchall()
+    conn.close()
+    
+    target_users = []
+    for u_id, subs_str in all_users:
+        if subs_str:
+            user_subs = subs_str.split(",")
+            if direction in user_subs:
+                target_users.append(u_id)
+                
+    # 3. Делаем рассылку уведомлений в личку подписчикам
+    if target_users:
+        notification_text = f"🚨 **Новый груз по вашему направлению!**\n\n🔹 **{direction}**\n{cargo_text}"
+        
+        for u_id in target_users:
+            try:
+                await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
+                await asyncio.sleep(0.05) # Небольшая пауза, чтобы не словить лимиты Telegram (Flood control)
+            except Exception as e:
+                logging.error(f"Не удалось отправить уведомление пользователю {u_id}: {e}")
+                
+        logging.info(f"Рассылка по направлению {direction} выполнена. Получателей: {len(target_users)}")
 
 
 # --- ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
