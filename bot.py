@@ -97,10 +97,30 @@ async def process_take_load(callback: types.CallbackQuery):
         except Exception:
             pass
 
+from aiohttp import web
+
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
     init_db()
-    # Принудительно удаляем старый вебхук перед запуском поллинга
+    
+    # Гарантированно удаляем вебхук перед стартом
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Настраиваем фейковый веб-сервер для Render
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # Render передает нужный порт через переменную окружения PORT
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Dummy web server started on port {port}")
+
+    # Запускаем самого бота
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
