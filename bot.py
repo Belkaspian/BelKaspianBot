@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 import asyncio
+import re
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -31,16 +32,14 @@ CHANNELS = {
     "Армения 🇦🇲": -1004335138909
 }
 
-# Обратный словарь: по ID странового канала узнаем название страны
 CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
-
-# ID канала-админа для общей рассылки всем пользователям
 ADMIN_CHANNEL_ID = -1004271518848
 
 # Инициализация базы данных
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
+    
     # Таблица пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -51,34 +50,85 @@ def init_db():
             subscriptions TEXT
         )
     """)
-    # Таблица грузов
+    
+    # Таблица грузов (добавили колонку status: active / closed)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cargo (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             direction TEXT,
-            text TEXT
+            text TEXT,
+            price TEXT,
+            status TEXT DEFAULT 'active'
         )
     """)
+    
+    # Таблица для отслеживания отправленных сообщений пользователям (чтобы потом редактировать их при закрытии)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cargo_id INTEGER,
+            user_id INTEGER,
+            message_id INTEGER
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# Состояния для регистрации
+# Состояния
 class RegistrationStates(StatesGroup):
     waiting_for_company = State()
     waiting_for_name = State()
     waiting_for_phone = State()
 
+class DealStates(StatesGroup):
+    waiting_for_quantity = State()
+    waiting_for_custom_rate = State()
 
-# Постоянная клавиатура (меню внизу)
+
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
     return builder.as_markup(resize_keyboard=True)
 
 
-# --- КОМАНДА /START И РЕГИСТРАЦИЯ ---
+# Функция для извлечения цены из текста (например, "155.000 RUB" или "500 USD")
+def extract_price(text: str) -> str:
+    match = re.search(r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб))', text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+# Глобальный метод отправки груза пользователю с кнопками
+async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str):
+    builder = InlineKeyboardBuilder()
+    if price:
+        builder.row(types.InlineKeyboardButton(
+            text=f"✅ Подтвердить груз за {price}",
+            callback_data=f"confirm_{cargo_id}"
+        ))
+    builder.row(types.InlineKeyboardButton(
+        text="💰 Предложить авто по своей ставке",
+        callback_data=f"bid_{cargo_id}"
+    ))
+    
+    try:
+        msg = await bot.send_message(chat_id=user_id, text=text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        # Сохраняем ID отправленного сообщения, чтобы потом отредактировать при закрытии груза
+        conn = sqlite3.connect("bot_database.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO user_messages (cargo_id, user_id, message_id) VALUES (?, ?, ?)", (cargo_id, user_id, msg.message_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Не удалось отправить груз пользователю {user_id}: {e}")
+
+
+# --- РЕГИСТРАЦИЯ И СТАРТ ---
 @dp.message(Command("start"))
 @dp.message(F.text == "🏠 Меню и направления")
 async def cmd_start_or_menu(message: types.Message, state: FSMContext):
@@ -151,7 +201,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     await show_main_menu(message)
 
 
-# --- ГЛАВНОЕ МЕНЮ И НАСТРОЙКА НАПРАВЛЕНИЙ ---
+# --- ГЛАВНОЕ МЕНЮ И НАСТРОЙКА ПОДПИСОК ---
 async def show_main_menu(message: types.Message):
     user_id = message.from_user.id
     
@@ -176,8 +226,7 @@ async def show_main_menu(message: types.Message):
     
     text = (
         "⚙️ **Главное меню и направления**\n\n"
-        "Нажимайте на направления ниже, чтобы подписаться или отписаться от них. "
-        "В ленте будут отображаться только выбранные варианты:\n\n"
+        "Нажимайте на направления ниже, чтобы подписаться или отписаться от них:\n\n"
         f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
     )
     
@@ -228,7 +277,7 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# --- ПРОСМОТР ГРУЗОВ ПО ПОДПИСКАМ ---
+# --- ПРОСМОТР АКТУАЛЬНЫХ ГРУЗОВ ---
 @dp.callback_query(F.data == "show_cargo")
 async def callback_show_cargo(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -247,19 +296,148 @@ async def callback_show_cargo(callback: types.CallbackQuery):
         return
         
     placeholders = ",".join(["?"] * len(user_subs))
-    cursor.execute(f"SELECT direction, text FROM cargo WHERE direction IN ({placeholders}) ORDER BY id DESC LIMIT 10", user_subs)
+    cursor.execute(f"SELECT id, text, price FROM cargo WHERE direction IN ({placeholders}) AND status = 'active' ORDER BY id DESC LIMIT 10", user_subs)
     cargos = cursor.fetchall()
     conn.close()
     
     if not cargos:
         await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
     else:
-        response_text = "📦 **Актуальные грузы по вашим направлениям:**\n\n"
-        for direction, text in cargos:
-            response_text += f"🔹 **{direction}**\n{text}\n\n-------------------\n"
-        await callback.message.answer(response_text, parse_mode="Markdown")
-        
+        await callback.message.answer("📦 **Актуальные грузы:**", parse_mode="Markdown")
+        for cargo_id, text, price in cargos:
+            await send_cargo_to_user(user_id, cargo_id, text, price)
+            
     await callback.answer()
+
+
+# --- ЛОГИКА КНОПОК ПОДТВЕРЖДЕНИЯ И СТАВОК ---
+@dp.callback_query(F.data.startswith("confirm_"))
+async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
+    cargo_id = int(callback.data.replace("confirm_", ""))
+    
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, text FROM cargo WHERE id = ?", (cargo_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or row[0] != 'active':
+        await callback.answer("⚠️ Этот груз уже закрыт или неактуален.", show_alert=True)
+        return
+        
+    await state.update_data(cargo_id=cargo_id, cargo_text=row[1])
+    await callback.message.answer("Введите количество единиц (машин/объема), которое вы можете взять:")
+    await state.set_state(DealStates.waiting_for_quantity)
+    await callback.answer()
+
+
+@dp.message(DealStates.waiting_for_quantity)
+async def process_deal_quantity(message: types.Message, state: FSMContext):
+    qty = message.text.strip()
+    data = await state.get_data()
+    cargo_id = data.get("cargo_id")
+    
+    user_id = message.from_user.id
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    user_info = cursor.fetchone()
+    
+    # Меняем статус груза на закрытый
+    cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+    
+    # Достаем все сообщения этого груза у всех пользователей для редактирования
+    cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
+    messages_to_edit = cursor.fetchall()
+    conn.commit()
+    conn.close()
+    
+    company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
+    
+    # 1. Отправляем отчет вам (админу) — можно отправлять в канал-админ или себе в личку
+    admin_notification = (
+        f"🎯 **Груз успешно забронирован!**\n\n"
+        f"📦 Описание:\n{data.get('cargo_text')}\n\n"
+        f"🚛 Перевозчик:\n"
+        f"Компания: {company}\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone}\n"
+        f"Готов взять объем: {qty}"
+    )
+    try:
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+    except Exception:
+        pass
+        
+    # 2. Редактируем сообщение у всех пользователей (ставим плашку "Закрыт")
+    for u_id, msg_id in messages_to_edit:
+        try:
+            await bot.edit_message_text(
+                chat_id=u_id,
+                message_id=msg_id,
+                text=f"🚫 **Груз закрыт** (уже взят перевозчиком)\n\n{data.get('cargo_text')}",
+                reply_markup=None,
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+            
+    await state.clear()
+    await message.answer("✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
+
+
+@dp.callback_query(F.data.startswith("bid_"))
+async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
+    cargo_id = int(callback.data.replace("bid_", ""))
+    
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, text FROM cargo WHERE id = ?", (cargo_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or row[0] != 'active':
+        await callback.answer("⚠️ Этот груз уже закрыт или неактуален.", show_alert=True)
+        return
+        
+    await state.update_data(cargo_id=cargo_id, cargo_text=row[1])
+    await callback.message.answer("Введите вашу цену / ставку за этот рейс:")
+    await state.set_state(DealStates.waiting_for_custom_rate)
+    await callback.answer()
+
+
+@dp.message(DealStates.waiting_for_custom_rate)
+async def process_custom_rate(message: types.Message, state: FSMContext):
+    rate = message.text.strip()
+    data = await state.get_data()
+    cargo_id = data.get("cargo_id")
+    
+    user_id = message.from_user.id
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    user_info = cursor.fetchone()
+    conn.close()
+    
+    company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
+    
+    # Отправляем ставку вам в канал-админ на рассмотрение
+    bid_notification = (
+        f"💰 **Новая ставка от перевозчика!**\n\n"
+        f"📦 Груз ID #{cargo_id}:\n{data.get('cargo_text')}\n\n"
+        f"💵 Предложенная ставка: **{rate}**\n\n"
+        f"🚛 Перевозчик:\n"
+        f"Компания: {company}\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone}"
+    )
+    try:
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=bid_notification, parse_mode="Markdown")
+    except Exception:
+        pass
+        
+    await state.clear()
+    await message.answer("✅ Ваша ставка отправлена администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
 
 # --- АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ПОСТОВ ИЗ КАНАЛОВ ---
@@ -270,54 +448,38 @@ async def handle_channel_post(message: types.Message):
     if not cargo_text:
         return
         
+    price = extract_price(cargo_text)
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
 
-    # Случай 1: Пост из общего канала-админа (рассылка всем)
+    # Случай 1: Общий канал-админ (рассылка всем)
     if chat_id == ADMIN_CHANNEL_ID:
+        cursor.execute("INSERT INTO cargo (direction, text, price, status) VALUES (?, ?, ?, 'active')", ("Общее", cargo_text, price))
+        cargo_id = cursor.lastrowid
+        
         cursor.execute("SELECT user_id FROM users")
         all_users = cursor.fetchall()
         conn.close()
         
-        target_users = [u[0] for u in all_users]
-        if target_users:
-            notification_text = f"🚨 **Общее объявление / Важный груз:**\n\n{cargo_text}"
-            for u_id in target_users:
-                try:
-                    await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logging.error(f"Не удалось отправить общую рассылку пользователю {u_id}: {e}")
-            logging.info(f"Общая рассылка выполнена. Получателей: {len(target_users)}")
+        for u in all_users:
+            await send_cargo_to_user(u[0], cargo_id, cargo_text, price)
+            await asyncio.sleep(0.05)
 
-    # Случай 2: Пост из одного из 6 страновых каналов (рассылка по подпискам)
+    # Случай 2: Один из 6 страновых каналов (рассылка по подпискам)
     elif chat_id in CHANNEL_TO_DIRECTION:
         direction = CHANNEL_TO_DIRECTION.get(chat_id)
         
-        # Сохраняем в базу данных
-        cursor.execute("INSERT INTO cargo (direction, text) VALUES (?, ?)", (direction, cargo_text))
-        conn.commit()
+        cursor.execute("INSERT INTO cargo (direction, text, price, status) VALUES (?, ?, ?, 'active')", (direction, cargo_text, price))
+        cargo_id = cursor.lastrowid
         
         cursor.execute("SELECT user_id, subscriptions FROM users")
         all_users = cursor.fetchall()
         conn.close()
         
-        target_users = []
         for u_id, subs_str in all_users:
-            if subs_str:
-                user_subs = subs_str.split(",")
-                if direction in user_subs:
-                    target_users.append(u_id)
-                    
-        if target_users:
-            notification_text = f"🚨 **Новый груз по вашему направлению!**\n\n🔹 **{direction}**\n{cargo_text}"
-            for u_id in target_users:
-                try:
-                    await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
-                    await asyncio.sleep(0.05)
-                except Exception as e:
-                    logging.error(f"Не удалось отправить уведомление пользователю {u_id}: {e}")
-            logging.info(f"Рассылка по направлению {direction} выполнена. Получателей: {len(target_users)}")
+            if subs_str and direction in subs_str.split(","):
+                await send_cargo_to_user(u_id, cargo_id, cargo_text, price)
+                await asyncio.sleep(0.05)
 
 
 # --- ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
