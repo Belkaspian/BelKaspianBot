@@ -93,7 +93,86 @@ def extract_price(text: str) -> str:
         return match.group(1).strip()
     return ""
 
+def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
+    """
+    Преобразует сырой текст в новый компактный формат:
+    25.07 | 📍 Тбилиси → Москва, 1 авто
+    💰 124 000 руб.
+    📦 Тент, ДСП до 22т
+    """
+    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+    
+    date_str = ""
+    route_str = ""
+    price_str = ""
+    cars_str = ""
+    details = []
+    
+    date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
+    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?))', re.IGNORECASE)
+    
+    for line in lines:
+        if not date_str:
+            date_match = date_pattern.search(line)
+            if date_match:
+                date_str = date_match.group(1)
+        
+        if not cars_str:
+            cars_match = cars_pattern.search(line)
+            if cars_match:
+                cars_str = cars_match.group(1)
+
+        if '-' in line or '→' in line:
+            clean_route = date_pattern.sub('', line)
+            clean_route = cars_pattern.sub('', clean_route).strip(' ,.-')
+            if clean_route:
+                route_str = clean_route.replace(' - ', ' → ').replace('-', '→')
+        
+        if re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and not price_str:
+            price_str = line.strip(' ,.')
+        elif not price_str and re.search(r'\d{2,}\s*[\.,]\d{3}', line):
+            price_str = line.strip(' ,.')
+
+    # Если передано новое принудительное количество авто (например, остаток)
+    if override_qty is not None:
+        cars_str = override_qty
+    elif not cars_str:
+        # Попробуем поискать во всем тексте цифру с авто, если в строке маршрута не нашлось
+        full_match = cars_pattern.search(raw_text)
+        if full_match:
+            cars_str = full_match.group(1)
+
+    for line in lines:
+        if line == date_str or line == route_str or line == price_str:
+            continue
+        # Исключаем чистые строки с авто из описания, чтобы они не дублировались
+        if cars_pattern.search(line) and len(line) < 15:
+            continue
+        details.append(line)
+
+    if not date_str:
+        date_str = "Дата не указана"
+    if not route_str:
+        route_str = lines[0] if lines else "Маршрут не указан"
+    if not price_str:
+        price_str = "По запросу"
+    
+    # Собираем строку маршрута вместе с количеством авто, если оно есть
+    route_part = route_str
+    if cars_str:
+        route_part += f", {cars_str}"
+
+    details_text = ", ".join(details) if details else "Уточняйте детали"
+
+    return (
+        f"{date_str} | 📍 {route_part}\n"
+        f"💰 {price_str}\n"
+        f"📦 {details_text}"
+    )
+
 async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str):
+    formatted_text = format_cargo_text(text)
+    
     builder = InlineKeyboardBuilder()
     if price:
         builder.row(types.InlineKeyboardButton(
@@ -106,7 +185,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str)
     ))
     
     try:
-        msg = await bot.send_message(chat_id=user_id, text=text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        msg = await bot.send_message(chat_id=user_id, text=formatted_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
         
         conn = sqlite3.connect("bot_database.db")
         cursor = conn.cursor()
@@ -311,16 +390,17 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
     cargo_text = row[0] if row else callback.message.text
         
     await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text)
-    await callback.message.answer("Напишите, сколько авто у вас?")
+    await callback.message.answer("Напишите, сколько авто вы забираете?")
     await state.set_state(DealStates.waiting_for_quantity)
     await callback.answer()
 
 
 @dp.message(DealStates.waiting_for_quantity)
 async def process_deal_quantity(message: types.Message, state: FSMContext):
-    qty = message.text.strip()
+    qty_input = message.text.strip()
     data = await state.get_data()
     cargo_id = data.get("cargo_id")
+    cargo_text = data.get("cargo_text")
     
     user_id = message.from_user.id
     conn = sqlite3.connect("bot_database.db")
@@ -329,39 +409,84 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     
-    # Закрываем груз по фикс. цене при успешном завершении
-    cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+    # Пытаемся извлечь текущее число машин из исходного текста
+    current_cars_match = re.search(r'(\d+)\s*(?:авт[оа]|машин[аы]?)', cargo_text, re.IGNORECASE)
+    total_cars = int(current_cars_match.group(1)) if current_cars_match else None
     
-    cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
-    messages_to_edit = cursor.fetchall()
+    # Пытаемся понять, сколько запросил пользователь
+    requested_cars_match = re.search(r'\d+', qty_input)
+    requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
+    
+    messages_to_edit = []
+    
+    if total_cars and total_cars > requested_cars:
+        # Остались еще машины -> обновляем текст груза в базе и у всех пользователей уменьшаем счетчик
+        left_cars = total_cars - requested_cars
+        new_cars_str = f"{left_cars} авто"
+        
+        new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
+        
+        cursor.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
+        
+        cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
+        messages_to_edit = cursor.fetchall()
+    else:
+        # Машин не осталось -> закрываем груз полностью
+        cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+        cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
+        messages_to_edit = cursor.fetchall()
+
     conn.commit()
     conn.close()
     
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
     
     admin_notification = (
-        f"🎯 **Груз успешно забронирован!**\n\n"
-        f"📦 Описание:\n{data.get('cargo_text')}\n\n"
-        f"🚛 Перевозчик:\n"
+        f"🎯 **Заявка на груз!**\n\n"
+        f"📦 Описание:\n{cargo_text}\n\n"
+        f"🚛 Перевозчик забирает авто: **{qty_input}**\n"
         f"Компания: {company}\n"
         f"Имя: {name}\n"
-        f"Телефон: {phone}\n"
-        f"Количество авто: {qty}"
+        f"Телефон: {phone}"
     )
     try:
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
     except Exception:
         pass
         
+    # Обновляем сообщения у пользователей
     for u_id, msg_id in messages_to_edit:
         try:
-            await bot.edit_message_text(
-                chat_id=u_id,
-                message_id=msg_id,
-                text=f"🚫 **Груз закрыт** (уже взят перевозчиком)\n\n{data.get('cargo_text')}",
-                reply_markup=None,
-                parse_mode="Markdown"
-            )
+            if total_cars and total_cars > requested_cars:
+                # Если остались машины, просто обновляем текст на уменьшенный остаток
+                builder = InlineKeyboardBuilder()
+                # Извлекаем цену из исходного текста для кнопки
+                price_match = extract_price(cargo_text)
+                if price_match:
+                    builder.row(types.InlineKeyboardButton(
+                        text=f"✅ Подтвердить авто за {price_match}",
+                        callback_data=f"confirm_{cargo_id}"
+                    ))
+                builder.row(types.InlineKeyboardButton(
+                    text="💰 Предложить авто по своей ставке",
+                    callback_data=f"bid_{cargo_id}"
+                ))
+                await bot.edit_message_text(
+                    chat_id=u_id,
+                    message_id=msg_id,
+                    text=new_formatted_text,
+                    reply_markup=builder.as_markup(),
+                    parse_mode="Markdown"
+                )
+            else:
+                # Если всё разобрали, закрываем плашку
+                await bot.edit_message_text(
+                    chat_id=u_id,
+                    message_id=msg_id,
+                    text=f"🚫 **Груз закрыт** (уже разобран перевозчиками)\n\n{cargo_text}",
+                    reply_markup=None,
+                    parse_mode="Markdown"
+                )
         except Exception:
             pass
             
