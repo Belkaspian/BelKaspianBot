@@ -91,8 +91,7 @@ class AdminEditStates(StatesGroup):
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
-    builder.add(types.KeyboardButton(text="📋 Посмотреть актуальные грузы"))
-    builder.adjust(1, 1)
+    builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
 def extract_price(text: str) -> str:
@@ -442,11 +441,9 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     await callback.answer()
 
-@dp.message(F.text == "📋 Посмотреть актуальные грузы")
 @dp.callback_query(F.data == "show_cargo")
-async def show_cargo_handler(event: types.Message | types.CallbackQuery):
-    user_id = event.from_user.id
-    message = event.message if isinstance(event, types.CallbackQuery) else event
+async def show_cargo_handler(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -457,9 +454,8 @@ async def show_cargo_handler(event: types.Message | types.CallbackQuery):
     
     if not user_subs:
         conn.close()
-        await message.answer("У вас не выбрано ни одно направление. Выберите их в меню выше ⬆️")
-        if isinstance(event, types.CallbackQuery):
-            await event.answer()
+        await callback.message.answer("У вас не выбрано ни одно направление. Выберите их в меню выше ⬆️")
+        await callback.answer()
         return
         
     placeholders = ",".join(["?"] * len(user_subs))
@@ -468,14 +464,13 @@ async def show_cargo_handler(event: types.Message | types.CallbackQuery):
     conn.close()
     
     if not cargos:
-        await message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
+        await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет.")
     else:
-        await message.answer("📦 **Актуальные грузы:**", parse_mode="Markdown")
+        await callback.message.answer("📦 **Актуальные грузы:**", parse_mode="Markdown")
         for (load_id,) in cargos:
             await send_cargo_to_user(user_id, load_id)
             
-    if isinstance(event, types.CallbackQuery):
-        await event.answer()
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
@@ -727,19 +722,24 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     conn.close()
     
     await state.clear()
-    await message.answer("✅ Груз успешно обновлен! Рассылаю изменения перевозчикам...")
+    await message.answer("✅ Груз успешно обновлен в базе! Рассылаю изменения...")
     
+    # Обновляем у всех пользователей
     await update_cargo_messages_for_all_users(cargo_id)
 
+    # Принудительно отправляем обновленную карточку в админ-канал
     try:
         admin_kb = InlineKeyboardBuilder()
         admin_kb.row(
             types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{cargo_id}"),
             types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{cargo_id}")
         )
+        
+        formatted_card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=False)
+        
         await bot.send_message(
             chat_id=ADMIN_CHANNEL_ID,
-            text=f"✏️ **Груз #{cargo_id} изменен на:**\n\n{new_raw_text}",
+            text=f"✏️ **Обновленный груз #{cargo_id}:**\n\n{formatted_card}",
             reply_markup=admin_kb.as_markup(),
             parse_mode="Markdown"
         )
