@@ -88,19 +88,12 @@ def get_main_reply_markup():
     return builder.as_markup(resize_keyboard=True)
 
 def extract_price(text: str) -> str:
-    # Убираем возможные лишние запятые, пробелы и точки на концах/начале
     match = re.search(r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб))', text, re.IGNORECASE)
     if match:
         return match.group(1).strip(' ,.')
     return ""
 
 def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
-    """
-    Преобразует сырой текст в чистый формат:
-    25.07 | 📍 Тбилиси → Москва, 2 авто
-    💰 124.000 руб.
-    📦 Тент, ДСП до 22т
-    """
     lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
     
     date_str = ""
@@ -110,7 +103,7 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     details = []
     
     date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
-    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?[е]?))', re.IGNORECASE)
+    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?[е]?[е]?))', re.IGNORECASE)
     
     for line in lines:
         if not date_str:
@@ -142,7 +135,6 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
             cars_str = full_match.group(1)
 
     for line in lines:
-        # Пропускаем служебные строки, чтобы они не дублировались в описании
         if date_pattern.search(line) and ('-' in line or '→' in line or 'авт' in line):
             continue
         if re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and len(line) < 20:
@@ -444,6 +436,14 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     action_type = data.get("action_type", "confirm")
     
     user_id = message.from_user.id
+    user_obj = message.from_user
+    
+    # Формируем кликабельную ссылку на пользователя по тегу или имени
+    if user_obj.username:
+        user_link = f"@{user_obj.username}"
+    else:
+        user_link = f"[{user_obj.full_name}](tg://user?id={user_id})"
+
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     
@@ -458,6 +458,9 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
     
+    # Компактная строка с информацией о перевозчике
+    carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
+
     if action_type == "confirm":
         if total_cars and total_cars > requested_cars:
             left_cars = total_cars - requested_cars
@@ -479,10 +482,8 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         admin_notification = (
             f"🎯 **Заявка на груз!**\n\n"
             f"📦 Описание:\n{cargo_text}\n\n"
-            f"🚛 Перевозчик забирает авто: **{qty_input}**\n"
-            f"Компания: {company}\n"
-            f"Имя: {name}\n"
-            f"Телефон: {phone}"
+            f"🚛 Забирает авто: **{qty_input}**\n"
+            f"{carrier_info}"
         )
         try:
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
@@ -520,12 +521,8 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         bid_notification = (
             f"💰 **Новая ставка от перевозчика!**\n\n"
             f"📦 Груз:\n{cargo_text}\n\n"
-            f"💵 Предложенная ставка: **{rate}**\n"
-            f"🚛 Количество авто: **{qty_input}**\n\n"
-            f"👤 Перевозчик:\n"
-            f"Компания: {company}\n"
-            f"Имя: {name}\n"
-            f"Телефон: {phone}\n\n"
+            f"💵 Ставка: **{rate}** | 🚛 Авто: **{qty_input}**\n"
+            f"{carrier_info}\n\n"
             f"*(Груз остается активным для других участников)*"
         )
         try:
@@ -577,7 +574,6 @@ async def handle_channel_post(message: types.Message):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
 
-    # Случай 1: Канал новостей (админ)
     if chat_id == ADMIN_CHANNEL_ID:
         cursor.execute("SELECT user_id FROM users")
         all_users = cursor.fetchall()
@@ -590,7 +586,6 @@ async def handle_channel_post(message: types.Message):
             except Exception as e:
                 logging.error(f"Не удалось отправить новость пользователю {u[0]}: {e}")
 
-    # Случай 2: Страновые каналы (грузы)
     elif chat_id in CHANNEL_TO_DIRECTION:
         price = extract_price(cargo_text)
         direction = CHANNEL_TO_DIRECTION.get(chat_id)
