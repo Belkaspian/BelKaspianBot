@@ -103,7 +103,7 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     details = []
     
     date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
-    cars_pattern = re.compile(r'(\d+\s*(?:авт[оа]|машин[аы]?[е]?[е]?))', re.IGNORECASE)
+    cars_pattern = re.compile(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', re.IGNORECASE)
     
     for line in lines:
         if not date_str:
@@ -150,15 +150,14 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     if not price_str:
         price_str = "По запросу"
     
-    route_part = route_str
-    if cars_str:
-        route_part += f", {cars_str}"
+    if not cars_str:
+        cars_str = "1 авто"
 
     details_text = ", ".join(details) if details else "Уточняйте детали"
 
     return (
-        f"{date_str} | 📍 {route_part}\n"
-        f"💰 {price_str}\n"
+        f"📍*{date_str} | {route_str}*\n"
+        f"💰 {price_str} | 🚚 {cars_str}\n"
         f"📦 {details_text}"
     )
 
@@ -438,7 +437,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     user_obj = message.from_user
     
-    # Формируем кликабельную ссылку на пользователя по тегу или имени
     if user_obj.username:
         user_link = f"@{user_obj.username}"
     else:
@@ -450,18 +448,17 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     
-    current_cars_match = re.search(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?)', cargo_text, re.IGNORECASE)
+    current_cars_match = re.search(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', cargo_text, re.IGNORECASE)
     total_cars = int(current_cars_match.group(1)) if current_cars_match else None
     
     requested_cars_match = re.search(r'\d+', qty_input)
     requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
     
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
-    
-    # Компактная строка с информацией о перевозчике
     carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
-
+    
     if action_type == "confirm":
+        # Если берут меньше, чем есть — оставляем груз активным, но уменьшаем остаток мест
         if total_cars and total_cars > requested_cars:
             left_cars = total_cars - requested_cars
             new_cars_str = f"{left_cars} авто"
@@ -471,8 +468,10 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             conn.commit()
             conn.close()
             
+            # Обновляем карточку у всех (кнопки остаются активными для добора)
             await update_cargo_messages_for_all_users(cargo_id, new_formatted_text, price, is_closed=False)
         else:
+            # Если забрали все машины — закрываем груз полностью
             cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
             conn.commit()
             conn.close()
@@ -497,6 +496,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         rate = data.get("custom_rate")
         conn.close()
         
+        # Аналогично для ставок: если забрали не всё, уменьшаем остаток, но не закрываем карточку
         if total_cars and total_cars > requested_cars:
             left_cars = total_cars - requested_cars
             new_cars_str = f"{left_cars} авто"
