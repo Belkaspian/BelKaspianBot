@@ -156,7 +156,7 @@ async def process_name(message: types.Message, state: FSMContext):
     
     await message.answer(
         "Шаг 3 из 3: Нажмите кнопку ниже для отправки номера в 1 клик, "
-        "либо просто введите его текстом (или отправьте `-`, чтобы пропустить):",
+        "либо просто введите его текстом (or отправьте `-`, чтобы пропустить):",
         reply_markup=builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
     )
     await state.set_state(RegistrationStates.waiting_for_phone)
@@ -297,7 +297,7 @@ async def callback_show_cargo(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# --- ШАГ 1: ПОДТВЕРЖДЕНИЕ ГРУЗА ПО СТАНДАРТНОЙ ЦЕНЕ ---
+# --- ШАГ 1: ПОДТВЕРЖДЕНИЕ ГРУЗА ПО ФИКСИРОВАННОЙ ЦЕНЕ ---
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
     cargo_id = int(callback.data.replace("confirm_", ""))
@@ -312,7 +312,6 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
         await callback.answer("⚠️ Этот груз уже закрыт или неактуален.", show_alert=True)
         return
         
-    # Сохраняем ID груза в состояние, СТАТУС ПОКА НЕ ТРОГАЕМ (он активен, пока не введут кол-во)
     await state.update_data(cargo_id=cargo_id, cargo_text=row[1])
     await callback.message.answer("Напишите, сколько авто у вас?")
     await state.set_state(DealStates.waiting_for_quantity)
@@ -329,7 +328,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     
-    # Проверяем на всякий случай, не закрыл ли кто-то груз параллельно
     cursor.execute("SELECT status FROM cargo WHERE id = ?", (cargo_id,))
     row = cursor.fetchone()
     if not row or row[0] != 'active':
@@ -341,7 +339,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     
-    # Теперь закрываем груз
+    # Закрываем груз по фикс. цене только здесь при окончательном подтверждении
     cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
     
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
@@ -381,7 +379,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     await message.answer("✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
 
 
-# --- ШАГ 2: ПРЕДЛОЖИТЬ АВТО ПО СВОЕЙ СТАВКЕ (ЦЕНА + КОЛ-ВО АВТО) ---
+# --- ШАГ 2: ПРЕДЛОЖИТЬ АВТО ПО СВОЕЙ СТАВКЕ ---
 @dp.callback_query(F.data.startswith("bid_"))
 async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     cargo_id = int(callback.data.replace("bid_", ""))
@@ -421,6 +419,18 @@ async def process_custom_quantity(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
+    
+    cursor.execute("SELECT status FROM cargo WHERE id = ?", (cargo_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != 'active':
+        conn.close()
+        await state.clear()
+        await message.answer("⚠️ К сожалению, этот груз уже был закрыт.", reply_markup=get_main_reply_markup())
+        return
+
+    # Предложение своей ставки НЕ закрывает груз автоматически для других,
+    # он остается активным, пока вы сами не решите подтвердить сделку или пока его не заберут.
+    
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     conn.close()
@@ -435,13 +445,14 @@ async def process_custom_quantity(message: types.Message, state: FSMContext):
         f"👤 Перевозчик:\n"
         f"Компания: {company}\n"
         f"Имя: {name}\n"
-        f"Телефон: {phone}"
+        f"Телефон: {phone}\n\n"
+        f"*(Груз остается активным для других участников)*"
     )
     try:
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=bid_notification, parse_mode="Markdown")
     except Exception:
         pass
-        
+            
     await state.clear()
     await message.answer("✅ Ваша ставка и количество авто отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
@@ -454,23 +465,25 @@ async def handle_channel_post(message: types.Message):
     if not cargo_text:
         return
         
-    price = extract_price(cargo_text)
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
 
+    # Случай 1: Канал новостей (админ)
     if chat_id == ADMIN_CHANNEL_ID:
-        cursor.execute("INSERT INTO cargo (direction, text, price, status) VALUES (?, ?, ?, 'active')", ("Общее", cargo_text, price))
-        cargo_id = cursor.lastrowid
-        
         cursor.execute("SELECT user_id FROM users")
         all_users = cursor.fetchall()
         conn.close()
         
         for u in all_users:
-            await send_cargo_to_user(u[0], cargo_id, cargo_text, price)
-            await asyncio.sleep(0.05)
+            try:
+                await bot.send_message(chat_id=u[0], text=cargo_text, parse_mode="Markdown")
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logging.error(f"Не удалось отправить новость пользователю {u[0]}: {e}")
 
+    # Случай 2: Страновые каналы (грузы)
     elif chat_id in CHANNEL_TO_DIRECTION:
+        price = extract_price(cargo_text)
         direction = CHANNEL_TO_DIRECTION.get(chat_id)
         
         cursor.execute("INSERT INTO cargo (direction, text, price, status) VALUES (?, ?, ?, 'active')", (direction, cargo_text, price))
