@@ -156,7 +156,7 @@ async def process_name(message: types.Message, state: FSMContext):
     
     await message.answer(
         "Шаг 3 из 3: Нажмите кнопку ниже для отправки номера в 1 клик, "
-        "либо просто введите его текстом (or отправьте `-`, чтобы пропустить):",
+        "либо просто введите его текстом (или отправьте `-`, чтобы пропустить):",
         reply_markup=builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
     )
     await state.set_state(RegistrationStates.waiting_for_phone)
@@ -304,15 +304,13 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
     
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, text FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text FROM cargo WHERE id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
-    if not row or row[0] != 'active':
-        await callback.answer("⚠️ Этот груз уже закрыт или неактуален.", show_alert=True)
-        return
+    cargo_text = row[0] if row else callback.message.text
         
-    await state.update_data(cargo_id=cargo_id, cargo_text=row[1])
+    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text)
     await callback.message.answer("Напишите, сколько авто у вас?")
     await state.set_state(DealStates.waiting_for_quantity)
     await callback.answer()
@@ -328,18 +326,10 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     
-    cursor.execute("SELECT status FROM cargo WHERE id = ?", (cargo_id,))
-    row = cursor.fetchone()
-    if not row or row[0] != 'active':
-        conn.close()
-        await state.clear()
-        await message.answer("⚠️ К сожалению, этот груз уже был разобран другим перевозчиком.", reply_markup=get_main_reply_markup())
-        return
-
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
     
-    # Закрываем груз по фикс. цене только здесь при окончательном подтверждении
+    # Закрываем груз по фикс. цене при успешном завершении
     cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
     
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
@@ -386,15 +376,13 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, text FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text FROM cargo WHERE id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
-    if not row or row[0] != 'active':
-        await callback.answer("⚠️ Этот груз уже закрыт или неактуален.", show_alert=True)
-        return
+    cargo_text = row[0] if row else callback.message.text
         
-    await state.update_data(cargo_id=cargo_id, cargo_text=row[1])
+    await state.update_data(cargo_id=cargo_id, cargo_text=cargo_text)
     await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `125.000 руб`):", parse_mode="Markdown")
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
@@ -419,17 +407,6 @@ async def process_custom_quantity(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT status FROM cargo WHERE id = ?", (cargo_id,))
-    row = cursor.fetchone()
-    if not row or row[0] != 'active':
-        conn.close()
-        await state.clear()
-        await message.answer("⚠️ К сожалению, этот груз уже был закрыт.", reply_markup=get_main_reply_markup())
-        return
-
-    # Предложение своей ставки НЕ закрывает груз автоматически для других,
-    # он остается активным, пока вы сами не решите подтвердить сделку или пока его не заберут.
     
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     user_info = cursor.fetchone()
