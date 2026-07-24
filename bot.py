@@ -724,10 +724,8 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Груз успешно обновлен в базе! Рассылаю изменения...")
     
-    # Обновляем у всех пользователей
     await update_cargo_messages_for_all_users(cargo_id)
 
-    # Принудительно отправляем обновленную карточку в админ-канал
     try:
         admin_kb = InlineKeyboardBuilder()
         admin_kb.row(
@@ -746,37 +744,90 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Не удалось отправить уведомление об изменении в админ-канал: {e}")
 
-@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
-async def handle_admin_command(message: types.Message):
-    text = message.text or message.caption
-    if text and text.strip() == "!грузы":
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT load_id, text, status FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
-        active_loads = cursor.fetchall()
-        conn.close()
+@dp.message(F.chat.id == ADMIN_CHANNEL_ID, Command("грузы"))
+async def handle_admin_cargo_list(message: types.Message):
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, text, status FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
+    active_loads = cursor.fetchall()
+    conn.close()
+    
+    if not active_loads:
+        await message.answer("📦 В системе нет активных грузов.")
+        return
         
-        if not active_loads:
-            await message.answer("📦 В системе нет активных грузов.")
-            return
-            
-        await message.answer("📋 **Активные грузы в базе (управление):**", parse_mode="Markdown")
-        for load_id, load_text, status in active_loads:
-            admin_kb = InlineKeyboardBuilder()
-            admin_kb.row(
-                types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{load_id}"),
-                types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{load_id}")
+    await message.answer("📋 **Активные грузы в базе (управление):**", parse_mode="Markdown")
+    for load_id, load_text, status in active_loads:
+        admin_kb = InlineKeyboardBuilder()
+        admin_kb.row(
+            types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{load_id}"),
+            types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{load_id}")
+        )
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_CHANNEL_ID,
+                text=f"ID: #{load_id}\n\n{load_text}",
+                reply_markup=admin_kb.as_markup(),
+                parse_mode="Markdown"
             )
-            try:
-                await bot.send_message(
-                    chat_id=ADMIN_CHANNEL_ID,
-                    text=f"ID: #{load_id}\n\n{load_text}",
-                    reply_markup=admin_kb.as_markup(),
-                    parse_mode="Markdown"
-                )
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            logging.error(f"Не удалось отправить карточку админу: {e}")
+
+@dp.message(F.chat.id == ADMIN_CHANNEL_ID)
+async def handle_admin_chat_message(message: types.Message):
+    # Обрабатываем только те сообщения, которые начинаются с восклицательного знака !
+    text = message.text or message.caption
+    if not text or not text.startswith("!"):
+        return  # Пропускаем обычные сообщения/обсуждения в админ-чате
+        
+    # Убираем восклицательный знак и пробел/перенос строки сразу после него
+    clean_text = text[1:].lstrip()
+    if not clean_text:
+        return
+
+    # Определяем направление (по умолчанию отправляем в Казахстан или ищем совпадения по тексту)
+    # Здесь логика распределения осталась прежней: по аналогии с каналами направлений
+    # Но если вы шлете из админ-чата, можно привязать к конкретному направлению 
+    # или определить направление из текста. Давайте сделаем автоопределение по ключевым словам направлений:
+    
+    detected_direction = "Казахстан 🇰🇿" # По умолчанию
+    for dir_name in CHANNELS.keys():
+        short_name = dir_name.split()[0].lower() # казахстан, узбекистан и т.д.
+        if short_name in clean_text.lower():
+            detected_direction = dir_name
+            break
+
+    splitted_texts = parse_multiple_cargos(clean_text)
+    
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    
+    created_cargo_ids = []
+    
+    for single_text in splitted_texts:
+        date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(single_text)
+        
+        cursor.execute("""
+            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        """, (detected_direction, date_str, route_str, cars_str, price_str, single_text, details_text))
+        
+        created_cargo_ids.append(cursor.lastrowid)
+        
+    conn.commit()
+    
+    cursor.execute("SELECT user_id, subscriptions FROM users")
+    all_users = cursor.fetchall()
+    conn.close()
+    
+    for cargo_id in created_cargo_ids:
+        for u_id, subs_str in all_users:
+            if subs_str and detected_direction in subs_str.split(","):
+                await send_cargo_to_user(u_id, cargo_id)
                 await asyncio.sleep(0.05)
-            except Exception as e:
-                logging.error(f"Не удалось отправить карточку админу: {e}")
+                
+    await message.answer(f"✅ Груз успешно добавлен и разослан подписчикам направления: {detected_direction}")
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
 async def handle_channel_post(message: types.Message):
