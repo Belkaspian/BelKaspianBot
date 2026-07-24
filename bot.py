@@ -1,14 +1,17 @@
 import logging
 import os
 import sqlite3
-from aiogram import Bot, Dispatcher, executor, types
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(storage=MemoryStorage())
 
 def init_db():
     conn = sqlite3.connect('cargo_bot.db')
@@ -30,16 +33,17 @@ def init_db():
     conn.commit()
     conn.close()
 
-@dp.message_handler(commands=['start'])
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("📋 Актуальные грузы (Каталог)", callback_data="show_catalog"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Актуальные грузы (Каталог)", callback_data="show_catalog")]
+    ])
     await message.answer(
         "👋 Добро пожаловать!\n\nНажмите кнопку ниже, чтобы посмотреть актуальные грузы.",
         reply_markup=keyboard
     )
 
-@dp.callback_query_handler(text="show_catalog")
+@dp.callback_query(F.data == "show_catalog")
 async def show_catalog(callback: types.CallbackQuery):
     conn = sqlite3.connect('cargo_bot.db')
     cursor = conn.cursor()
@@ -56,12 +60,13 @@ async def show_catalog(callback: types.CallbackQuery):
         load_id, route, date, cars, price, car_type = l
         text = f"📍 *{route}*\n📅 Дата: {date} | 🚚 Авто: {cars}\n💰 Ставка: *{price}*\n📝 {car_type}"
         
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton(f"🟢 Взять за {price}", callback_data=f"take_{load_id}"))
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🟢 Взять за {price}", callback_data=f"take_{load_id}")]
+        ])
         
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 
-@dp.callback_query_handler(text_startswith="take_")
+@dp.callback_query(F.data.startswith("take_"))
 async def process_take_load(callback: types.CallbackQuery):
     load_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
@@ -93,4 +98,4 @@ async def process_take_load(callback: types.CallbackQuery):
 
 if __name__ == '__main__':
     init_db()
-    executor.start_polling(dp, skip_updates=True)
+    dp.run_polling(bot)
