@@ -164,6 +164,33 @@ def parse_cargo_raw(raw_text: str):
     details_text = ", ".join(details_list) if details_list else ""
     return date_str, route_str, price_str, cars_str, details_text
 
+def parse_multiple_cargos(raw_text: str):
+    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+    date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
+    
+    cargo_lines = []
+    common_details = []
+    
+    for line in lines:
+        if date_pattern.search(line) and ('-' in line or '→' in line):
+            cargo_lines.append(line)
+        else:
+            common_details.append(line)
+            
+    if not cargo_lines:
+        return [raw_text]
+        
+    common_details_text = ", ".join(common_details) if common_details else ""
+    
+    result_texts = []
+    for line in cargo_lines:
+        single_raw = line
+        if common_details_text:
+            single_raw += f"\n{common_details_text}"
+        result_texts.append(single_raw)
+        
+    return result_texts
+
 def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
         cars_formatted = f"{cars_str} авто"
@@ -701,7 +728,23 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     
     await state.clear()
     await message.answer("✅ Груз успешно обновлен! Рассылаю изменения перевозчикам...")
+    
     await update_cargo_messages_for_all_users(cargo_id)
+
+    try:
+        admin_kb = InlineKeyboardBuilder()
+        admin_kb.row(
+            types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{cargo_id}"),
+            types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{cargo_id}")
+        )
+        await bot.send_message(
+            chat_id=ADMIN_CHANNEL_ID,
+            text=f"✏️ **Груз #{cargo_id} изменен на:**\n\n{new_raw_text}",
+            reply_markup=admin_kb.as_markup(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление об изменении в админ-канал: {e}")
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
 async def handle_admin_command(message: types.Message):
@@ -743,25 +786,35 @@ async def handle_channel_post(message: types.Message):
         return
         
     direction = CHANNEL_TO_DIRECTION.get(chat_id)
-    date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(raw_text)
+    
+    splitted_texts = parse_multiple_cargos(raw_text)
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-    """, (direction, date_str, route_str, cars_str, price_str, raw_text, details_text))
-    cargo_id = cursor.lastrowid
+    
+    created_cargo_ids = []
+    
+    for single_text in splitted_texts:
+        date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(single_text)
+        
+        cursor.execute("""
+            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        """, (direction, date_str, route_str, cars_str, price_str, single_text, details_text))
+        
+        created_cargo_ids.append(cursor.lastrowid)
+        
     conn.commit()
     
     cursor.execute("SELECT user_id, subscriptions FROM users")
     all_users = cursor.fetchall()
     conn.close()
     
-    for u_id, subs_str in all_users:
-        if subs_str and direction in subs_str.split(","):
-            await send_cargo_to_user(u_id, cargo_id)
-            await asyncio.sleep(0.05)
+    for cargo_id in created_cargo_ids:
+        for u_id, subs_str in all_users:
+            if subs_str and direction in subs_str.split(","):
+                await send_cargo_to_user(u_id, cargo_id)
+                await asyncio.sleep(0.05)
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
