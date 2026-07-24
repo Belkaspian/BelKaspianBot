@@ -34,7 +34,7 @@ CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
 ADMIN_CHANNEL_ID = -1004271518848
 
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
     cursor.execute("""
@@ -48,12 +48,17 @@ def init_db():
     """)
     
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cargo (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            direction TEXT,
-            text TEXT,
+        CREATE TABLE IF NOT EXISTS loads (
+            load_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            destination_country TEXT,
+            date TEXT,
+            route TEXT,
+            cars_count TEXT,
             price TEXT,
-            status TEXT DEFAULT 'active'
+            car_type TEXT,
+            text TEXT,
+            status TEXT DEFAULT 'ACTIVE',
+            taken_by INTEGER
         )
     """)
     
@@ -79,7 +84,6 @@ class RegistrationStates(StatesGroup):
 class DealStates(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_custom_rate = State()
-    waiting_for_custom_quantity = State()
 
 
 def get_main_reply_markup():
@@ -91,11 +95,25 @@ def extract_price(text: str) -> str:
     match = re.search(r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб))', text, re.IGNORECASE)
     if match:
         return match.group(1).strip(' ,.')
+    match_num = re.search(r'\d{2,}\s*[\.,]\d{3}', text)
+    if match_num:
+        return match_num.group(0).strip(' ,.')
     return ""
 
 def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
-    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
-    
+    clean_lines = []
+    for line in raw_text.split('\n'):
+        line = line.strip()
+        if line.startswith('📍') or line.startswith('💰') or line.startswith('📦') or line.startswith('🚚'):
+            parts = line.split('|')
+            for p in parts:
+                p_clean = p.replace('📍', '').replace('💰', '').replace('📦', '').replace('🚚', '').strip()
+                if p_clean and not p_clean.endswith('авто') and 'руб' not in p_clean and 'USD' not in p_clean and 'EUR' not in p_clean:
+                    clean_lines.append(p_clean)
+            continue
+        if line:
+            clean_lines.append(line)
+
     date_str = ""
     route_str = ""
     price_str = ""
@@ -105,7 +123,7 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
     date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
     cars_pattern = re.compile(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', re.IGNORECASE)
     
-    for line in lines:
+    for line in clean_lines:
         if not date_str:
             date_match = date_pattern.search(line)
             if date_match:
@@ -118,7 +136,10 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
 
         if '-' in line or '→' in line:
             clean_route = date_pattern.sub('', line)
-            clean_route = cars_pattern.sub('', clean_route).strip(' ,.-')
+            clean_route = cars_pattern.sub('', clean_route)
+            clean_route = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб)', '', clean_route, flags=re.IGNORECASE)
+            clean_route = re.sub(r'\d{2,}\s*[\.,]\d{3}', '', clean_route)
+            clean_route = clean_route.strip(' ,.-')
             if clean_route:
                 route_str = clean_route.replace(' - ', ' → ').replace('-', '→')
         
@@ -134,35 +155,41 @@ def format_cargo_text(raw_text: str, override_qty: str = None) -> str:
         if full_match:
             cars_str = full_match.group(1)
 
-    for line in lines:
+    for line in clean_lines:
         if date_pattern.search(line) and ('-' in line or '→' in line or 'авт' in line):
             continue
-        if re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and len(line) < 20:
+        if re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and len(line) < 25:
             continue
-        if cars_pattern.search(line) and len(line) < 15:
+        if cars_pattern.search(line) and len(line) < 15 and ('-' not in line and '→' not in line):
             continue
-        details.append(line)
+        if line not in details:
+            details.append(line)
 
     if not date_str:
         date_str = "Дата не указана"
     if not route_str:
-        route_str = lines[0] if lines else "Маршрут не указан"
+        route_str = clean_lines[0] if clean_lines else "Маршрут не указан"
     if not price_str:
         price_str = "По запросу"
     
     if not cars_str:
-        cars_str = "1 авто"
+        cars_str = "1"
+
+    if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
+        cars_formatted = f"{cars_str} авто"
+    else:
+        cars_formatted = cars_str
 
     details_text = ", ".join(details) if details else "Уточняйте детали"
 
     return (
-        f"📍*{date_str} | {route_str}*\n"
-        f"💰 {price_str} | 🚚 {cars_str}\n"
+        f"📍 {date_str} | {route_str}\n"
+        f"💰 {price_str} | 🚚 {cars_formatted}\n"
         f"📦 {details_text}"
     )
 
 async def update_cargo_messages_for_all_users(cargo_id: int, new_text: str, price: str, is_closed: bool = False):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
     messages_to_edit = cursor.fetchall()
@@ -196,8 +223,8 @@ async def update_cargo_messages_for_all_users(cargo_id: int, new_text: str, pric
                     reply_markup=builder.as_markup(),
                     parse_mode="Markdown"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Не удалось обновить сообщение у пользователя {u_id}: {e}")
 
 async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str):
     formatted_text = format_cargo_text(text)
@@ -216,7 +243,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str)
     try:
         msg = await bot.send_message(chat_id=user_id, text=formatted_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
         
-        conn = sqlite3.connect("bot_database.db")
+        conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("INSERT INTO user_messages (cargo_id, user_id, message_id) VALUES (?, ?, ?)", (cargo_id, user_id, msg.message_id))
         conn.commit()
@@ -224,15 +251,13 @@ async def send_cargo_to_user(user_id: int, cargo_id: int, text: str, price: str)
     except Exception as e:
         logging.error(f"Не удалось отправить груз пользователю {user_id}: {e}")
 
-
-# --- РЕГИСТРАЦИЯ И СТАРТ ---
 @dp.message(Command("start"))
 @dp.message(F.text == "🏠 Меню и направления")
 async def cmd_start_or_menu(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT company FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
@@ -247,13 +272,11 @@ async def cmd_start_or_menu(message: types.Message, state: FSMContext):
     else:
         await show_main_menu(message)
 
-
 @dp.message(RegistrationStates.waiting_for_company)
 async def process_company(message: types.Message, state: FSMContext):
     await state.update_data(company=message.text)
     await message.answer("Шаг 2 из 3: Введите ваше имя:")
     await state.set_state(RegistrationStates.waiting_for_name)
-
 
 @dp.message(RegistrationStates.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -269,7 +292,6 @@ async def process_name(message: types.Message, state: FSMContext):
     )
     await state.set_state(RegistrationStates.waiting_for_phone)
 
-
 @dp.message(RegistrationStates.waiting_for_phone)
 async def process_phone(message: types.Message, state: FSMContext):
     if message.contact:
@@ -283,7 +305,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     name = data.get("name")
     user_id = message.from_user.id
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
         INSERT OR REPLACE INTO users (user_id, company, name, phone, subscriptions)
@@ -297,11 +319,10 @@ async def process_phone(message: types.Message, state: FSMContext):
     await message.answer("Регистрация успешно завершена! 🎉", reply_markup=get_main_reply_markup())
     await show_main_menu(message)
 
-
 async def show_main_menu(message: types.Message):
     user_id = message.from_user.id
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -328,13 +349,12 @@ async def show_main_menu(message: types.Message):
     
     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
-
 @dp.callback_query(F.data.startswith("toggle_dir_"))
 async def callback_toggle_direction(callback: types.CallbackQuery):
     direction = callback.data.replace("toggle_dir_", "")
     user_id = callback.from_user.id
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -372,12 +392,11 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     await callback.answer()
 
-
 @dp.callback_query(F.data == "show_cargo")
 async def callback_show_cargo(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -391,7 +410,7 @@ async def callback_show_cargo(callback: types.CallbackQuery):
         return
         
     placeholders = ",".join(["?"] * len(user_subs))
-    cursor.execute(f"SELECT id, text, price FROM cargo WHERE direction IN ({placeholders}) AND status = 'active' ORDER BY id DESC LIMIT 10", user_subs)
+    cursor.execute(f"SELECT load_id, text, price FROM loads WHERE destination_country IN ({placeholders}) AND status = 'ACTIVE' ORDER BY load_id DESC LIMIT 10", user_subs)
     cargos = cursor.fetchall()
     conn.close()
     
@@ -404,15 +423,13 @@ async def callback_show_cargo(callback: types.CallbackQuery):
             
     await callback.answer()
 
-
-# --- ШАГ 1: ПОДТВЕРЖДЕНИЕ ГРУЗА ПО ФИКСИРОВАННОЙ ЦЕНЕ ---
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
     cargo_id = int(callback.data.replace("confirm_", ""))
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT text, price FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text, price FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
@@ -423,7 +440,6 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
     await callback.message.answer("Напишите, сколько авто вы забираете?")
     await state.set_state(DealStates.waiting_for_quantity)
     await callback.answer()
-
 
 @dp.message(DealStates.waiting_for_quantity)
 async def process_deal_quantity(message: types.Message, state: FSMContext):
@@ -442,7 +458,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     else:
         user_link = f"[{user_obj.full_name}](tg://user?id={user_id})"
 
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
@@ -458,21 +474,18 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
     
     if action_type == "confirm":
-        # Если берут меньше, чем есть — оставляем груз активным, но уменьшаем остаток мест
         if total_cars and total_cars > requested_cars:
             left_cars = total_cars - requested_cars
             new_cars_str = f"{left_cars} авто"
             new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
             
-            cursor.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
+            cursor.execute("UPDATE loads SET text = ? WHERE load_id = ?", (new_formatted_text, cargo_id))
             conn.commit()
             conn.close()
             
-            # Обновляем карточку у всех (кнопки остаются активными для добора)
             await update_cargo_messages_for_all_users(cargo_id, new_formatted_text, price, is_closed=False)
         else:
-            # Если забрали все машины — закрываем груз полностью
-            cursor.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+            cursor.execute("UPDATE loads SET status = 'BOOKED', taken_by = ? WHERE load_id = ?", (user_id, cargo_id))
             conn.commit()
             conn.close()
             
@@ -496,23 +509,22 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         rate = data.get("custom_rate")
         conn.close()
         
-        # Аналогично для ставок: если забрали не всё, уменьшаем остаток, но не закрываем карточку
         if total_cars and total_cars > requested_cars:
             left_cars = total_cars - requested_cars
             new_cars_str = f"{left_cars} авто"
             new_formatted_text = format_cargo_text(cargo_text, override_qty=new_cars_str)
             
-            conn_u = sqlite3.connect("bot_database.db")
+            conn_u = sqlite3.connect("cargo_bot.db")
             cur_u = conn_u.cursor()
-            cur_u.execute("UPDATE cargo SET text = ? WHERE id = ?", (new_formatted_text, cargo_id))
+            cur_u.execute("UPDATE loads SET text = ? WHERE load_id = ?", (new_formatted_text, cargo_id))
             conn_u.commit()
             conn_u.close()
             
             await update_cargo_messages_for_all_users(cargo_id, new_formatted_text, price, is_closed=False)
         else:
-            conn_u = sqlite3.connect("bot_database.db")
+            conn_u = sqlite3.connect("cargo_bot.db")
             cur_u = conn_u.cursor()
-            cur_u.execute("UPDATE cargo SET status = 'closed' WHERE id = ?", (cargo_id,))
+            cur_u.execute("UPDATE loads SET status = 'BOOKED', taken_by = ? WHERE load_id = ?", (user_id, cargo_id))
             conn_u.commit()
             conn_u.close()
             
@@ -525,23 +537,33 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             f"{carrier_info}\n\n"
             f"*(Груз остается активным для других участников)*"
         )
+        
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_{cargo_id}_{user_id}"),
+            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"adm_decline_{cargo_id}_{user_id}")
+        )
+
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=bid_notification, parse_mode="Markdown")
+            await bot.send_message(
+                chat_id=ADMIN_CHANNEL_ID, 
+                text=bid_notification, 
+                reply_markup=admin_builder.as_markup(), 
+                parse_mode="Markdown"
+            )
         except Exception:
             pass
                 
         await state.clear()
         await message.answer("✅ Ваша ставка и количество авто отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
-
-# --- ШАГ 2: ПРЕДЛОЖИТЬ АВТО ПО СВОЕЙ СТАВКЕ ---
 @dp.callback_query(F.data.startswith("bid_"))
 async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     cargo_id = int(callback.data.replace("bid_", ""))
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT text, price FROM cargo WHERE id = ?", (cargo_id,))
+    cursor.execute("SELECT text, price FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
@@ -553,7 +575,6 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
 
-
 @dp.message(DealStates.waiting_for_custom_rate)
 async def process_custom_rate(message: types.Message, state: FSMContext):
     rate = message.text.strip()
@@ -562,16 +583,62 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
     await message.answer("Сколько авто вы можете поставить по этой ставке?")
     await state.set_state(DealStates.waiting_for_quantity)
 
+@dp.callback_query(F.data.startswith("adm_accept_"))
+async def admin_accept_bid(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    cargo_id = int(parts[2])
+    carrier_id = int(parts[3])
+    
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE loads SET status = 'BOOKED', taken_by = ? WHERE load_id = ?", (carrier_id, cargo_id))
+    cursor.execute("SELECT text, price FROM loads WHERE load_id = ?", (cargo_id,))
+    row = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    
+    cargo_text = row[0] if row else ""
+    price = row[1] if row else ""
 
-# --- АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ПОСТОВ ИЗ КАНАЛОВ ---
+    await update_cargo_messages_for_all_users(cargo_id, cargo_text, price, is_closed=True)
+    
+    try:
+        await bot.send_message(
+            chat_id=carrier_id, 
+            text="✅ Администратор подтвердил вашу ставку! Груз закреплен за вами.", 
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+        
+    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: Ставка подтверждена администратором ✅]**", reply_markup=None, parse_mode="Markdown")
+    await callback.answer("Ставка подтверждена!")
+
+@dp.callback_query(F.data.startswith("adm_decline_"))
+async def admin_decline_bid(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    carrier_id = int(parts[3])
+    
+    try:
+        await bot.send_message(
+            chat_id=carrier_id, 
+            text="❌ К сожалению, ваша ставка по грузу была отклонена администратором. Груз остается доступным в системе.", 
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+        
+    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: Ставка отклонена ❌]**", reply_markup=None, parse_mode="Markdown")
+    await callback.answer("Ставка отклонена.")
+
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys()) + [ADMIN_CHANNEL_ID]))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
-    cargo_text = message.text or message.caption
-    if not cargo_text:
+    raw_text = message.text or message.caption
+    if not raw_text:
         return
         
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
 
     if chat_id == ADMIN_CHANNEL_ID:
@@ -581,16 +648,19 @@ async def handle_channel_post(message: types.Message):
         
         for u in all_users:
             try:
-                await bot.send_message(chat_id=u[0], text=cargo_text, parse_mode="Markdown")
+                await bot.send_message(chat_id=u[0], text=raw_text, parse_mode="Markdown")
                 await asyncio.sleep(0.05)
             except Exception as e:
                 logging.error(f"Не удалось отправить новость пользователю {u[0]}: {e}")
 
     elif chat_id in CHANNEL_TO_DIRECTION:
-        price = extract_price(cargo_text)
+        price = extract_price(raw_text)
         direction = CHANNEL_TO_DIRECTION.get(chat_id)
         
-        cursor.execute("INSERT INTO cargo (direction, text, price, status) VALUES (?, ?, ?, 'active')", (direction, cargo_text, price))
+        formatted_initial_text = format_cargo_text(raw_text)
+        
+        cursor.execute("INSERT INTO loads (destination_country, text, price, status, route, cars_count, car_type) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?)", 
+                       (direction, formatted_initial_text, price, formatted_initial_text, "2", "Тент"))
         cargo_id = cursor.lastrowid
         
         cursor.execute("SELECT user_id, subscriptions FROM users")
@@ -599,27 +669,9 @@ async def handle_channel_post(message: types.Message):
         
         for u_id, subs_str in all_users:
             if subs_str and direction in subs_str.split(","):
-                await send_cargo_to_user(u_id, cargo_id, cargo_text, price)
+                await send_cargo_to_user(u_id, cargo_id, formatted_initial_text, price)
                 await asyncio.sleep(0.05)
 
-
-async def health_check(request):
-    return web.Response(text="Bot is running!")
-
-async def main():
+async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logging.info(f"Dummy web server started on port {port}")
-
     await dp.start_polling(bot)
-
-if __name__ == '__main__':
-    asyncio.run(main())
