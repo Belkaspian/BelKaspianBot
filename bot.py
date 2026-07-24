@@ -1,126 +1,241 @@
-import asyncio
-import logging
 import os
+import logging
 import sqlite3
+import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
+
+# Получаем токен из переменных окружения
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("Не задан токен бота в переменных окружения BOT_TOKEN!")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+# Список направлений с флагами
+DIRECTIONS = [
+    "Казахстан 🇰🇿",
+    "Узбекистан 🇺🇿",
+    "Кыргызстан 🇰🇬",
+    "Азербайджан 🇦🇿",
+    "Грузия 🇬🇪",
+    "Армения 🇦🇲"
+]
+
+# Инициализация базы данных
 def init_db():
-    conn = sqlite3.connect('cargo_bot.db')
+    conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, full_name TEXT)')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS loads (
-            load_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            route TEXT,
-            destination_country TEXT,
-            date TEXT,
-            cars_count INTEGER,
-            price TEXT,
-            car_type TEXT,
-            status TEXT DEFAULT 'ACTIVE',
-            taken_by INTEGER
+    # Таблица пользователей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            company TEXT,
+            name TEXT,
+            phone TEXT,
+            subscriptions TEXT
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
+init_db()
+
+# Состояния для регистрации
+class RegistrationStates(StatesGroup):
+    waiting_for_company = State()
+    waiting_for_name = State()
+    waiting_for_phone = State()
+
+
+# --- КОМАНДА /START И РЕГИСТРАЦИЯ ---
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Актуальные грузы (Каталог)", callback_data="show_catalog")]
-    ])
-    await message.answer(
-        "👋 Добро пожаловать!\n\nНажмите кнопку ниже, чтобы посмотреть актуальные грузы.",
-        reply_markup=keyboard
-    )
-
-@dp.callback_query(F.data == "show_catalog")
-async def show_catalog(callback: types.CallbackQuery):
-    conn = sqlite3.connect('cargo_bot.db')
+async def cmd_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    
+    conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, route, date, cars_count, price, car_type FROM loads WHERE status = 'ACTIVE'")
-    loads = cursor.fetchall()
+    cursor.execute("SELECT company FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
     conn.close()
 
-    if not loads:
-        await callback.answer("📭 Сейчас нет активных грузов.", show_alert=True)
-        return
+    if not user:
+        # Если пользователя нет в базе — запускаем регистрацию
+        await message.answer("Здравствуйте! Для доступа к системе необходима регистрация.\n\nШаг 1 из 3: Введите название вашей компании:")
+        await state.set_state(RegistrationStates.waiting_for_company)
+    else:
+        # Если зарегистрирован — показываем главное меню
+        await show_main_menu(message)
 
-    await callback.answer()
-    for l in loads:
-        load_id, route, date, cars, price, car_type = l
-        text = f"📍 *{route}*\n📅 Дата: {date} | 🚚 Авто: {cars}\n💰 Ставка: *{price}*\n📝 {car_type}"
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🟢 Взять за {price}", callback_data=f"take_{load_id}")]
-        ])
-        
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 
-@dp.callback_query(F.data.startswith("take_"))
-async def process_take_load(callback: types.CallbackQuery):
-    load_id = int(callback.data.split("_")[1])
-    user_id = callback.from_user.id
-    user_name = callback.from_user.full_name
-    username = callback.from_user.username
+@dp.message(RegistrationStates.waiting_for_company)
+async def process_company(message: types.Message, state: FSMContext):
+    await state.update_data(company=message.text)
+    await message.answer("Шаг 2 из 3: Введите ваше имя:")
+    await state.set_state(RegistrationStates.waiting_for_name)
 
-    conn = sqlite3.connect('cargo_bot.db')
+
+@dp.message(RegistrationStates.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    
+    # Создаем кнопку для отправки контакта в один клик
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="📱 Поделиться номером телефона", request_contact=True))
+    
+    await message.answer(
+        "Шаг 3 из 3: Нажмите на кнопку ниже, чтобы поделиться номером телефона:",
+        reply_markup=builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+    )
+    await state.set_state(RegistrationStates.waiting_for_phone)
+
+
+@dp.message(RegistrationStates.waiting_for_phone, F.contact)
+async def process_phone(message: types.Message, state: FSMContext):
+    contact = message.contact
+    phone = contact.phone_number
+    data = await state.get_data()
+    
+    company = data.get("company")
+    name = data.get("name")
+    user_id = message.from_user.id
+    
+    # Сохраняем в базу данных
+    conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, route, price FROM loads WHERE load_id = ?", (load_id,))
-    load = cursor.fetchone()
-
-    if not load or load[0] != 'ACTIVE':
-        conn.close()
-        await callback.answer("❌ Груз уже занят!", show_alert=True)
-        return
-
-    cursor.execute("UPDATE loads SET status = 'BOOKED', taken_by = ? WHERE load_id = ?", (user_id, load_id))
+    cursor.execute("""
+        OR.INSERT INTO users (user_id, company, name, phone, subscriptions)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, company, name, phone, ""))
+    # Исправление синтаксиса на стандартный INSERT OR REPLACE
+    cursor.execute("""
+        INSERT OR REPLACE INTO users (user_id, company, name, phone, subscriptions)
+        VALUES (?, ?, ?, ?, COALESCE((SELECT subscriptions FROM users WHERE user_id = ?), ''))
+    """, (user_id, company, name, phone, user_id))
     conn.commit()
     conn.close()
-
-    await callback.answer("✅ Вы успешно забрали груз!", show_alert=True)
-    await callback.message.edit_text(f"✅ Вы забронировали: {load[1]} за {load[2]}.")
     
-    if ADMIN_ID:
-        try:
-            await bot.send_message(ADMIN_ID, f"🚨 Груз #{load_id} ({load[1]}) забрал перевозчик {user_name} (@{username})")
-        except Exception:
-            pass
+    await state.clear()
+    
+    # Убираем клавиатуру с кнопкой телефона и показываем меню
+    await message.answer("Регистрация успешно завершена! 🎉", reply_markup=types.ReplyKeyboardRemove())
+    await show_main_menu(message)
 
-from aiohttp import web
 
+# --- ГЛАВНОЕ МЕНЮ И НАСТРОЙКА НАПРАВЛЕНИЙ ---
+async def show_main_menu(message: types.Message):
+    user_id = message.from_user.id
+    
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    user_subs = row[0].split(",") if row and row[0] else []
+    
+    builder = InlineKeyboardBuilder()
+    for direction in DIRECTIONS:
+        is_selected = direction in user_subs
+        mark = "✅ " if is_selected else "   "
+        builder.row(types.InlineKeyboardButton(
+            text=f"{mark}{direction}",
+            callback_data=f"toggle_dir_{direction}"
+        ))
+    
+    builder.row(types.InlineKeyboardButton(text="📋 Посмотреть актуальные грузы", callback_data="show_cargo"))
+    
+    text = (
+        "⚙️ **Настройка направлений**\n\n"
+        "Нажимайте на направления ниже, чтобы подписаться или отписаться от них. "
+        "В каталоге будут отображаться только выбранные варианты:\n\n"
+        f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
+    )
+    
+    if message.from_user.id == message.chat.id:
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("toggle_dir_"))
+async def callback_toggle_direction(callback: types.CallbackQuery):
+    direction = callback.data.replace("toggle_dir_", "")
+    user_id = callback.from_user.id
+    
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    current_subs = row[0].split(",") if row and row[0] else []
+    
+    if direction in current_subs:
+        current_subs.remove(direction)
+    else:
+        current_subs.append(direction)
+        
+    new_subs_str = ",".join(current_subs)
+    
+    cursor.execute("UPDATE users SET subscriptions = ? WHERE user_id = ?", (new_subs_str, user_id))
+    conn.commit()
+    conn.close()
+    
+    # Перестраиваем клавиатуру с учетом изменений
+    builder = InlineKeyboardBuilder()
+    for d in DIRECTIONS:
+        is_selected = d in current_subs
+        mark = "✅ " if is_selected else "   "
+        builder.row(types.InlineKeyboardButton(
+            text=f"{mark}{d}",
+            callback_data=f"toggle_dir_{d}"
+        ))
+        
+    builder.row(types.InlineKeyboardButton(text="📋 Посмотреть актуальные грузы", callback_data="show_cargo"))
+    
+    text = (
+        "⚙️ **Настройка направлений**\n\n"
+        "Нажимайте на направления ниже, чтобы подписаться или отписаться от них:\n\n"
+        f"Ваши текущие подписки: {', '.join(current_subs) if current_subs else 'ничего не выбрано'}"
+    )
+    
+    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_cargo")
+async def callback_show_cargo(callback: types.CallbackQuery):
+    await callback.message.answer("📦 В данный момент активных грузов по вашим направлениям нет. Скоро они появятся!")
+    await callback.answer()
+
+
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
 async def health_check(request):
     return web.Response(text="Bot is running!")
 
 async def main():
-    init_db()
-    
-    # Гарантированно удаляем вебхук перед стартом
+    # Очищаем вебхук перед стартом поллинга
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Настраиваем фейковый веб-сервер для Render
+    # Поднимаем фейковый сервер для удержания порта Render
     app = web.Application()
     app.router.add_get('/', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Render передает нужный порт через переменную окружения PORT
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     logging.info(f"Dummy web server started on port {port}")
 
-    # Запускаем самого бота
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
