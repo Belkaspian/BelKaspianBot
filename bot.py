@@ -1,22 +1,19 @@
-import asyncio
-import sqlite3
+import logging
 import os
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+import sqlite3
+from aiogram import Bot, Dispatcher, executor, types
 
-TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-router = Router()
+logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
-COUNTRIES = ["Казахстан", "Узбекистан", "Кыргызстан", "Грузия", "Азербайджан", "Армения"]
+dp = Dispatcher(bot)
 
 def init_db():
     conn = sqlite3.connect('cargo_bot.db')
     cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, full_name TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS subscriptions (user_id INTEGER, country TEXT, PRIMARY KEY (user_id, country))')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS loads (
             load_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,19 +30,17 @@ def init_db():
     conn.commit()
     conn.close()
 
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎛 Выбрать направления", callback_data="set_countries")],
-        [InlineKeyboardButton(text="📋 Актуальные грузы (Каталог)", callback_data="show_catalog")]
-    ])
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("📋 Актуальные грузы (Каталог)", callback_data="show_catalog"))
     await message.answer(
-        "👋 Добро пожаловать!\n\nВыберите интересующие направления для подписки или откройте каталог актуальных грузов.",
+        "👋 Добро пожаловать!\n\nНажмите кнопку ниже, чтобы посмотреть актуальные грузы.",
         reply_markup=keyboard
     )
 
-@router.callback_query(F.data == "show_catalog")
-async def show_catalog(callback: CallbackQuery):
+@dp.callback_query_handler(text="show_catalog")
+async def show_catalog(callback: types.CallbackQuery):
     conn = sqlite3.connect('cargo_bot.db')
     cursor = conn.cursor()
     cursor.execute("SELECT load_id, route, date, cars_count, price, car_type FROM loads WHERE status = 'ACTIVE'")
@@ -53,21 +48,21 @@ async def show_catalog(callback: CallbackQuery):
     conn.close()
 
     if not loads:
-        await callback.message.answer("📭 Сейчас нет активных грузов.")
-        await callback.answer()
+        await callback.answer("📭 Сейчас нет активных грузов.", show_alert=True)
         return
 
+    await callback.answer()
     for l in loads:
         load_id, route, date, cars, price, car_type = l
-        text = f"📍 **{route}**\n📅 Дата: {date} | 🚚 Авто: {cars}\n💰 Ставка: **{price}**\n📝 {car_type}"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🟢 Взять за {price}", callback_data=f"take_{load_id}")]
-        ])
+        text = f"📍 *{route}*\n📅 Дата: {date} | 🚚 Авто: {cars}\n💰 Ставка: *{price}*\n📝 {car_type}"
+        
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton(f"🟢 Взять за {price}", callback_data=f"take_{load_id}"))
+        
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
-    await callback.answer()
 
-@router.callback_query(F.data.startswith("take_"))
-async def process_take_load(callback: CallbackQuery):
+@dp.callback_query_handler(text_startswith="take_")
+async def process_take_load(callback: types.CallbackQuery):
     load_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
     user_name = callback.from_user.full_name
@@ -87,15 +82,15 @@ async def process_take_load(callback: CallbackQuery):
     conn.commit()
     conn.close()
 
-    await callback.answer("✅ Вы забрали груз!", show_alert=True)
+    await callback.answer("✅ Вы успешно забрали груз!", show_alert=True)
     await callback.message.edit_text(f"✅ Вы забронировали: {load[1]} за {load[2]}.")
-    await bot.send_message(ADMIN_ID, f"🚨 Груз #{load_id} ({load[1]}) забрал перевозчик {user_name} (@{username})")
+    
+    if ADMIN_ID:
+        try:
+            await bot.send_message(ADMIN_ID, f"🚨 Груз #{load_id} ({load[1]}) забрал перевозчик {user_name} (@{username})")
+        except Exception:
+            pass
 
-async def main():
+if __name__ == '__main__':
     init_db()
-    dp = Dispatcher()
-    dp.include_router(router)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
