@@ -97,6 +97,11 @@ async def process_take_load(callback: types.CallbackQuery):
         except Exception:
             pass
 
-if __name__ == '__main__':
+async def main():
     init_db()
-    dp.run_polling(bot)
+    # Принудительно удаляем старый вебхук перед запуском поллинга
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    asyncio.run(main())
