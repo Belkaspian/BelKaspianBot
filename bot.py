@@ -21,7 +21,7 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Список направлений и их привязка к ID каналов
+# Список страновых направлений и их привязка к ID каналов
 CHANNELS = {
     "Казахстан 🇰🇿": -1004309918435,
     "Узбекистан 🇺🇿": -1003470705929,
@@ -31,8 +31,11 @@ CHANNELS = {
     "Армения 🇦🇲": -1004335138909
 }
 
-# Обратный словарь: по ID канала узнаем название страны
+# Обратный словарь: по ID странового канала узнаем название страны
 CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
+
+# ID канала-админа для общей рассылки всем пользователям
+ADMIN_CHANNEL_ID = -1004271518848
 
 # Инициализация базы данных
 def init_db():
@@ -260,47 +263,61 @@ async def callback_show_cargo(callback: types.CallbackQuery):
 
 
 # --- АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ПОСТОВ ИЗ КАНАЛОВ ---
-@dp.channel_post(F.chat.id.in_(CHANNEL_TO_DIRECTION.keys()))
+@dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys()) + [ADMIN_CHANNEL_ID]))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
-    direction = CHANNEL_TO_DIRECTION.get(chat_id)
-    
-    # Берем текст поста (или подпись к фото/видео, если груз отправлен с картинкой)
     cargo_text = message.text or message.caption
     if not cargo_text:
-        return # Если пост пустой (например, просто медиа без текста)
+        return
         
-    # 1. Сохраняем груз в базу данных бота
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO cargo (direction, text) VALUES (?, ?)", (direction, cargo_text))
-    conn.commit()
-    
-    # 2. Находим всех пользователей, у которых подписано это направление
-    # Ищем пользователей, у которых в поле subscriptions есть наше направление
-    cursor.execute("SELECT user_id, subscriptions FROM users")
-    all_users = cursor.fetchall()
-    conn.close()
-    
-    target_users = []
-    for u_id, subs_str in all_users:
-        if subs_str:
-            user_subs = subs_str.split(",")
-            if direction in user_subs:
-                target_users.append(u_id)
-                
-    # 3. Делаем рассылку уведомлений в личку подписчикам
-    if target_users:
-        notification_text = f"🚨 **Новый груз по вашему направлению!**\n\n🔹 **{direction}**\n{cargo_text}"
+
+    # Случай 1: Пост из общего канала-админа (рассылка всем)
+    if chat_id == ADMIN_CHANNEL_ID:
+        cursor.execute("SELECT user_id FROM users")
+        all_users = cursor.fetchall()
+        conn.close()
         
-        for u_id in target_users:
-            try:
-                await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
-                await asyncio.sleep(0.05) # Небольшая пауза, чтобы не словить лимиты Telegram (Flood control)
-            except Exception as e:
-                logging.error(f"Не удалось отправить уведомление пользователю {u_id}: {e}")
-                
-        logging.info(f"Рассылка по направлению {direction} выполнена. Получателей: {len(target_users)}")
+        target_users = [u[0] for u in all_users]
+        if target_users:
+            notification_text = f"🚨 **Общее объявление / Важный груз:**\n\n{cargo_text}"
+            for u_id in target_users:
+                try:
+                    await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    logging.error(f"Не удалось отправить общую рассылку пользователю {u_id}: {e}")
+            logging.info(f"Общая рассылка выполнена. Получателей: {len(target_users)}")
+
+    # Случай 2: Пост из одного из 6 страновых каналов (рассылка по подпискам)
+    elif chat_id in CHANNEL_TO_DIRECTION:
+        direction = CHANNEL_TO_DIRECTION.get(chat_id)
+        
+        # Сохраняем в базу данных
+        cursor.execute("INSERT INTO cargo (direction, text) VALUES (?, ?)", (direction, cargo_text))
+        conn.commit()
+        
+        cursor.execute("SELECT user_id, subscriptions FROM users")
+        all_users = cursor.fetchall()
+        conn.close()
+        
+        target_users = []
+        for u_id, subs_str in all_users:
+            if subs_str:
+                user_subs = subs_str.split(",")
+                if direction in user_subs:
+                    target_users.append(u_id)
+                    
+        if target_users:
+            notification_text = f"🚨 **Новый груз по вашему направлению!**\n\n🔹 **{direction}**\n{cargo_text}"
+            for u_id in target_users:
+                try:
+                    await bot.send_message(chat_id=u_id, text=notification_text, parse_mode="Markdown")
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    logging.error(f"Не удалось отправить уведомление пользователю {u_id}: {e}")
+            logging.info(f"Рассылка по направлению {direction} выполнена. Получателей: {len(target_users)}")
 
 
 # --- ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
