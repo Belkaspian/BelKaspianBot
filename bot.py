@@ -287,7 +287,7 @@ async def process_name(message: types.Message, state: FSMContext):
     
     await message.answer(
         "Шаг 3 из 3: Нажмите кнопку ниже для отправки номера в 1 клик, "
-        "либо просто введите его текстом (или отправьте `-`, чтобы пропустить):",
+        "либо просто введите его текстом (or отправьте `-`, чтобы пропустить):",
         reply_markup=builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
     )
     await state.set_state(RegistrationStates.waiting_for_phone)
@@ -675,3 +675,27 @@ async def handle_channel_post(message: types.Message):
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
+
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+async def main():
+    await asyncio.gather(
+        run_bot(),
+        web_server()
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
