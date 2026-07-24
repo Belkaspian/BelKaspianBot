@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Выбор направлений</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 15px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
+        .item { font-size: 18px; margin: 12px 0; }
+        button { width: 100%; padding: 12px; background: #2481cc; color: white; border: none; border-radius: 8px; font-size: 16px; margin-top: 20px;}
+    </style>
+</head>
+<body>
+    <h3>Выберите интересующие направления:</h3>
+    <div class="item"><label><input type="checkbox" value="Казахстан"> Казахстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Узбекистан"> Узбекистан</label></div>
+    <div class="item"><label><input type="checkbox" value="Кыргызстан"> Кыргызстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Грузия"> Грузия</label></div>
+    <div class="item"><label><input type="checkbox" value="Азербайджан"> Азербайджан</label></div>
+    <div class="item"><label><input type="checkbox" value="Армения"> Армения</label></div>
+
+    <button onclick="save()">Сохранить подписки</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        function save() {
+            let selected = [];
+            document.querySelectorAll('input:checked').forEach(cb => selected.push(cb.value));
+            tg.sendData(JSON.stringify(selected));
+            tg.close();
+        }
+    </script>
+</body>
+</html>

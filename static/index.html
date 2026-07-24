@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Каталог грузов</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; background: var(--tg-theme-bg-color, #f5f5f5); color: var(--tg-theme-text-color, #000); padding: 10px; margin: 0; }
+        .card { background: var(--tg-theme-secondary-bg-color, #fff); padding: 12px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        button { background: #2481cc; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h3>📋 Актуальные грузы</h3>
+    <div id="loads-container">Загрузка...</div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        async function loadData() {
+            try {
+                let res = await fetch('/api/loads');
+                let data = await res.json();
+                let container = document.getElementById('loads-container');
+                if (data.loads.length === 0) {
+                    container.innerHTML = '<p>Нет активных грузов</p>';
+                    return;
+                }
+                container.innerHTML = data.loads.map(l => `
+                    <div class="card">
+                        <b>📍 ${l.route}</b><br>
+                        📅 Дата: ${l.date} | 🚚 Авто: ${l.cars}<br>
+                        💰 Цена: <b>${l.price}</b><br>
+                        📝 ${l.car_type}<br>
+                        <button onclick="book(${l.id})">Взять груз</button>
+                    </div>
+                `).join('');
+            } catch(e) {
+                document.getElementById('loads-container'].innerHTML = 'Ошибка загрузки';
+            }
+        }
+
+        async function book(id) {
+            let userId = tg.initDataUnsafe?.user?.id || 12345;
+            let res = await fetch(`/api/book/${id}?user_id=${userId}`, { method: 'POST' });
+            if (res.ok) {
+                alert('Груз успешно забронирован!');
+                loadData();
+            } else {
+                alert('Груз уже занят кем-то другим.');
+                loadData();
+            }
+        }
+        loadData();
+    </script>
+</body>
+</html>
