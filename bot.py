@@ -17,6 +17,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("Не задан токен бота в переменных окружения BOT_TOKEN!")
 
+# Укажите ваш публичный URL на Render (без слэша на конце), либо задайте через переменные окружения
+# Пример: "https://your-app-name.onrender.com"
+RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -558,6 +562,17 @@ async def show_confirmed_cargos_handler(message: types.Message):
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await callback.answer("Ваш аккаунт заблокирован администратором.", show_alert=True)
+        return
+    conn.close()
+
     cargo_id = int(callback.data.replace("confirm_", ""))
     
     conn = sqlite3.connect("cargo_bot.db")
@@ -573,6 +588,17 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
 
 @dp.callback_query(F.data.startswith("bid_"))
 async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await callback.answer("Ваш аккаунт заблокирован администратором.", show_alert=True)
+        return
+    conn.close()
+
     cargo_id = int(callback.data.replace("bid_", ""))
     await state.update_data(cargo_id=cargo_id, action_type="bid")
     await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):", parse_mode="Markdown")
@@ -581,6 +607,18 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(DealStates.waiting_for_custom_rate)
 async def process_custom_rate(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await message.answer("Ваш аккаунт заблокирован администратором.")
+        await state.clear()
+        return
+    conn.close()
+
     rate = message.text.strip()
     await state.update_data(custom_rate=rate)
     
@@ -600,12 +638,23 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
 # ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СДЕЛОК ====================
 @dp.message(DealStates.waiting_for_quantity)
 async def process_deal_quantity(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await message.answer("Ваш аккаунт заблокирован администратором.")
+        await state.clear()
+        return
+    conn.close()
+
     qty_input = message.text.strip()
     data = await state.get_data()
     cargo_id = data.get("cargo_id")
     action_type = data.get("action_type", "confirm")
     
-    user_id = message.from_user.id
     user_obj = message.from_user
     
     if user_obj.username:
@@ -726,6 +775,14 @@ async def admin_accept_bid(callback: types.CallbackQuery):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (carrier_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await callback.answer("Этот перевозчик заблокирован! Сделка отклонена.", show_alert=True)
+        await callback.message.edit_text(callback.message.text + "\n\n**[ОШИБКА: Перевозчик заблокирован ❌]**", parse_mode="Markdown", reply_markup=None)
+        return
+
     cursor.execute("SELECT cars_count, date, route, details, price, status FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     
@@ -788,9 +845,16 @@ async def admin_partial_bid(callback: types.CallbackQuery):
     carrier_id = int(parts[3])
     max_requested = int(parts[4])
     agreed_rate = "_".join(parts[5:]).replace("_", " ")
-    
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (carrier_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await callback.answer("Этот перевозчик заблокирован!", show_alert=True)
+        return
+    
     cursor.execute("SELECT cars_count FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
@@ -831,6 +895,13 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (carrier_id,))
+    u_status = cursor.fetchone()
+    if u_status and u_status[0] == 'BLOCKED':
+        conn.close()
+        await callback.answer("Перевозчик заблокирован!", show_alert=True)
+        return
+
     cursor.execute("SELECT cars_count, date, route, details, price, status FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
 
@@ -1151,7 +1222,6 @@ async def admin_ask_cancel_qty(callback: types.CallbackQuery):
     max_cars = row[0]
     
     if max_cars <= 1:
-        # Если была всего 1 машина, сразу отменяем полностью
         await execute_cancel_deal(callback, deal_id, 1)
         return
         
@@ -1226,7 +1296,6 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
     load_id, carrier_id, current_deal_cars, route, price = deal
     
     if cancel_qty >= current_deal_cars:
-        # Полная отмена сделки
         cursor.execute("DELETE FROM confirmed_deals WHERE id = ?", (deal_id,))
         conn.commit()
         conn.close()
@@ -1253,7 +1322,6 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
             parse_mode="Markdown"
         )
     else:
-        # Частичная отмена сделки (уменьшаем кол-во авто в подтвержденной сделке)
         new_deal_cars = current_deal_cars - cancel_qty
         cursor.execute("UPDATE confirmed_deals SET cars = ? WHERE id = ?", (new_deal_cars, deal_id))
         conn.commit()
@@ -1273,7 +1341,6 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
         except Exception:
             pass
             
-        # Обновляем карточку в админ-канале
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
@@ -1322,7 +1389,6 @@ async def admin_show_carriers_by_dir(callback: types.CallbackQuery):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    # Ищем пользователей, у которых в подписках есть это направление
     cursor.execute("SELECT user_id, company, name, phone, status FROM users")
     all_users = cursor.fetchall()
     conn.close()
@@ -1330,7 +1396,6 @@ async def admin_show_carriers_by_dir(callback: types.CallbackQuery):
     direction_users = []
     for u in all_users:
         u_id, comp, name, phone, u_status = u
-        # Проверим подписки в базе
         conn = sqlite3.connect("cargo_bot.db")
         cur = conn.cursor()
         cur.execute("SELECT subscriptions FROM users WHERE user_id = ?", (u_id,))
@@ -1383,12 +1448,40 @@ async def admin_block_user(callback: types.CallbackQuery):
     except Exception:
         pass
         
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT cargo_id, message_id FROM user_messages WHERE user_id = ?", (user_id,))
+    user_msgs = cursor.fetchall()
+    conn.close()
+
+    for cargo_id, msg_id in user_msgs:
+        try:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT date, route, price, cars_count, details FROM loads WHERE load_id = ?", (cargo_id,))
+            load_row = cursor.fetchone()
+            conn.close()
+            if load_row:
+                d_str, r_str, p_str, c_str, det_str = load_row
+                card_text = f"🚫 [ГРУЗ НЕДОСТУПЕН]\n\n📍 {d_str} | {r_str}\n💰 {p_str} | 🚚 {c_str} авто"
+                if det_str:
+                    card_text += f"\n📦 {det_str}"
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=msg_id,
+                    text=card_text,
+                    reply_markup=None,
+                    parse_mode="Markdown"
+                )
+        except Exception:
+            pass
+
     kb = InlineKeyboardBuilder()
     kb.row(types.InlineKeyboardButton(text="🟢 Разблокировать", callback_data=f"adm_unblock_user_{user_id}_{direction}"))
     kb.row(types.InlineKeyboardButton(text="📦 Подтвержденные грузы", callback_data=f"adm_user_deals_{user_id}"))
     
     await callback.message.edit_text(callback.message.text.replace("🟢 Активен", "🔴 Заблокирован"), reply_markup=kb.as_markup(), parse_mode="Markdown")
-    await callback.answer("Перевозчик заблокирован!")
+    await callback.answer("Перевозчик заблокирован, активные грузы для него скрыты/деактивированы!")
 
 @dp.callback_query(F.data.startswith("adm_unblock_user_"))
 async def admin_unblock_user(callback: types.CallbackQuery):
@@ -1449,8 +1542,11 @@ async def admin_show_user_confirmed_deals(callback: types.CallbackQuery):
         if details:
             card_text += f"\n📦 {details}"
             
+        kb = InlineKeyboardBuilder()
+        kb.row(types.InlineKeyboardButton(text="❌ Отменить груз перевозчику", callback_data=f"adm_ask_cancel_qty_{deal_id}"))
+
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=card_text, parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=card_text, reply_markup=kb.as_markup(), parse_mode="Markdown")
             await asyncio.sleep(0.05)
         except Exception:
             pass
@@ -1500,24 +1596,48 @@ async def handle_channel_post(message: types.Message):
                     await asyncio.sleep(0.05)
 
 
-# ==================== ВЕБ-СЕРВЕР RENDER И ЗАПУСК ====================
+# ==================== ВЕБ-СЕРВЕР RENDER И САМОПИНГ ====================
+async def handle_ping(request):
+    """Эндпоинт для ответа на входящие пинги от Render"""
+    return web.Response(text="Bot is running!", status=200)
+
+async def self_ping():
+    """Фоновая задача: пингует собственный URL каждые 10 минут, чтобы бот не засыпал на Render"""
+    await asyncio.sleep(30) # Пауза перед первым пингом, чтобы сервер успел подняться
+    import aiohttp
+    
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(RENDER_URL) as response:
+                    logging.info(f"Self-ping successful, status code: {response.status}")
+        except Exception as e:
+            logging.error(f"Self-ping error: {e}")
+        
+        # Интервал 10 минут (600 секунд)
+        await asyncio.sleep(600)
+
+async def webserver_on_startup(app):
+    """Запуск фоновой задачи самопинга при старте aiohttp-приложения"""
+    asyncio.create_task(self_ping())
+
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-async def handle_ping(request):
-    return web.Response(text="Bot is running!")
-
 async def web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
+    app.router.add_get("/ping", handle_ping)
+    app.on_startup.append(webserver_on_startup)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Web server started on port {port}")
+    logging.info(f"Web server and self-ping mechanism started on port {port}")
 
 async def main():
     await asyncio.gather(
