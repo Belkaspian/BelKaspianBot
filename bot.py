@@ -18,8 +18,8 @@ if not TOKEN:
     raise ValueError("Не задан токен бота в переменных окружения BOT_TOKEN!")
 
 # Укажите ваш публичный URL на Render (без слэша на конце), либо задайте через переменные окружения
-# Пример: "https://your-app-name.onrender.com"
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -63,7 +63,10 @@ def init_db():
             car_type TEXT,
             text TEXT,
             details TEXT,
-            status TEXT DEFAULT 'ACTIVE'
+            status TEXT DEFAULT 'ACTIVE',
+            cargo_type TEXT,
+            weight TEXT,
+            admin_comment TEXT
         )
     """)
     
@@ -98,6 +101,21 @@ def init_db():
         cursor.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'")
     except sqlite3.OperationalError:
         pass
+
+    try:
+        cursor.execute("ALTER TABLE loads ADD COLUMN cargo_type TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        cursor.execute("ALTER TABLE loads ADD COLUMN weight TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        cursor.execute("ALTER TABLE loads ADD COLUMN admin_comment TEXT")
+    except sqlite3.OperationalError:
+        pass
     
     conn.commit()
     conn.close()
@@ -125,14 +143,12 @@ from aiogram.types.web_app_info import WebAppInfo
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     
-    # Кнопка для открытия Web App (URL должен быть обязательно HTTPS)
     web_app_url = f"{RENDER_URL}/webapp" 
     builder.add(types.KeyboardButton(
         text="🌐 Открыть каталог грузов", 
         web_app=WebAppInfo(url=web_app_url)
     ))
     
-    # Остальные стандартные кнопки
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
     builder.add(types.KeyboardButton(text="📦 Мои подтвержденные грузы"))
     
@@ -1608,17 +1624,11 @@ async def handle_channel_post(message: types.Message):
 
 # ==================== WEB APP БЭКЕНД ====================
 
-import os
-
-# Получаем ID администратора из переменных окружения (обязательно укажите его в настройках Render)
-ADMIN_ID = os.getenv("ADMIN_ID")
-
 async def get_loads_api(request):
     """API для получения списка активных грузов (для Web App)"""
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    # Безопасно забираем данные, включая комментарий администратора, тип и вес
     try:
         cursor.execute("""
             SELECT load_id, route, date, cars_count, price, text, 
@@ -1631,7 +1641,6 @@ async def get_loads_api(request):
         """)
         rows = cursor.fetchall()
     except Exception:
-        # Резервный запрос на случай, если структура таблиц старая
         cursor.execute("""
             SELECT load_id, route, date, cars_count, price, text, 'ТНП', '20т', '' 
             FROM loads 
@@ -1653,7 +1662,7 @@ async def get_loads_api(request):
             "car_type": r[5],
             "cargo_type": r[6],
             "weight": r[7],
-            "admin_comment": r[8] # Если здесь пусто, фронтенд не покажет блок "Без дополнительных условий"
+            "admin_comment": r[8]
         })
     return web.json_response({"loads": loads})
 
@@ -1673,30 +1682,37 @@ async def book_load_api(request):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, route FROM loads WHERE load_id = ?", (load_id,))
+    cursor.execute("SELECT status, route, date, price, cars_count, details FROM loads WHERE load_id = ?", (load_id,))
     load = cursor.fetchone()
     
     if not load or load[0] != 'ACTIVE':
         conn.close()
         return web.json_response({"error": "Груз недоступен"}, status=400)
         
-    route = load[1]
+    status, route, date_str, price_str, cars_count_str, details_text = load
     
-    # Закрываем груз, если подтвердили по текущей ставке
     if action == 'confirm':
-        cursor.execute("UPDATE loads SET status = 'CLOSED' WHERE load_id = ?", (load_id,))
+        cars_num = 1
+        match_cars = re.search(r'\d+', str(cars_count_str))
+        if match_cars:
+            cars_num = int(match_cars.group(0))
+            
+        cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+        cursor.execute("""
+            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (load_id, user_id, date_str, route_str, cars_num, price_str, details_text))
         conn.commit()
         await update_cargo_messages_for_all_users(int(load_id))
         
     conn.close()
     
-    # Отправка уведомления администратору в Telegram
     if ADMIN_ID:
         try:
             admin_chat_id = int(ADMIN_ID)
             if action == 'confirm':
                 msg = (
-                    f"🟢 <b>Перевозчик подтвердил груз!</b>\n\n"
+                    f"🟢 <b>Перевозчик подтвердил груз через Web App!</b>\n\n"
                     f"🆔 <b>ID груза:</b> #{load_id}\n"
                     f"📍 <b>Маршрут:</b> {route}\n"
                     f"👤 <b>ID пользователя:</b> {user_id}\n"
@@ -1704,7 +1720,7 @@ async def book_load_api(request):
                 )
             else:
                 msg = (
-                    f"🟡 <b>Встречная ставка от перевозчика!</b>\n\n"
+                    f"🟡 <b>Встречная ставка от перевозчика через Web App!</b>\n\n"
                     f"🆔 <b>ID груза:</b> #{load_id}\n"
                     f"📍 <b>Маршрут:</b> {route}\n"
                     f"💰 <b>Предложенная цена:</b> <b>{proposed_price}</b>\n"
@@ -1726,12 +1742,10 @@ async def serve_directions(request):
 
 # ==================== ВЕБ-СЕРВЕР RENDER И САМОПИНГ ====================
 async def handle_ping(request):
-    """Эндпоинт для ответа на входящие пинги от Render"""
     return web.Response(text="Bot is running!", status=200)
 
 async def self_ping():
-    """Фоновая задача: пингует собственный URL каждые 10 минут, чтобы бот не засыпал на Render"""
-    await asyncio.sleep(30) # Пауза перед первым пингом, чтобы сервер успел подняться
+    await asyncio.sleep(30)
     import aiohttp
     
     while True:
@@ -1742,11 +1756,9 @@ async def self_ping():
         except Exception as e:
             logging.error(f"Self-ping error: {e}")
         
-        # Интервал 10 минут (600 секунд)
         await asyncio.sleep(600)
 
 async def webserver_on_startup(app):
-    """Запуск фоновой задачи самопинга при старте aiohttp-приложения"""
     asyncio.create_task(self_ping())
 
 async def run_bot():
@@ -1758,7 +1770,6 @@ async def web_server():
     app.router.add_get("/", handle_ping)
     app.router.add_get("/ping", handle_ping)
     
-    # Маршруты для фронтенда и API Web App
     app.router.add_get("/webapp", serve_index)
     app.router.add_get("/directions", serve_directions)
     app.router.add_get("/api/loads", get_loads_api)
