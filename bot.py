@@ -95,12 +95,18 @@ def get_main_reply_markup():
     return builder.as_markup(resize_keyboard=True)
 
 def extract_price(text: str) -> str:
-    match = re.search(r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб))', text, re.IGNORECASE)
+    price_pattern = re.compile(
+        r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб|долл|доллар|долларов|\$|€|тг))', 
+        re.IGNORECASE
+    )
+    match = price_pattern.search(text)
     if match:
         return match.group(1).strip(' ,.')
+    
     match_num = re.search(r'\d{2,}\s*[\.,]\d{3}', text)
     if match_num:
         return match_num.group(0).strip(' ,.')
+        
     return ""
 
 def parse_cargo_raw(raw_text: str):
@@ -141,13 +147,19 @@ def parse_cargo_raw(raw_text: str):
         if '-' in line or '→' in line:
             clean_route = date_pattern.sub('', line)
             clean_route = cars_pattern.sub('', clean_route)
-            clean_route = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб)', '', clean_route, flags=re.IGNORECASE)
+            clean_route = re.sub(
+                r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб|долл|доллар|долларов|\$|€|тг)', 
+                '', 
+                clean_route, 
+                flags=re.IGNORECASE
+            )
             clean_route = re.sub(r'\d{2,}\s*[\.,]\d{3}', '', clean_route)
             clean_route = clean_route.strip(' ,.-')
             if clean_route:
                 route_str = clean_route.replace(' - ', ' → ').replace('-', '→')
         
-        if not re.search(r'(RUB|USD|EUR|KZT|сум|руб)', line, re.IGNORECASE) and not date_pattern.search(line) and not cars_pattern.search(line) and '-' not in line and '→' not in line:
+        is_price_line = price_str and price_str.lower() in line.lower()
+        if not is_price_line and not re.search(r'(RUB|USD|EUR|KZT|сум|руб|долл|доллар|\$|€|тг)', line, re.IGNORECASE) and not date_pattern.search(line) and not cars_pattern.search(line) and '-' not in line and '→' not in line:
             if line not in details_list:
                 details_list.append(line)
 
@@ -491,7 +503,7 @@ async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContex
 async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     cargo_id = int(callback.data.replace("bid_", ""))
     await state.update_data(cargo_id=cargo_id, action_type="bid")
-    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб`):", parse_mode="Markdown")
+    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):", parse_mode="Markdown")
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
 
@@ -629,11 +641,12 @@ async def admin_accept_bid(callback: types.CallbackQuery):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT cars_count FROM loads WHERE load_id = ?", (cargo_id,))
+    cursor.execute("SELECT cars_count, destination_country, route, price FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     
     if row:
-        current_cars = int(re.search(r'\d+', str(row[0])).group(0)) if re.search(r'\d+', str(row[0])) else 1
+        current_cars_str, direction, route, price = row
+        current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
         if current_cars > accepted_qty:
             left_cars = current_cars - accepted_qty
             cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), cargo_id))
@@ -646,10 +659,18 @@ async def admin_accept_bid(callback: types.CallbackQuery):
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
             
+    # Получаем актуальную ставку (если в тексте или прикрепленную, но в принятии бэка мы её не сохраняли отдельно, давайте возьмем из базы маршрут/направление/цену)
+    # Если ставка была кастомная, можно также передать её в callback_data, но для простоты укажем данные из груза или «по согласованию»
     try:
         await bot.send_message(
             chat_id=carrier_id, 
-            text="✅ Администратор подтвердил вашу ставку! Груз закреплен за вами.", 
+            text=(
+                f"✅ **Администратор подтвердил вашу ставку! Груз закреплен за вами.**\n\n"
+                f"🌍 Направление: *{row[1]}*\n"
+                f"📍 Маршрут: *{row[2]}*\n"
+                f"💰 Ставка: *{row[3]}*\n"
+                f"🚛 Количество авто: *{accepted_qty}*"
+            ), 
             parse_mode="Markdown"
         )
     except Exception:
@@ -661,12 +682,28 @@ async def admin_accept_bid(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("adm_decline_"))
 async def admin_decline_bid(callback: types.CallbackQuery):
     parts = callback.data.split("_")
+    cargo_id = int(parts[2])
     carrier_id = int(parts[3])
     
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT destination_country, route, price FROM loads WHERE load_id = ?", (cargo_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    direction = row[0] if row else "Не указано"
+    route = row[1] if row else "Не указан"
+    price = row[2] if row else "По запросу"
+
     try:
         await bot.send_message(
             chat_id=carrier_id, 
-            text="❌ К сожалению, ваша ставка по грузу была отклонена администратором.", 
+            text=(
+                f"❌ **К сожалению, ваша ставка по грузу была отклонена администратором.**\n\n"
+                f"🌍 Направление: *{direction}*\n"
+                f"📍 Маршрут: *{route}*\n"
+                f"💰 Запрошенная цена: *{price}*"
+            ), 
             parse_mode="Markdown"
         )
     except Exception:
@@ -744,90 +781,87 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Не удалось отправить уведомление об изменении в админ-канал: {e}")
 
-@dp.message(F.chat.id == ADMIN_CHANNEL_ID, Command("грузы"))
-async def handle_admin_cargo_list(message: types.Message):
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT load_id, text, status FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
-    active_loads = cursor.fetchall()
-    conn.close()
-    
-    if not active_loads:
-        await message.answer("📦 В системе нет активных грузов.")
-        return
-        
-    await message.answer("📋 **Активные грузы в базе (управление):**", parse_mode="Markdown")
-    for load_id, load_text, status in active_loads:
-        admin_kb = InlineKeyboardBuilder()
-        admin_kb.row(
-            types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{load_id}"),
-            types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{load_id}")
-        )
-        try:
-            await bot.send_message(
-                chat_id=ADMIN_CHANNEL_ID,
-                text=f"ID: #{load_id}\n\n{load_text}",
-                reply_markup=admin_kb.as_markup(),
-                parse_mode="Markdown"
-            )
-            await asyncio.sleep(0.05)
-        except Exception as e:
-            logging.error(f"Не удалось отправить карточку админу: {e}")
-
 @dp.message(F.chat.id == ADMIN_CHANNEL_ID)
-async def handle_admin_chat_message(message: types.Message):
-    # Обрабатываем только те сообщения, которые начинаются с восклицательного знака !
-    text = message.text or message.caption
-    if not text or not text.startswith("!"):
-        return  # Пропускаем обычные сообщения/обсуждения в админ-чате
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
+async def handle_admin_messages_and_posts(event: types.Message):
+    text = event.text or event.caption
+    if not text:
+        return
         
-    # Убираем восклицательный знак и пробел/перенос строки сразу после него
-    clean_text = text[1:].lstrip()
-    if not clean_text:
+    cleaned_text = text.strip()
+
+    if cleaned_text.lower() in ("/грузы", "грузы", "!грузы"):
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT load_id, text, status FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
+        active_loads = cursor.fetchall()
+        conn.close()
+        
+        if not active_loads:
+            await event.answer("📦 В системе нет активных грузов.")
+            return
+            
+        await event.answer("📋 **Активные грузы в базе (управление):**", parse_mode="Markdown")
+        for load_id, load_text, status in active_loads:
+            admin_kb = InlineKeyboardBuilder()
+            admin_kb.row(
+                types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_start_edit_{load_id}"),
+                types.InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_start_del_{load_id}")
+            )
+            try:
+                await bot.send_message(
+                    chat_id=ADMIN_CHANNEL_ID,
+                    text=f"ID: #{load_id}\n\n{load_text}",
+                    reply_markup=admin_kb.as_markup(),
+                    parse_mode="Markdown"
+                )
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logging.error(f"Не удалось отправить карточку админу: {e}")
         return
 
-    # Определяем направление (по умолчанию отправляем в Казахстан или ищем совпадения по тексту)
-    # Здесь логика распределения осталась прежней: по аналогии с каналами направлений
-    # Но если вы шлете из админ-чата, можно привязать к конкретному направлению 
-    # или определить направление из текста. Давайте сделаем автоопределение по ключевым словам направлений:
-    
-    detected_direction = "Казахстан 🇰🇿" # По умолчанию
-    for dir_name in CHANNELS.keys():
-        short_name = dir_name.split()[0].lower() # казахстан, узбекистан и т.д.
-        if short_name in clean_text.lower():
-            detected_direction = dir_name
-            break
+    if cleaned_text.startswith("!"):
+        cargo_payload = cleaned_text[1:].lstrip()
+        if not cargo_payload:
+            return
 
-    splitted_texts = parse_multiple_cargos(clean_text)
-    
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    
-    created_cargo_ids = []
-    
-    for single_text in splitted_texts:
-        date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(single_text)
+        detected_direction = "Казахстан 🇰🇿"
+        for dir_name in CHANNELS.keys():
+            short_name = dir_name.split()[0].lower()
+            if short_name in cargo_payload.lower():
+                detected_direction = dir_name
+                break
+
+        splitted_texts = parse_multiple_cargos(cargo_payload)
         
-        cursor.execute("""
-            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-        """, (detected_direction, date_str, route_str, cars_str, price_str, single_text, details_text))
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
         
-        created_cargo_ids.append(cursor.lastrowid)
+        created_cargo_ids = []
         
-    conn.commit()
-    
-    cursor.execute("SELECT user_id, subscriptions FROM users")
-    all_users = cursor.fetchall()
-    conn.close()
-    
-    for cargo_id in created_cargo_ids:
-        for u_id, subs_str in all_users:
-            if subs_str and detected_direction in subs_str.split(","):
-                await send_cargo_to_user(u_id, cargo_id)
-                await asyncio.sleep(0.05)
-                
-    await message.answer(f"✅ Груз успешно добавлен и разослан подписчикам направления: {detected_direction}")
+        for single_text in splitted_texts:
+            date_str, route_str, price_str, cars_str, details_text = parse_cargo_raw(single_text)
+            
+            cursor.execute("""
+                INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, status) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+            """, (detected_direction, date_str, route_str, cars_str, price_str, single_text, details_text))
+            
+            created_cargo_ids.append(cursor.lastrowid)
+            
+        conn.commit()
+        
+        cursor.execute("SELECT user_id, subscriptions FROM users")
+        all_users = cursor.fetchall()
+        conn.close()
+        
+        for cargo_id in created_cargo_ids:
+            for u_id, subs_str in all_users:
+                if subs_str and detected_direction in subs_str.split(","):
+                    await send_cargo_to_user(u_id, cargo_id)
+                    await asyncio.sleep(0.05)
+                    
+        await event.answer(f"✅ Груз успешно добавлен и разослан подписчикам направления: {detected_direction}")
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
 async def handle_channel_post(message: types.Message):
