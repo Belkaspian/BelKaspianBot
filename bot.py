@@ -120,14 +120,25 @@ class AdminEditStates(StatesGroup):
 
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+from aiogram.types.web_app_info import WebAppInfo
+
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
+    
+    # Кнопка для открытия Web App (URL должен быть обязательно HTTPS)
+    web_app_url = f"{RENDER_URL}/webapp" 
+    builder.add(types.KeyboardButton(
+        text="🌐 Открыть каталог грузов", 
+        web_app=WebAppInfo(url=web_app_url)
+    ))
+    
+    # Остальные стандартные кнопки
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
-    builder.add(types.KeyboardButton(text="📋 Посмотреть актуальные грузы"))
     builder.add(types.KeyboardButton(text="📦 Мои подтвержденные грузы"))
+    
     builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
-
+    
 def extract_price(text: str) -> str:
     price_pattern = re.compile(
         r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб|долл|доллар|долларов|\$|€|тг))', 
