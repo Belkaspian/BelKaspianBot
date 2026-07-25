@@ -1632,28 +1632,50 @@ async def get_loads_api(request):
             "car_type": r[5] # Передаем сырой текст или details
         })
     return web.json_response({"loads": loads})
-
 async def book_load_api(request):
-    """API для бронирования груза через Web App"""
+    """API для бронирования груза или предложения своей цены через Web App"""
     load_id = request.match_info.get('id')
-    user_id = request.query.get('user_id')
+    
+    # Читаем JSON, который прислал фронтенд
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Неверный формат данных"}, status=400)
+
+    user_id = data.get('user_id')
+    action = data.get('action') # 'confirm' или 'offer'
+    proposed_price = data.get('proposed_price', '')
+    carrier_comment = data.get('comment', '')
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM loads WHERE load_id = ?", (load_id,))
+    cursor.execute("SELECT status, route FROM loads WHERE load_id = ?", (load_id,))
     load = cursor.fetchone()
     
     if not load or load[0] != 'ACTIVE':
         conn.close()
         return web.json_response({"error": "Груз недоступен"}, status=400)
         
-    # Бронируем груз (закрываем его)
-    cursor.execute("UPDATE loads SET status = 'CLOSED' WHERE load_id = ?", (load_id,))
-    conn.commit()
-    conn.close()
+    route = load[1]
     
-    # Обновляем сообщения у всех пользователей, чтобы скрыть кнопку
-    await update_cargo_messages_for_all_users(int(load_id))
+    # Если груз забрали по исходной ставке - закрываем его
+    if action == 'confirm':
+        cursor.execute("UPDATE loads SET status = 'CLOSED' WHERE load_id = ?", (load_id,))
+        conn.commit()
+        # Скрываем груз из общего канала/меню
+        await update_cargo_messages_for_all_users(int(load_id))
+        
+        # TODO: Здесь можно добавить отправку уведомления админу:
+        # await bot.send_message(ADMIN_ID, f"Перевозчик {user_id} подтвердил груз #{load_id} ({route})\nКомментарий: {carrier_comment}")
+        
+    elif action == 'offer':
+        # Если предложили свою цену, груз НЕ закрываем для остальных, 
+        # а просто уведомляем админа о встречном предложении.
+        pass 
+        # TODO: Отправка уведомления логисту со встречной ставкой
+        # await bot.send_message(ADMIN_ID, f"Перевозчик {user_id} предлагает ставку {proposed_price} за груз #{load_id} ({route})\nКомментарий: {carrier_comment}")
+
+    conn.close()
     
     return web.json_response({"status": "success"})
 
