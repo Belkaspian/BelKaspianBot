@@ -34,7 +34,6 @@
             color: var(--text);
         }
 
-        /* Таблица */
         .table-container {
             background: var(--card);
             border-radius: 8px;
@@ -44,7 +43,7 @@
 
         .t-head {
             display: grid;
-            grid-template-columns: 50px 1fr 70px 30px;
+            grid-template-columns: 55px 1fr 75px 30px;
             background: rgba(0,0,0,0.04);
             padding: 10px 8px;
             font-size: 12px;
@@ -55,7 +54,7 @@
 
         .t-row {
             display: grid;
-            grid-template-columns: 50px 1fr 70px 30px;
+            grid-template-columns: 55px 1fr 75px 30px;
             padding: 12px 8px;
             font-size: 13px;
             border-bottom: 1px solid var(--border);
@@ -72,7 +71,6 @@
         .col-price { font-weight: bold; color: var(--btn-green); text-align: right; }
         .col-btn { text-align: right; color: var(--hint); font-size: 10px; }
 
-        /* Раскрывающийся блок */
         .t-details {
             display: none;
             padding: 15px;
@@ -87,21 +85,21 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
         }
 
         .info-item span { color: var(--hint); font-size: 11px; display: block; margin-bottom: 2px; }
         
         .admin-comment {
             background: rgba(255, 204, 0, 0.15);
-            padding: 8px;
+            padding: 8px 10px;
             border-radius: 6px;
-            margin-bottom: 20px;
+            margin-bottom: 12px;
             border-left: 3px solid #ffcc00;
+            font-size: 12px;
         }
 
-        /* Элементы взаимодействия */
-        textarea, input[type="text"] {
+        textarea {
             width: 100%;
             box-sizing: border-box;
             background: var(--card);
@@ -110,21 +108,20 @@
             padding: 10px;
             border-radius: 6px;
             font-size: 13px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             font-family: inherit;
+            resize: none;
+            height: 55px;
         }
-
-        textarea { resize: none; height: 60px; }
 
         .buttons {
             display: flex;
             gap: 10px;
-            margin-top: 15px;
         }
 
         .buttons button {
             flex: 1;
-            padding: 12px;
+            padding: 11px;
             border: none;
             border-radius: 6px;
             font-weight: bold;
@@ -155,10 +152,23 @@
 
     <script>
         const tg = window.Telegram.WebApp;
-        tg.expand();
-        tg.setHeaderColor('secondary_bg_color');
+        try { tg.expand(); tg.setHeaderColor('secondary_bg_color'); } catch(e) {}
 
         const tbody = document.getElementById('loads-body');
+
+        // Универсальные функции для уведомлений (работают и в ТГ, и в браузере ПК)
+        function notify(text) {
+            if (tg && tg.showAlert) tg.showAlert(text);
+            else alert(text);
+        }
+
+        function askConfirm(text, callback) {
+            if (tg && tg.showConfirm) {
+                tg.showConfirm(text, callback);
+            } else {
+                callback(confirm(text));
+            }
+        }
 
         async function loadData() {
             try {
@@ -180,49 +190,50 @@
                     <div class="t-details" id="details-${l.id}">
                         <div class="info-grid">
                             <div class="info-item"><span>Тип груза:</span>${l.cargo_type || 'ТНП'}</div>
-                            <div class="info-item"><span>Вес / Объем:</span>${l.weight || '20т / 82м3'}</div>
+                            <div class="info-item"><span>Вес / Объем:</span>${l.weight || '20т'}</div>
                         </div>
                         
-                        <div class="admin-comment">
-                            <b>Комментарий логиста:</b> ${l.admin_comment || 'Без дополнительных условий'}
-                        </div>
+                        ${l.admin_comment ? `<div class="admin-comment"><b>Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
                         
-                        <input type="text" id="custom-price-${l.id}" placeholder="Ваша ставка (если предлагаете свою)">
-                        <textarea id="comment-${l.id}" placeholder="Комментарий для логиста (скрыт от других)"></textarea>
+                        <textarea id="comment-${l.id}" placeholder="Ваш личный комментарий для себя/логиста (никто другой не видит)..."></textarea>
                         
                         <div class="buttons">
-                            <button class="btn-confirm" onclick="sendAction(${l.id}, 'confirm')">Подтвердить</button>
-                            <button class="btn-offer" onclick="sendAction(${l.id}, 'offer')">Своя цена</button>
+                            <button class="btn-confirm" onclick="sendAction(${l.id}, 'confirm', event)">Подтвердить</button>
+                            <button class="btn-offer" onclick="sendAction(${l.id}, 'offer', event)">Своя цена</button>
                         </div>
                     </div>
                 `).join('');
                 
             } catch(e) {
-                tbody.innerHTML = `<div class="loader" style="color:red;">Ошибка загрузки</div>`;
+                tbody.innerHTML = `<div class="loader" style="color:red;">Ошибка загрузки данных</div>`;
             }
         }
 
         function toggleRow(id) {
-            if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             const detailsBlock = document.getElementById(`details-${id}`);
             detailsBlock.classList.toggle('active');
         }
 
-        async function sendAction(id, actionType) {
+        async function sendAction(id, actionType, event) {
+            event.stopPropagation(); // Чтобы строка не закрывалась при клике на кнопки
             let userId = tg.initDataUnsafe?.user?.id || 11111111;
             let carrierComment = document.getElementById(`comment-${id}`).value;
-            let customPrice = document.getElementById(`custom-price-${id}`).value;
+            let customPrice = '';
 
-            if (actionType === 'offer' && !customPrice.trim()) {
-                tg.showAlert('Пожалуйста, укажите вашу ставку в соответствующем поле.');
-                return;
+            // Если нажали "Своя цена" — вызываем всплывающее окно (prompt)
+            if (actionType === 'offer') {
+                customPrice = prompt('Введите вашу желаемую ставку (например, 2500 USD или 4500 BYN):');
+                if (!customPrice || !customPrice.trim()) {
+                    return; // Отмена, если ничего не ввели
+                }
             }
 
             let confirmMsg = actionType === 'confirm' 
                 ? 'Подтвердить готовность взять этот груз по указанной ставке?' 
-                : `Предложить ставку ${customPrice} за этот груз?`;
+                : `Предложить ставку "${customPrice}" за этот груз?`;
 
-            tg.showConfirm(confirmMsg, async (confirmed) => {
+            askConfirm(confirmMsg, async (confirmed) => {
                 if (confirmed) {
                     try {
                         let res = await fetch(`/api/book/${id}`, { 
@@ -237,14 +248,14 @@
                         });
                         
                         if (res.ok) {
-                            tg.showAlert('✅ Ваша заявка успешно отправлена логисту!');
-                            loadData(); // Обновляем таблицу
+                            notify('✅ Ваша заявка успешно отправлена логисту!');
+                            loadData(); 
                         } else {
-                            tg.showAlert('❌ Ошибка. Возможно, груз уже закрыт.');
+                            notify('❌ Ошибка. Возможно, груз уже закрыт.');
                             loadData();
                         }
                     } catch(e) {
-                        tg.showAlert('⚠️ Ошибка соединения с сервером.');
+                        notify('⚠️ Ошибка соединения с сервером.');
                     }
                 }
             });
