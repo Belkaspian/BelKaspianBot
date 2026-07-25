@@ -408,7 +408,6 @@ async def show_main_menu(message: types.Message):
     )
     
     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
-    # Убедимся, что всегда видна нижняя клавиатура
     await message.answer("Выберите нужное действие:", reply_markup=get_main_reply_markup())
 
 @dp.callback_query(F.data.startswith("toggle_dir_"))
@@ -570,119 +569,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         if total_cars > requested_cars:
             left_cars = total_cars - requested_cars
             new_cars_str = str(left_cars)
-            
-            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (new_cars_str, cargo_id))
-            conn.commit()
-            conn.close()
-            
-            await update_cargo_messages_for_all_users(cargo_id)
-        else:
-            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', taken_by = ? WHERE load_id = ?", (user_id, cargo_id))
-            conn.commit()
-            conn.close()
-            
-            await update_cargo_messages_for_all_users(cargo_id)
-            
-        admin_notification = (
-            f"🎯 **Заявка на груз!**\n\n"
-            f"📦 Описание:\n{raw_cargo_text}\n\n"
-            f"🚛 Забирает авто: **{requested_cars}**\n"
-            f"{carrier_info}"
-        )
-        try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
-        except Exception:
-            pass
-            
-        await state.clear()
-        await message.answer(f"{warning_text}✅ Заявка принята! Менеджер свяжется с вами.", reply_markup=get_main_reply_markup())
-        
-    elif action_type == "bid":
-        rate = data.get("custom_rate")
-        conn.close()
-        
-        bid_notification = (
-            f"💰 **Новая ставка от перевозчика!**\n\n"
-            f"📦 Груз:\n{raw_cargo_text}\n\n"
-            f"💵 Ставка: **{rate}** | 🚛 Авто: **{requested_cars}**\n"
-            f"{carrier_info}\n\n"
-            f"*(Груз остается активным для других участников)*"
-        )
-        
-        # Передаем в callback_data ставку перевозчика (rate), закодировав её или передавая явно
-        admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_accept_bid_{cargo_id}_{user_id}_{requested_cars}"),
-            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"adm_decline_bid_{cargo_id}_{user_id}")
-        )
-
-        try:
-            # Чтобы админ знал, какая ставка принимается, сохраним её временно или передадим текстом. 
-            # Поскольку в callback_data трудно запихать длинную строку из-за ограничения в 64 байта, 
-            # сделаем проще: будем передавать ставку через временный словарь или сохранять в базу, 
-            # либо передадим цену из сообщения. Но проще всего использовать callback с кастомной ценой.
-            # Давайте заменим формат callback для бѝда: adm_accept_custom_{cargo_id}_{user_id}_{requested_cars}
-            # А саму ставку сохраним в памяти или передадим хэш. Или передадим напрямую, если она короткая.
-            pass
-        except Exception:
-            pass
-            
-        # Реализуем надежную передачу ставки через callback_data (если влезает) или через базу. 
-        # Чтобы не усложнять структуру БД, запишем ставку в callback, если она короткая, либо передадим в тексте админского сообщения.
-        # Перепишем блок отправки ставки админу с сохранением ставки в callback через разделитель или сокращение:
-        pass
-
-# Перепишем корректно обработчик ставки с передачей цены:
-@dp.message(DealStates.waiting_for_quantity)
-async def process_deal_quantity(message: types.Message, state: FSMContext):
-    qty_input = message.text.strip()
-    data = await state.get_data()
-    cargo_id = data.get("cargo_id")
-    action_type = data.get("action_type", "confirm")
-    
-    user_id = message.from_user.id
-    user_obj = message.from_user
-    
-    if user_obj.username:
-        user_link = f"@{user_obj.username}"
-    else:
-        user_link = f"[{user_obj.full_name}](tg://user?id={user_id})"
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
-    user_info = cursor.fetchone()
-    
-    cursor.execute("SELECT cars_count, text, price FROM loads WHERE load_id = ?", (cargo_id,))
-    load_row = cursor.fetchone()
-    
-    if not load_row:
-        conn.close()
-        await message.answer("Груз не найден или был удален.", reply_markup=get_main_reply_markup())
-        await state.clear()
-        return
-        
-    current_cars_str, raw_cargo_text, price_str = load_row
-    
-    current_cars_match = re.search(r'\d+', str(current_cars_str))
-    total_cars = int(current_cars_match.group(0)) if current_cars_match else 1
-    
-    requested_cars_match = re.search(r'\d+', qty_input)
-    requested_cars = int(requested_cars_match.group(0)) if requested_cars_match else 1
-    
-    warning_text = ""
-    if requested_cars > total_cars:
-        requested_cars = total_cars
-        warning_text = f"⚠️ Столько грузов нет, доступно только {total_cars} авто. Берем в работу {total_cars} авто.\n\n"
-
-    company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
-    carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
-    
-    if action_type == "confirm":
-        if total_cars > requested_cars:
-            left_cars = total_cars - requested_cars
-            new_cars_str = str(left_cars)
             cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (new_cars_str, cargo_id))
             conn.commit()
             conn.close()
@@ -719,7 +605,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             f"*(Груз остается активным для других участников)*"
         )
         
-        # Передаем ставку через callback (заменяем пробелы на подчеркивания, чтобы поместилось в лимит)
         safe_rate = rate.replace(" ", "_")
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
@@ -740,37 +625,13 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer(f"{warning_text}✅ Ваша ставка и количество авто ({requested_cars}) отправлены администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
-@dp.callback_query(F.data.startswith("confirm_"))
-async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
-    cargo_id = int(callback.data.replace("confirm_", ""))
-    
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT cars_count FROM loads WHERE load_id = ?", (cargo_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    await state.update_data(cargo_id=cargo_id, action_type="confirm")
-    await callback.message.answer(f"Напишите, сколько авто вы забираете? (доступно машин: {row[0] if row else '?'})")
-    await state.set_state(DealStates.waiting_for_quantity)
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("bid_"))
-async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
-    cargo_id = int(callback.data.replace("bid_", ""))
-    await state.update_data(cargo_id=cargo_id, action_type="bid")
-    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):", parse_mode="Markdown")
-    await state.set_state(DealStates.waiting_for_custom_rate)
-    await callback.answer()
-
 @dp.callback_query(F.data.startswith("accept_bid_"))
 async def admin_accept_bid(callback: types.CallbackQuery):
     parts = callback.data.split("_")
-    # формат: accept_bid_{cargo_id}_{carrier_id}_{requested_qty}_{safe_rate}
     cargo_id = int(parts[2])
     carrier_id = int(parts[3])
     accepted_qty = int(parts[4])
-    agreed_rate = "_".join(parts[5:]).replace("_", " ") # восстанавливаем пробелы в ставке
+    agreed_rate = "_".join(parts[5:]).replace("_", " ")
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -792,7 +653,6 @@ async def admin_accept_bid(callback: types.CallbackQuery):
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
             
-    # Если это было подтверждение стандартной кнопки (без кастомной ставки, если вдруг старый формат), подставим базовую цену
     final_price = agreed_rate if agreed_rate else (row[4] if row else "По запросу")
     load_date = row[1] if row else "Не указана"
     load_route = row[2] if row else "Не указан"
@@ -901,7 +761,6 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Груз успешно обновлен в базе! Рассылаю изменения...", reply_markup=get_main_reply_markup())
     
-    # Исправлено: теперь обновление реально вызывается и меняет сообщения у всех перевозчиков
     await update_cargo_messages_for_all_users(cargo_id)
 
     try:
@@ -961,6 +820,7 @@ async def handle_admin_messages_and_posts(event: types.Message):
                 logging.error(f"Не удалось отправить карточку админу: {e}")
         return
 
+    # Обрабатываем как груз только если сообщение начинается с символа "!"
     if cleaned_text.startswith("!"):
         cargo_payload = cleaned_text[1:].lstrip()
         if not cargo_payload:
@@ -992,7 +852,6 @@ async def handle_admin_messages_and_posts(event: types.Message):
             
         conn.commit()
         
-        # Исправлено: теперь берем абсолютно всех пользователей, а не только по подписке
         cursor.execute("SELECT user_id FROM users")
         all_users = cursor.fetchall()
         conn.close()
@@ -1003,6 +862,21 @@ async def handle_admin_messages_and_posts(event: types.Message):
                 await asyncio.sleep(0.05)
                     
         await event.answer(f"✅ Груз успешно добавлен и разослан ВСЕМ пользователям.")
+    else:
+        # Если это обычное сообщение без префикса "!" — делаем простую рассылку текста всем пользователям (без создания груза)
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        all_users = cursor.fetchall()
+        conn.close()
+        
+        for (u_id,) in all_users:
+            try:
+                await bot.send_message(chat_id=u_id, text=cleaned_text)
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        await event.answer("✅ Обычное сообщение отправлено в виде рассылки всем пользователям.")
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
 async def handle_channel_post(message: types.Message):
@@ -1032,7 +906,6 @@ async def handle_channel_post(message: types.Message):
         
     conn.commit()
     
-    # Исправлено: посты из каналов-партнеров/направлений теперь тоже летят абсолютно всем пользователям
     cursor.execute("SELECT user_id FROM users")
     all_users = cursor.fetchall()
     conn.close()
