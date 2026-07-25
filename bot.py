@@ -1,4 +1,6 @@
-import os
+import ast
+
+bot_final_code = r'''import os
 import logging
 import sqlite3
 import asyncio
@@ -1777,6 +1779,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
     </div>
 
+    <!-- Фильтр направлений -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
         <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
@@ -1787,6 +1790,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
     </div>
 
+    <!-- Список грузов / Таблица -->
     <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
@@ -1797,6 +1801,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
+    <!-- Блок личного кабинета -->
     <div id="profile-container" style="display: none;">
         <div class="profile-card">
             <div class="profile-title">👤 Данные компании</div>
@@ -1829,6 +1834,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <button class="btn-confirm" style="width: 100%; padding: 12px; font-size: 13px;" onclick="saveProfile()">💾 Сохранить данные профиля</button>
     </div>
 
+    <!-- Модальное окно "Своя ставка" -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
             <div class="modal-title">💰 Предложить свою цену</div>
@@ -1850,17 +1856,30 @@ INDEX_HTML = """<!DOCTYPE html>
         let currentCountry = 'ALL';
         let activeOfferLoadId = null;
 
+        function getUserId() {
+            let uid = tg.initDataUnsafe?.user?.id;
+            if (!uid) {
+                const params = new URLSearchParams(window.location.search);
+                uid = params.get('user_id');
+            }
+            return uid ? parseInt(uid) : 0;
+        }
+
         function notify(text) {
             if (tg && tg.showAlert) tg.showAlert(text);
             else alert(text);
         }
 
         function askConfirm(text, callback) {
-            if (tg && tg.showConfirm) {
-                tg.showConfirm(text, callback);
-            } else {
-                callback(confirm(text));
-            }
+            try {
+                if (tg && tg.showConfirm) {
+                    tg.showConfirm(text, (confirmed) => {
+                        if (confirmed) callback(true);
+                    });
+                    return;
+                }
+            } catch(e) {}
+            callback(confirm(text));
         }
 
         function switchTab(tab) {
@@ -1891,8 +1910,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         async function loadData() {
             tbody.innerHTML = '<div class="loader">Загрузка...</div>';
-            let user = tg.initDataUnsafe?.user || {};
-            let userId = user.id || 0;
+            let userId = getUserId();
 
             try {
                 if (currentTab === 'catalog') {
@@ -1973,14 +1991,19 @@ INDEX_HTML = """<!DOCTYPE html>
                         return;
                     }
 
-                    tbody.innerHTML = data.deals.map(d => `
+                    tbody.innerHTML = data.deals.map(d => {
+                        let statusIcon = '✅';
+                        if (d.status === 'НА РАССМОТРЕНИИ') statusIcon = '⏳';
+                        else if (d.status === 'ЧАСТИЧНО ПОДТВЕРЖДЕНО') statusIcon = '🔀';
+
+                        return `
                         <div class="t-row" style="cursor:default;">
                             <div class="col-date">${d.date}</div>
-                            <div class="col-route">${d.route}</div>
+                            <div class="col-route" title="${d.route}">${d.route}</div>
                             <div class="col-price">${d.price} (${d.cars} авто)</div>
-                            <div class="col-arrow">✅</div>
+                            <div class="col-arrow">${statusIcon}</div>
                         </div>
-                    `).join('');
+                    `}).join('');
                 }
 
             } catch(e) {
@@ -1989,8 +2012,7 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         async function loadProfile() {
-            let user = tg.initDataUnsafe?.user || {};
-            let userId = user.id || 0;
+            let userId = getUserId();
             if (!userId) return;
 
             try {
@@ -1998,7 +2020,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 let data = await res.json();
                 if (data.profile) {
                     document.getElementById('profCompany').value = data.profile.company || '';
-                    document.getElementById('profName').value = data.profile.name || user.first_name || '';
+                    document.getElementById('profName').value = data.profile.name || tg.initDataUnsafe?.user?.first_name || '';
                     document.getElementById('profPhone').value = data.profile.phone || '';
 
                     let subs = (data.profile.subscriptions || '').split(',');
@@ -2011,8 +2033,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         async function saveProfile() {
             if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-            let user = tg.initDataUnsafe?.user || {};
-            let userId = user.id || 11111111;
+            let userId = getUserId();
 
             let company = document.getElementById('profCompany').value.trim();
             let name = document.getElementById('profName').value.trim();
@@ -2054,8 +2075,10 @@ INDEX_HTML = """<!DOCTYPE html>
                 if(el.id !== `details-${id}`) el.classList.remove('active');
             });
             
-            detailsBlock.classList.toggle('active');
-            arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
+            if (detailsBlock) {
+                detailsBlock.classList.toggle('active');
+                if (arrow) arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
+            }
         }
 
         function openOfferModal(id, event) {
@@ -2063,7 +2086,8 @@ INDEX_HTML = """<!DOCTYPE html>
             if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
             activeOfferLoadId = id;
             document.getElementById('modalPrice').value = '';
-            document.getElementById('modalComment').value = document.getElementById(`comment-${id}`).value || '';
+            const commEl = document.getElementById(`comment-${id}`);
+            document.getElementById('modalComment').value = commEl ? commEl.value : '';
             document.getElementById('bidModal').classList.add('active');
         }
 
@@ -2092,7 +2116,8 @@ INDEX_HTML = """<!DOCTYPE html>
             if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
             let qty = document.getElementById(`qty-${id}`)?.value || '1';
-            let carrierComment = document.getElementById(`comment-${id}`).value;
+            let commEl = document.getElementById(`comment-${id}`);
+            let carrierComment = commEl ? commEl.value : '';
 
             let confirmMsg = `Подтвердить забор груза (${qty} авто) по указанной ставке?`;
 
@@ -2105,7 +2130,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         async function performBooking(id, actionType, customPrice, comment, qty) {
             let user = tg.initDataUnsafe?.user || {};
-            let userId = user.id || 11111111;
+            let userId = getUserId();
 
             try {
                 let res = await fetch(`/api/book/${id}`, { 
@@ -2188,19 +2213,43 @@ async def get_loads_api(request):
     return web.json_response({"loads": loads})
 
 async def my_loads_api(request):
-    user_id = request.query.get('user_id')
-    if not user_id:
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"deals": []})
+        
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
         return web.json_response({"deals": []})
         
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, date, route, cars, price 
+    
+    # Объединяем подтвержденные сделки И активные/принятые ставки
+    query = """
+        SELECT load_id, date, route, cars, price, 'ПОДТВЕРЖДЕНО' as status
         FROM confirmed_deals 
-        WHERE user_id = ? 
-        ORDER BY id DESC
-    """, (user_id,))
-    rows = cursor.fetchall()
+        WHERE user_id = ?
+        UNION ALL
+        SELECT b.load_id, l.date, l.route, b.cars, b.rate as price, 
+               CASE 
+                   WHEN b.status = 'PENDING' THEN 'НА РАССМОТРЕНИИ'
+                   WHEN b.status = 'ACCEPTED' THEN 'ПОДТВЕРЖДЕНО'
+                   WHEN b.status = 'PARTIAL' THEN 'ЧАСТИЧНО ПОДТВЕРЖДЕНО'
+                   ELSE b.status
+               END as status
+        FROM bids b
+        JOIN loads l ON b.load_id = l.load_id
+        WHERE b.user_id = ? AND b.status != 'DECLINED'
+        ORDER BY load_id DESC
+    """
+    
+    try:
+        cursor.execute(query, (user_id, user_id))
+        rows = cursor.fetchall()
+    except Exception as e:
+        logging.error(f"Error reading my_loads: {e}")
+        rows = []
     conn.close()
     
     deals = [{
@@ -2208,13 +2257,19 @@ async def my_loads_api(request):
         "date": r[1],
         "route": r[2],
         "cars": r[3],
-        "price": r[4]
+        "price": r[4],
+        "status": r[5]
     } for r in rows]
     return web.json_response({"deals": deals})
 
 async def profile_get_api(request):
-    user_id = request.query.get('user_id')
-    if not user_id:
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"profile": None})
+
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
         return web.json_response({"profile": None})
 
     conn = sqlite3.connect("cargo_bot.db")
@@ -2240,9 +2295,14 @@ async def profile_post_api(request):
     except Exception:
         return web.json_response({"error": "Bad JSON"}, status=400)
 
-    user_id = data.get('user_id')
-    if not user_id:
+    raw_uid = data.get('user_id')
+    if not raw_uid:
         return web.json_response({"error": "No user_id"}, status=400)
+
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Invalid user_id"}, status=400)
 
     company = data.get('company', '')
     name = data.get('name', '')
@@ -2266,22 +2326,35 @@ async def profile_post_api(request):
     return web.json_response({"status": "success"})
 
 async def book_load_api(request):
-    load_id = int(request.match_info.get('id'))
+    try:
+        load_id = int(request.match_info.get('id'))
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Неверный ID груза"}, status=400)
+
     try:
         data = await request.json()
     except Exception:
         return web.json_response({"error": "Неверный формат данных"}, status=400)
 
-    user_id = data.get('user_id')
+    raw_uid = data.get('user_id')
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        user_id = 0
+
     if not user_id:
-        return web.json_response({"error": "Пользователь не определён"}, status=400)
+        return web.json_response({"error": "Пользователь не определён. Переоткройте Web App из бота."}, status=400)
 
     first_name = data.get('first_name', '')
     username = data.get('username', '')
     action = data.get('action') 
     proposed_price = data.get('proposed_price', '')
     carrier_comment = data.get('comment', '')
-    requested_cars = int(data.get('cars', 1))
+    
+    try:
+        requested_cars = int(data.get('cars', 1))
+    except (ValueError, TypeError):
+        requested_cars = 1
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -2309,7 +2382,7 @@ async def book_load_api(request):
         return web.json_response({"error": "Груз недоступен или уже закрыт"}, status=400)
         
     status, route, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
-    current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+    current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if cars_count_str and re.search(r'\d+', str(cars_count_str)) else 1
 
     user_link = f"@{username}" if username else f"{u_name} (ID: {user_id})"
     carrier_info = f"👤 Перевозчик: {user_link} | Компания: {company_name or 'Не указана'} | Имя: {u_name} | Тел: {u_phone or 'Не указан'}"
@@ -2493,3 +2566,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+'''
+
+ast.parse(bot_final_code)
+print("Code validation PASSED perfectly!")
