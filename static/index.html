@@ -7,15 +7,13 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
-            --bg: var(--tg-theme-bg-color, #f4f4f5);
-            --text: var(--tg-theme-text-color, #222);
-            --hint: var(--tg-theme-hint-color, #777);
-            --card: var(--tg-theme-secondary-bg-color, #fff);
-            --border: rgba(0,0,0,0.1);
-            --btn-blue: var(--tg-theme-button-color, #2481cc);
-            --btn-text: var(--tg-theme-button-text-color, #fff);
-            --btn-green: #2ea751;
-            --btn-orange: #e67e22;
+            --bg: var(--tg-theme-bg-color, #f8f9fa);
+            --text: var(--tg-theme-text-color, #212529);
+            --hint: var(--tg-theme-hint-color, #6c757d);
+            --card: var(--tg-theme-secondary-bg-color, #ffffff);
+            --border: #e9ecef;
+            --btn-green: #28a745;
+            --btn-orange: #fd7e14;
         }
 
         body {
@@ -23,60 +21,64 @@
             background: var(--bg);
             color: var(--text);
             margin: 0;
-            padding: 10px;
+            padding: 8px;
+            font-size: 13px;
         }
 
         .header-title {
             text-align: center;
-            font-size: 16px;
-            font-weight: bold;
-            margin-bottom: 15px;
+            font-size: 15px;
+            font-weight: 700;
+            margin-bottom: 12px;
             color: var(--text);
+            letter-spacing: 0.3px;
         }
 
+        /* Таблица */
         .table-container {
             background: var(--card);
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
         }
 
         .t-head {
             display: grid;
-            grid-template-columns: 55px 1fr 75px 30px;
-            background: rgba(0,0,0,0.04);
-            padding: 10px 8px;
-            font-size: 12px;
-            font-weight: bold;
+            grid-template-columns: 50px 1fr 75px 24px;
+            background: rgba(0,0,0,0.02);
+            padding: 8px 10px;
+            font-size: 11px;
+            font-weight: 700;
             color: var(--hint);
             border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
         }
 
         .t-row {
             display: grid;
-            grid-template-columns: 55px 1fr 75px 30px;
-            padding: 12px 8px;
-            font-size: 13px;
+            grid-template-columns: 50px 1fr 75px 24px;
+            padding: 10px;
             border-bottom: 1px solid var(--border);
             align-items: center;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: background 0.15s;
         }
 
-        .t-row:active { background: rgba(0,0,0,0.05); }
+        .t-row:active { background: rgba(0,0,0,0.04); }
         .t-row:last-child { border-bottom: none; }
         
-        .col-date { font-weight: 500; }
-        .col-route { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 5px; }
-        .col-price { font-weight: bold; color: var(--btn-green); text-align: right; }
-        .col-btn { text-align: right; color: var(--hint); font-size: 10px; }
+        .col-date { font-weight: 500; color: var(--hint); font-size: 12px; }
+        .col-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+        .col-price { font-weight: 700; color: var(--btn-green); text-align: right; }
+        .col-arrow { text-align: right; color: var(--hint); font-size: 10px; }
 
+        /* Выпадающий блок деталей */
         .t-details {
             display: none;
-            padding: 15px;
+            padding: 12px 14px;
             background: var(--bg);
             border-bottom: 1px solid var(--border);
-            font-size: 13px;
         }
 
         .t-details.active { display: block; }
@@ -84,48 +86,53 @@
         .info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-
-        .info-item span { color: var(--hint); font-size: 11px; display: block; margin-bottom: 2px; }
-        
-        .admin-comment {
-            background: rgba(255, 204, 0, 0.15);
-            padding: 8px 10px;
-            border-radius: 6px;
-            margin-bottom: 12px;
-            border-left: 3px solid #ffcc00;
+            gap: 8px;
+            margin-bottom: 10px;
             font-size: 12px;
         }
 
+        .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; }
+        
+        .admin-comment {
+            background: #fff3cd;
+            color: #856404;
+            padding: 8px 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border-left: 3px solid #ffc107;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        /* Поле для личного комментария перевозчика */
         textarea {
             width: 100%;
             box-sizing: border-box;
             background: var(--card);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 10px;
+            padding: 8px 10px;
             border-radius: 6px;
-            font-size: 13px;
-            margin-bottom: 12px;
+            font-size: 12px;
+            margin-bottom: 10px;
             font-family: inherit;
             resize: none;
-            height: 55px;
+            height: 45px;
         }
 
+        /* Кнопки действий */
         .buttons {
             display: flex;
-            gap: 10px;
+            gap: 8px;
         }
 
         .buttons button {
             flex: 1;
-            padding: 11px;
+            padding: 10px;
             border: none;
             border-radius: 6px;
-            font-weight: bold;
-            font-size: 13px;
+            font-weight: 600;
+            font-size: 12px;
             color: #fff;
             cursor: pointer;
         }
@@ -133,7 +140,7 @@
         .btn-confirm { background: var(--btn-green); }
         .btn-offer { background: var(--btn-orange); }
 
-        .loader { text-align: center; padding: 30px; color: var(--hint); font-size: 14px; }
+        .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
     </style>
 </head>
 <body>
@@ -156,7 +163,6 @@
 
         const tbody = document.getElementById('loads-body');
 
-        // Универсальные функции для уведомлений (работают и в ТГ, и в браузере ПК)
         function notify(text) {
             if (tg && tg.showAlert) tg.showAlert(text);
             else alert(text);
@@ -176,62 +182,67 @@
                 let data = await res.json();
                 
                 if (!data.loads || data.loads.length === 0) {
-                    tbody.innerHTML = '<div class="loader">Нет активных рейсов</div>';
+                    tbody.innerHTML = '<div class="loader">Активных заявок нет</div>';
                     return;
                 }
                 
                 tbody.innerHTML = data.loads.map(l => `
-                    <div class="t-row" onclick="toggleRow(${l.id})">
-                        <div class="col-date">${l.date || 'Срочно'}</div>
-                        <div class="col-route">${l.route}</div>
+                    <div class="t-row" onclick="toggleRow('${l.id}')">
+                        <div class="col-date">${l.date}</div>
+                        <div class="col-route" title="${l.route}">${l.route}</div>
                         <div class="col-price">${l.price}</div>
-                        <div class="col-btn">▼</div>
+                        <div class="col-arrow" id="arrow-${l.id}">▼</div>
                     </div>
                     <div class="t-details" id="details-${l.id}">
                         <div class="info-grid">
-                            <div class="info-item"><span>Тип груза:</span>${l.cargo_type || 'ТНП'}</div>
-                            <div class="info-item"><span>Вес / Объем:</span>${l.weight || '20т'}</div>
+                            <div class="info-item"><span>Груз:</span><b>${l.cargo_type}</b></div>
+                            <div class="info-item"><span>Вес:</span><b>${l.weight}</b></div>
                         </div>
                         
-                        ${l.admin_comment ? `<div class="admin-comment"><b>Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
+                        ${l.admin_comment ? `<div class="admin-comment"><b>💡 От логиста:</b> ${l.admin_comment}</div>` : ''}
                         
-                        <textarea id="comment-${l.id}" placeholder="Ваш личный комментарий для себя/логиста (никто другой не видит)..."></textarea>
+                        <textarea id="comment-${l.id}" placeholder="Личная заметка для себя (никто другой не видит)..."></textarea>
                         
                         <div class="buttons">
-                            <button class="btn-confirm" onclick="sendAction(${l.id}, 'confirm', event)">Подтвердить</button>
-                            <button class="btn-offer" onclick="sendAction(${l.id}, 'offer', event)">Своя цена</button>
+                            <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">Подтвердить</button>
+                            <button class="btn-offer" onclick="sendAction('${l.id}', 'offer', event)">Своя цена</button>
                         </div>
                     </div>
                 `).join('');
                 
             } catch(e) {
-                tbody.innerHTML = `<div class="loader" style="color:red;">Ошибка загрузки данных</div>`;
+                tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
             }
         }
 
         function toggleRow(id) {
             if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             const detailsBlock = document.getElementById(`details-${id}`);
+            const arrow = document.getElementById(`arrow-${id}`);
+            
+            // Закрываем остальные открытые строки для чистоты интерфейса
+            document.querySelectorAll('.t-details').forEach(el => {
+                if(el.id !== `details-${id}`) el.classList.remove('active');
+            });
+            
             detailsBlock.classList.toggle('active');
+            arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
         }
 
         async function sendAction(id, actionType, event) {
-            event.stopPropagation(); // Чтобы строка не закрывалась при клике на кнопки
+            event.stopPropagation();
             let userId = tg.initDataUnsafe?.user?.id || 11111111;
             let carrierComment = document.getElementById(`comment-${id}`).value;
             let customPrice = '';
 
-            // Если нажали "Своя цена" — вызываем всплывающее окно (prompt)
             if (actionType === 'offer') {
-                customPrice = prompt('Введите вашу желаемую ставку (например, 2500 USD или 4500 BYN):');
-                if (!customPrice || !customPrice.trim()) {
-                    return; // Отмена, если ничего не ввели
-                }
+                customPrice = prompt('Введите вашу желаемую ставку (например, 2400 USD):');
+                if (!customPrice || !customPrice.trim()) return;
             }
 
             let confirmMsg = actionType === 'confirm' 
                 ? 'Подтвердить готовность взять этот груз по указанной ставке?' 
-                : `Предложить ставку "${customPrice}" за этот груз?`;
+                : `Предложить ставку "${customPrice}"?`;
 
             askConfirm(confirmMsg, async (confirmed) => {
                 if (confirmed) {
@@ -248,10 +259,10 @@
                         });
                         
                         if (res.ok) {
-                            notify('✅ Ваша заявка успешно отправлена логисту!');
+                            notify('✅ Заявка успешно отправлена логисту!');
                             loadData(); 
                         } else {
-                            notify('❌ Ошибка. Возможно, груз уже закрыт.');
+                            notify('❌ Ошибка. Возможно, груз уже занят.');
                             loadData();
                         }
                     } catch(e) {
