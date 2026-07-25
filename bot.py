@@ -111,7 +111,6 @@ def init_db():
         )
     """)
     
-    # Значения настроек по умолчанию
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('timer_hours', '24')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_comment', 'Стандартные условия оплаты')")
     
@@ -383,6 +382,29 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ ====================
+
+@dp.message(F.web_app_data)
+async def handle_webapp_data(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        import json
+        data = json.loads(message.web_app_data.data)
+        if isinstance(data, list):
+            new_subs = ",".join(data)
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET subscriptions = ? WHERE user_id = ?", (new_subs, user_id))
+            conn.commit()
+            conn.close()
+            await message.answer(
+                f"✅ **Подписки успешно обновлены!**\n\nВыбранные направления:\n{', '.join(data) if data else 'Ничего не выбрано'}",
+                parse_mode="Markdown",
+                reply_markup=get_main_reply_markup()
+            )
+    except Exception as e:
+        logging.error(f"Error webapp data: {e}")
+
+
 @dp.message(Command("start"))
 @dp.message(F.text == "🏠 Меню и направления")
 async def cmd_start_or_menu(message: types.Message, state: FSMContext):
@@ -639,7 +661,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         await state.set_state(DealStates.waiting_for_comment)
         return
 
-    # Обработка confirm
     cargo_id = data.get("cargo_id")
     user_obj = message.from_user
     user_link = f"@{user_obj.username}" if user_obj.username else f"[{user_obj.full_name}](tg://user?id={user_id})"
@@ -1217,7 +1238,7 @@ async def admin_show_confirmed_by_dir(callback: types.CallbackQuery):
                u.company, u.name, u.phone, u.user_id
         FROM confirmed_deals cd
         JOIN loads l ON cd.load_id = l.load_id
-        JOIN users u ON cd.user_id = u.user_id
+        LEFT JOIN users u ON cd.user_id = u.user_id
         WHERE l.destination_country = ?
         ORDER BY cd.id DESC LIMIT 15
     """
@@ -1401,161 +1422,560 @@ INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Каталог грузов</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Биржа грузов</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--tg-theme-bg-color, #f5f5f7); color: var(--tg-theme-text-color, #222); margin: 0; padding: 10px; }
-        h2 { text-align: center; font-size: 20px; margin-bottom: 15px; }
-        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-        .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-        .route { font-weight: bold; font-size: 16px; color: var(--tg-theme-link-color, #007aff); margin-bottom: 8px; }
-        .price { white-space: nowrap; font-weight: bold; color: #2e7d32; }
-        .meta { color: #666; font-size: 13px; margin-bottom: 10px; }
-        .btn-group { display: flex; gap: 8px; margin-top: 10px; }
-        button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
-        .btn-confirm { background: #34c759; color: white; }
-        .btn-bid { background: #007aff; color: white; }
-        .badge { background: #e5e5ea; padding: 3px 8px; border-radius: 6px; font-size: 12px; }
-        input, textarea { width: 100%; padding: 8px; margin-top: 5px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
-        .modal-content { background: #fff; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; }
+        :root {
+            --bg: var(--tg-theme-bg-color, #f8f9fa);
+            --text: var(--tg-theme-text-color, #212529);
+            --hint: var(--tg-theme-hint-color, #6c757d);
+            --card: var(--tg-theme-secondary-bg-color, #ffffff);
+            --border: rgba(0,0,0,0.08);
+            --btn-green: #28a745;
+            --btn-orange: #fd7e14;
+            --btn-blue: #007aff;
+            --active-tab: var(--tg-theme-button-color, #2481cc);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 8px;
+            font-size: 13px;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .header-title {
+            text-align: center;
+            font-size: 15px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--text);
+            letter-spacing: 0.3px;
+        }
+
+        .main-nav {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+            background: var(--card);
+            padding: 4px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .nav-btn {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 12px;
+            border-radius: 7px;
+            cursor: pointer;
+            color: var(--hint);
+            transition: all 0.2s;
+        }
+
+        .nav-btn.active {
+            background: var(--active-tab);
+            color: #ffffff;
+        }
+
+        .filter-scroll {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+            scrollbar-width: none;
+        }
+        .filter-scroll::-webkit-scrollbar { display: none; }
+
+        .chip {
+            white-space: nowrap;
+            padding: 6px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--hint);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .chip.active {
+            background: var(--active-tab);
+            color: #fff;
+            border-color: var(--active-tab);
+        }
+
+        .table-container {
+            background: var(--card);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+
+        .t-head {
+            display: grid;
+            grid-template-columns: 50px 1fr 85px 20px;
+            background: rgba(0,0,0,0.03);
+            padding: 8px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--hint);
+            border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
+        }
+
+        .t-row {
+            display: grid;
+            grid-template-columns: 50px 1fr 85px 20px;
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .t-row:active { background: rgba(0,0,0,0.04); }
+        .t-row:last-child { border-bottom: none; }
+        
+        .col-date { font-weight: 500; color: var(--hint); font-size: 11px; }
+        .col-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+        .col-price { font-weight: 700; color: var(--btn-green); text-align: right; font-size: 12px; }
+        .col-arrow { text-align: right; color: var(--hint); font-size: 10px; }
+
+        .t-details {
+            display: none;
+            padding: 12px 14px;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
+            animation: fadeIn 0.2s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .t-details.active { display: block; }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+
+        .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; font-weight: 600; }
+        .info-item b { color: var(--text); }
+        
+        .admin-comment {
+            background: rgba(255, 193, 7, 0.15);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border-left: 3px solid #ffc107;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .qty-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            background: var(--card);
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .qty-picker label { font-size: 11px; color: var(--hint); font-weight: 600; flex: 1; }
+        .qty-picker select {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-bottom: 10px;
+            font-family: inherit;
+            resize: none;
+            height: 42px;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .buttons button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            color: #fff;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+
+        .buttons button:active { opacity: 0.8; }
+
+        .btn-confirm { background: var(--btn-green); }
+        .btn-offer { background: var(--btn-orange); }
+
+        .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 16px;
+            width: 100%;
+            max-width: 340px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center; }
+        .modal-card input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 9px;
+            margin-bottom: 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
-    <h2>📋 Актуальные грузы</h2>
-    <div id="loads-container">Загрузка...</div>
 
-    <div id="bidModal" class="modal">
-        <div class="modal-content">
-            <h3>Предложить свою ставку</h3>
-            <label>Цена / Ставка:</label>
-            <input type="text" id="customPrice" placeholder="Например: 250000 руб">
-            <label>Комментарий:</label>
-            <textarea id="customComment" placeholder="Сроки подачи, условия оплаты..."></textarea>
-            <div class="btn-group">
-                <button class="btn-confirm" onclick="submitBid()">Отправить</button>
-                <button style="background:#8e8e93; color:white;" onclick="closeModal()">Отмена</button>
+    <div class="header-title">ЧТУП «Белкаспиан» | Биржа</div>
+
+    <div class="main-nav">
+        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Доступные грузы</div>
+        <div class="nav-btn" id="tab-my" onclick="switchTab('my')">📦 Мои заявки</div>
+    </div>
+
+    <div class="filter-scroll" id="dir-filters">
+        <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
+        <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
+        <div class="chip" onclick="setFilter('Узбекистан', this)">🇺🇿 Узбекистан</div>
+        <div class="chip" onclick="setFilter('Кыргызстан', this)">🇰🇬 Кыргызстан</div>
+        <div class="chip" onclick="setFilter('Грузия', this)">🇬🇪 Грузия</div>
+        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦🇿 Азербайджан</div>
+        <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
+    </div>
+
+    <div class="table-container">
+        <div class="t-head">
+            <div>Дата</div>
+            <div>Направление</div>
+            <div style="text-align: right;">Ставка</div>
+            <div></div>
+        </div>
+        <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
+    </div>
+
+    <div class="modal-overlay" id="bidModal">
+        <div class="modal-card">
+            <div class="modal-title">💰 Предложить свою цену</div>
+            <input type="text" id="modalPrice" placeholder="Желаемая ставка (напр., 2400 USD)" />
+            <textarea id="modalComment" placeholder="Комментарий (условия, дата подачи)..."></textarea>
+            <div class="buttons">
+                <button class="btn-confirm" onclick="submitModalBid()">Отправить</button>
+                <button style="background: var(--hint);" onclick="closeModal()">Отмена</button>
             </div>
         </div>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
-        tg.expand();
-        let currentLoadId = null;
+        try { tg.expand(); tg.ready(); tg.setHeaderColor('secondary_bg_color'); } catch(e) {}
 
-        async function loadLoads() {
-            try {
-                const res = await fetch('/api/loads');
-                const data = await res.json();
-                const container = document.getElementById('loads-container');
-                if (!data.loads || data.loads.length === 0) {
-                    container.innerHTML = '<p style="text-align:center;">Нет актуальных грузов.</p>';
-                    return;
-                }
-                
-                container.innerHTML = data.loads.map(l => `
-                    <div class="card">
-                        <div class="route">📍 ${l.route}</div>
-                        <div class="row">
-                            <span>📅 Дата: <b>${l.date}</b></span>
-                            <span class="price">💰 ${l.price}</span>
-                        </div>
-                        <div class="row">
-                            <span class="badge">🚚 Авто: ${l.cars}</span>
-                            <span class="badge">📦 Всего актуально: ${l.active_total || l.cars}</span>
-                        </div>
-                        <div class="meta">${l.car_type || ''}</div>
-                        <div class="btn-group">
-                            <button class="btn-confirm" onclick="bookLoad(${l.id}, 'confirm')">✅ Подтвердить</button>
-                            <button class="btn-bid" onclick="openBidModal(${l.id})">💰 Своя ставка</button>
-                        </div>
-                    </div>
-                `).join('');
-            } catch (e) {
-                document.getElementById('loads-container').innerHTML = '<p style="text-align:center; color:red;">Ошибка загрузки данных.</p>';
-            }
+        const tbody = document.getElementById('loads-body');
+        let currentTab = 'catalog';
+        let currentCountry = 'ALL';
+        let activeOfferLoadId = null;
+
+        function notify(text) {
+            if (tg && tg.showAlert) tg.showAlert(text);
+            else alert(text);
         }
 
-        async function bookLoad(id, action) {
-            const userId = tg.initDataUnsafe?.user?.id || 12345;
-            const res = await fetch(`/api/book/${id}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, action: action })
-            });
-            if (res.ok) {
-                tg.showAlert("Заявка успешно отправлена!");
-                loadLoads();
+        function askConfirm(text, callback) {
+            if (tg && tg.showConfirm) {
+                tg.showConfirm(text, callback);
             } else {
-                tg.showAlert("Ошибка при отправке заявки.");
+                callback(confirm(text));
             }
         }
 
-        function openBidModal(id) {
-            currentLoadId = id;
-            document.getElementById('bidModal').style.display = 'flex';
+        function switchTab(tab) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            currentTab = tab;
+            document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
+            document.getElementById('tab-my').classList.toggle('active', tab === 'my');
+            document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'flex' : 'none';
+            loadData();
+        }
+
+        function setFilter(country, el) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            currentCountry = country;
+            document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+            el.classList.add('active');
+            loadData();
+        }
+
+        async function loadData() {
+            tbody.innerHTML = '<div class="loader">Загрузка...</div>';
+            let userId = tg.initDataUnsafe?.user?.id || 0;
+
+            try {
+                if (currentTab === 'catalog') {
+                    let url = '/api/loads?t=' + Date.now();
+                    if (currentCountry !== 'ALL') url += '&country=' + encodeURIComponent(currentCountry);
+                    
+                    let res = await fetch(url);
+                    let data = await res.json();
+                    
+                    if (!data.loads || data.loads.length === 0) {
+                        tbody.innerHTML = '<div class="loader">Активных заявок пока нет</div>';
+                        return;
+                    }
+                    
+                    tbody.innerHTML = data.loads.map(l => {
+                        let carsNum = parseInt(l.cars) || 1;
+                        let carsSelect = '';
+                        if (carsNum > 1) {
+                            let options = '';
+                            for (let i = 1; i <= carsNum; i++) {
+                                options += `<option value="${i}">${i} авто</option>`;
+                            }
+                            carsSelect = `
+                                <div class="qty-picker">
+                                    <label>Количество авто:</label>
+                                    <select id="qty-${l.id}">${options}</select>
+                                </div>
+                            `;
+                        } else {
+                            carsSelect = `<input type="hidden" id="qty-${l.id}" value="1">`;
+                        }
+
+                        return `
+                        <div class="t-row" onclick="toggleRow('${l.id}')">
+                            <div class="col-date">${l.date}</div>
+                            <div class="col-route" title="${l.route}">${l.route}</div>
+                            <div class="col-price">${l.price}</div>
+                            <div class="col-arrow" id="arrow-${l.id}">▼</div>
+                        </div>
+                        <div class="t-details" id="details-${l.id}">
+                            <div class="info-grid">
+                                <div class="info-item"><span>Тип груза:</span><b>${l.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем:</span><b>${l.weight || '20т'}</b></div>
+                                <div class="info-item"><span>Доступно авто:</span><b>${l.cars} авто</b></div>
+                                <div class="info-item"><span>Направление:</span><b>${l.country || 'Все'}</b></div>
+                            </div>
+                            
+                            ${l.admin_comment ? `<div class="admin-comment"><b>💡 От логиста:</b> ${l.admin_comment}</div>` : ''}
+                            
+                            ${carsSelect}
+                            
+                            <textarea id="comment-${l.id}" placeholder="Комментарий / Заметка к заявке..."></textarea>
+                            
+                            <div class="buttons">
+                                <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">✅ Подтвердить</button>
+                                <button class="btn-offer" onclick="openOfferModal('${l.id}', event)">💰 Своя цена</button>
+                            </div>
+                        </div>
+                    `}).join('');
+
+                } else {
+                    let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
+                    let data = await res.json();
+
+                    if (!data.deals || data.deals.length === 0) {
+                        tbody.innerHTML = '<div class="loader">У вас пока нет подтвержденных заявок</div>';
+                        return;
+                    }
+
+                    tbody.innerHTML = data.deals.map(d => `
+                        <div class="t-row" style="cursor:default;">
+                            <div class="col-date">${d.date}</div>
+                            <div class="col-route">${d.route}</div>
+                            <div class="col-price">${d.price} (${d.cars} авто)</div>
+                            <div class="col-arrow">✅</div>
+                        </div>
+                    `).join('');
+                }
+
+            } catch(e) {
+                tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+            }
+        }
+
+        function toggleRow(id) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            const detailsBlock = document.getElementById(`details-${id}`);
+            const arrow = document.getElementById(`arrow-${id}`);
+            
+            document.querySelectorAll('.t-details').forEach(el => {
+                if(el.id !== `details-${id}`) el.classList.remove('active');
+            });
+            
+            detailsBlock.classList.toggle('active');
+            arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
+        }
+
+        function openOfferModal(id, event) {
+            event.stopPropagation();
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+            activeOfferLoadId = id;
+            document.getElementById('modalPrice').value = '';
+            document.getElementById('modalComment').value = document.getElementById(`comment-${id}`).value || '';
+            document.getElementById('bidModal').classList.add('active');
         }
 
         function closeModal() {
-            document.getElementById('bidModal').style.display = 'none';
+            document.getElementById('bidModal').classList.remove('active');
+            activeOfferLoadId = null;
         }
 
-        async function submitBid() {
-            const price = document.getElementById('customPrice').value;
-            const comment = document.getElementById('customComment').value;
-            const userId = tg.initDataUnsafe?.user?.id || 12345;
+        async function submitModalBid() {
+            let price = document.getElementById('modalPrice').value.trim();
+            let comment = document.getElementById('modalComment').value.trim();
 
             if (!price) {
-                alert('Введите цену!');
+                notify('⚠️ Пожалуйста, укажите вашу ставку!');
                 return;
             }
 
-            const res = await fetch(`/api/book/${currentLoadId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, action: 'bid', proposed_price: price, comment: comment })
-            });
+            closeModal();
+            let id = activeOfferLoadId;
+            let qty = document.getElementById(`qty-${id}`)?.value || '1';
+            await performBooking(id, 'bid', price, comment, qty);
+        }
 
-            if (res.ok) {
-                closeModal();
-                tg.showAlert("Ставка отправлена администратору!");
-                loadLoads();
-            } else {
-                tg.showAlert("Ошибка отправки ставки.");
+        async function sendAction(id, actionType, event) {
+            event.stopPropagation();
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+
+            let qty = document.getElementById(`qty-${id}`)?.value || '1';
+            let carrierComment = document.getElementById(`comment-${id}`).value;
+
+            let confirmMsg = `Подтвердить забор груза (${qty} авто) по указанной ставке?`;
+
+            askConfirm(confirmMsg, async (confirmed) => {
+                if (confirmed) {
+                    await performBooking(id, 'confirm', '', carrierComment, qty);
+                }
+            });
+        }
+
+        async function performBooking(id, actionType, customPrice, comment, qty) {
+            let user = tg.initDataUnsafe?.user || {};
+            let userId = user.id || 11111111;
+
+            try {
+                let res = await fetch(`/api/book/${id}`, { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        first_name: user.first_name || '',
+                        username: user.username || '',
+                        action: actionType,
+                        proposed_price: customPrice,
+                        comment: comment,
+                        cars: qty
+                    })
+                });
+                
+                let respData = await res.json();
+
+                if (res.ok) {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                    notify('✅ Заявка успешно отправлена логисту!');
+                    loadData(); 
+                } else {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+                    notify('❌ ' + (respData.error || 'Ошибка. Возможно, груз уже занят.'));
+                    loadData();
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
             }
         }
 
-        loadLoads();
+        loadData();
     </script>
 </body>
-</html>
-"""
+</html>"""
 
 # ==================== WEB APP БЭКЕНД ====================
 async def get_loads_api(request):
+    country = request.query.get('country')
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    
+    query = """
+        SELECT load_id, route, date, cars_count, price, text, 
+               COALESCE(cargo_type, 'ТНП'), 
+               COALESCE(weight, '20т'), 
+               COALESCE(admin_comment, ''),
+               COALESCE(destination_country, 'Все')
+        FROM loads 
+        WHERE status = 'ACTIVE'
+    """
+    params = []
+    if country and country != 'ALL':
+        query += " AND (destination_country LIKE ? OR route LIKE ?)"
+        params.extend([f"%{country}%", f"%{country}%"])
+        
+    query += " ORDER BY load_id DESC LIMIT 50"
+    
     try:
-        cursor.execute("""
-            SELECT load_id, route, date, cars_count, price, text, 
-                   COALESCE(cargo_type, 'ТНП'), 
-                   COALESCE(weight, '20т'), 
-                   COALESCE(admin_comment, '') 
-            FROM loads 
-            WHERE status = 'ACTIVE' 
-            ORDER BY load_id DESC LIMIT 50
-        """)
+        cursor.execute(query, params)
         rows = cursor.fetchall()
-    except Exception:
-        cursor.execute("""
-            SELECT load_id, route, date, cars_count, price, text, 'ТНП', '20т', '' 
-            FROM loads 
-            WHERE status = 'ACTIVE' 
-            ORDER BY load_id DESC LIMIT 50
-        """)
-        rows = cursor.fetchall()
+    except Exception as e:
+        logging.error(f"Error reading loads: {e}")
+        rows = []
     conn.close()
     
     loads = [{
@@ -1563,14 +1983,39 @@ async def get_loads_api(request):
         "route": r[1] if r[1] else "Не указан",
         "date": r[2] if r[2] else "Срочно",
         "cars": r[3] if r[3] else "1",
-        "active_total": r[3] if r[3] else "1",
         "price": r[4] if r[4] else "По запросу",
-        "car_type": r[5],
+        "raw_text": r[5],
         "cargo_type": r[6],
         "weight": r[7],
-        "admin_comment": r[8]
+        "admin_comment": r[8],
+        "country": r[9]
     } for r in rows]
     return web.json_response({"loads": loads})
+
+async def my_loads_api(request):
+    user_id = request.query.get('user_id')
+    if not user_id:
+        return web.json_response({"deals": []})
+        
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, date, route, cars, price 
+        FROM confirmed_deals 
+        WHERE user_id = ? 
+        ORDER BY id DESC LIMIT 30
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    deals = [{
+        "id": r[0],
+        "date": r[1],
+        "route": r[2],
+        "cars": r[3],
+        "price": r[4]
+    } for r in rows]
+    return web.json_response({"deals": deals})
 
 async def book_load_api(request):
     load_id = int(request.match_info.get('id'))
@@ -1580,72 +2025,162 @@ async def book_load_api(request):
         return web.json_response({"error": "Неверный формат данных"}, status=400)
 
     user_id = data.get('user_id')
+    if not user_id:
+        return web.json_response({"error": "Пользователь не определён"}, status=400)
+
+    first_name = data.get('first_name', '')
+    username = data.get('username', '')
     action = data.get('action') 
     proposed_price = data.get('proposed_price', '')
     carrier_comment = data.get('comment', '')
-    
+    requested_cars = int(data.get('cars', 1))
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, route, date, price, cars_count, details FROM loads WHERE load_id = ?", (load_id,))
+
+    cursor.execute("SELECT status, company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    user_row = cursor.fetchone()
+    if not user_row:
+        cursor.execute("""
+            INSERT INTO users (user_id, company, name, phone, subscriptions, status)
+            VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE')
+        """, (user_id, first_name or username or f"User_{user_id}"))
+        conn.commit()
+        company_name, u_name, u_phone = "Не указана", first_name or f"User_{user_id}", "Не указан"
+    else:
+        u_status, company_name, u_name, u_phone = user_row
+        if u_status == 'BLOCKED':
+            conn.close()
+            return web.json_response({"error": "Ваш аккаунт заблокирован"}, status=403)
+
+    cursor.execute("SELECT status, route, date, price, cars_count, details, text FROM loads WHERE load_id = ?", (load_id,))
     load = cursor.fetchone()
     
     if not load or load[0] != 'ACTIVE':
         conn.close()
-        return web.json_response({"error": "Груз недоступен"}, status=400)
+        return web.json_response({"error": "Груз недоступен или уже закрыт"}, status=400)
         
-    status, route, date_str, price_str, cars_count_str, details_text = load
-    
+    status, route, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
+    current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+    user_link = f"@{username}" if username else f"[{u_name}](tg://user?id={user_id})"
+    carrier_info = f"👤 Перевозчик: {user_link} | {company_name or 'Не указана'} | {u_name} | {u_phone or 'Не указан'}"
+
     if action == 'confirm':
-        cars_num = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
-        cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+        if requested_cars > current_cars:
+            requested_cars = current_cars
+
+        if current_cars > requested_cars:
+            left_cars = current_cars - requested_cars
+            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), load_id))
+        else:
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
         cursor.execute("""
             INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (load_id, user_id, date_str, route_str, cars_num, price_str, details_text))
+        """, (load_id, user_id, date_str, route_str, requested_cars, price_str, details_text))
+
         conn.commit()
         conn.close()
+
         await update_cargo_messages_for_all_users(load_id)
+
+        admin_notification = (
+            f"🎯 **Заявка на груз из Web App!**\n\n"
+            f"📦 Описание:\n{raw_cargo_text or route}\n\n"
+            f"🚛 Забирает авто: **{requested_cars}**\n"
+            f"💬 Комментарий: *{carrier_comment or 'Нет'}*\n"
+            f"{carrier_info}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Error sending admin notification: {e}")
+
+        return web.json_response({"status": "success"})
+
     elif action == 'bid':
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
             VALUES (?, ?, ?, ?, ?)
-        """, (load_id, user_id, 1, proposed_price, carrier_comment))
+        """, (load_id, user_id, requested_cars, proposed_price, carrier_comment))
         bid_id = cursor.lastrowid
         conn.commit()
         conn.close()
 
-        try:
-            admin_builder = InlineKeyboardBuilder()
-            admin_builder.row(
-                types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
-                types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
-            )
-            admin_builder.row(types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}"))
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+        )
+        admin_builder.row(types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}"))
 
+        try:
             await bot.send_message(
                 chat_id=ADMIN_CHANNEL_ID,
                 text=(
                     f"💰 **Новая ставка через Web App!**\n\n"
                     f"🆔 Груз #{load_id} | Маршрут: {route}\n"
-                    f"💵 Ставка: **{proposed_price}**\n"
+                    f"💵 Ставка: **{proposed_price}** | 🚛 Авто: **{requested_cars}**\n"
                     f"💬 Комментарий: *{carrier_comment or 'Нет'}*\n"
-                    f"👤 Пользователь ID: {user_id}"
+                    f"{carrier_info}"
                 ),
                 reply_markup=admin_builder.as_markup(),
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logging.error(f"Ошибка отправки ставки в админ-канал: {e}")
-    else:
-        conn.close()
-    
-    return web.json_response({"status": "success"})
+            logging.error(f"Error sending bid notification: {e}")
+
+        return web.json_response({"status": "success"})
+
+    conn.close()
+    return web.json_response({"error": "Неизвестное действие"}, status=400)
 
 async def serve_index(request):
     return web.Response(text=INDEX_HTML, content_type='text/html')
 
+DIRECTIONS_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Выбор направлений</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 15px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
+        h3 { margin-top: 0; font-size: 17px; text-align: center; }
+        .item { font-size: 16px; margin: 12px 0; display: flex; align-items: center; gap: 10px; background: var(--tg-theme-secondary-bg-color, #f5f5f7); padding: 10px 14px; border-radius: 8px; }
+        .item input { width: 18px; height: 18px; }
+        button { width: 100%; padding: 12px; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); border: none; border-radius: 8px; font-size: 15px; font-weight: bold; margin-top: 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h3>🌍 Выберите интересующие направления:</h3>
+    <div class="item"><label><input type="checkbox" value="Казахстан 🇰🇿"> 🇰🇿 Казахстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</label></div>
+    <div class="item"><label><input type="checkbox" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Грузия 🇬🇪"> 🇬🇪 Грузия</label></div>
+    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</label></div>
+    <div class="item"><label><input type="checkbox" value="Армения 🇦🇲"> 🇦🇲 Армения</label></div>
+
+    <button onclick="save()">Сохранить подписки</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        function save() {
+            let selected = [];
+            document.querySelectorAll('input:checked').forEach(cb => selected.push(cb.value));
+            tg.sendData(JSON.stringify(selected));
+            tg.close();
+        }
+    </script>
+</body>
+</html>"""
+
 async def serve_directions(request):
-    return web.Response(text="<html><body><h3>Направления</h3></body></html>", content_type='text/html')
+    return web.Response(text=DIRECTIONS_HTML, content_type='text/html')
 
 
 # ==================== СЕРВЕР И САМОПИНГ ====================
@@ -1679,6 +2214,7 @@ async def web_server():
     app.router.add_get("/webapp", serve_index)
     app.router.add_get("/directions", serve_directions)
     app.router.add_get("/api/loads", get_loads_api)
+    app.router.add_get("/api/my_loads", my_loads_api)
     app.router.add_post("/api/book/{id}", book_load_api)
     
     app.on_startup.append(webserver_on_startup)
