@@ -1,6 +1,4 @@
-import ast
-
-bot_final_code = r'''import os
+import os
 import logging
 import sqlite3
 import asyncio
@@ -2225,7 +2223,7 @@ async def my_loads_api(request):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    # Объединяем подтвержденные сделки И активные/принятые ставки
+    # Объединяем прямо подтвержденные сделки И все предложения ставок (bids) пользователя
     query = """
         SELECT load_id, date, route, cars, price, 'ПОДТВЕРЖДЕНО' as status
         FROM confirmed_deals 
@@ -2566,7 +2564,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-'''
-
-ast.parse(bot_final_code)
-print("Code validation PASSED perfectly!")
