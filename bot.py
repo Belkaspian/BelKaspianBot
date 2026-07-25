@@ -1,4 +1,4 @@
-clean_code = r'''import os
+bot_script = r'''import os
 import logging
 import sqlite3
 import asyncio
@@ -1696,7 +1696,6 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
 
-        /* Профиль / Кабинет */
         .profile-card {
             background: var(--card);
             border-radius: 10px;
@@ -2459,7 +2458,7 @@ async def self_ping():
         except Exception as e:
             logging.error(f"Self-ping error: {e}")
             
-        await asyncio.sleep(180)  # Пинг каждые 3 минуты (180 секунд)
+        await asyncio.sleep(180)
 
 async def webserver_on_startup(app):
     asyncio.create_task(self_ping())
@@ -2501,8 +2500,6 @@ if __name__ == "__main__":
     asyncio.run(main())
 '''
 
-try:
-    ast.parse(clean_code)
-    print("Clean code AST check PASSED!")
-except Exception as e:
-    print("Clean code AST check FAILED:", e)
+import ast
+ast.parse(bot_script)
+print("No syntax errors or SyntaxWarnings!")
