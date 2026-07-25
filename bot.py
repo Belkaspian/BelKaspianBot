@@ -1,9 +1,10 @@
-import os
+full_code = '''import os
 import logging
 import sqlite3
 import asyncio
 import re
 import json
+from datetime import datetime, date, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -67,7 +68,8 @@ def init_db():
             status TEXT DEFAULT 'ACTIVE',
             cargo_type TEXT,
             weight TEXT,
-            admin_comment TEXT
+            admin_comment TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -118,6 +120,7 @@ def init_db():
         "ALTER TABLE loads ADD COLUMN cargo_type TEXT",
         "ALTER TABLE loads ADD COLUMN weight TEXT",
         "ALTER TABLE loads ADD COLUMN admin_comment TEXT",
+        "ALTER TABLE loads ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE bids ADD COLUMN comment TEXT"
     ]
     for migration in migrations:
@@ -147,7 +150,7 @@ class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
 
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ДАТЫ ====================
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     web_app_url = f"{RENDER_URL}/webapp" 
@@ -180,6 +183,30 @@ def extract_price(text: str) -> str:
         return match_num.group(0).strip(' ,.')
         
     return ""
+
+def parse_cargo_date(date_str: str) -> date | None:
+    if not date_str:
+        return None
+    match = re.search(r'(\d{1,2})[\./](\d{1,2})(?:[\./](\d{2,4}))?', str(date_str))
+    if not match:
+        return None
+    day = int(match.group(1))
+    month = int(match.group(2))
+    year_str = match.group(3)
+    
+    now = datetime.now()
+    if year_str:
+        year = int(year_str)
+        if year < 100:
+            year += 2000
+    else:
+        year = now.year
+        if month < now.month - 6:
+            year += 1
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
 
 def parse_cargo_raw(raw_text: str):
     clean_lines = []
@@ -300,7 +327,7 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
         return
         
     date_str, route_str, price_str, cars_str, details_text, status = row
-    is_closed = (status == 'CLOSED')
+    is_closed = (status in ['CLOSED', 'EXPIRED'])
     new_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=is_closed)
     
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
@@ -353,7 +380,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         return
         
     date_str, route_str, price_str, cars_str, details_text, status = row
-    is_closed = (status == 'CLOSED')
+    is_closed = (status in ['CLOSED', 'EXPIRED'])
     formatted_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=is_closed)
     
     builder = InlineKeyboardBuilder()
@@ -381,6 +408,49 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         conn.close()
     except Exception:
         pass
+
+
+# ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ДАТЕ ====================
+async def auto_clean_expired_cargos():
+    """Удаляет/закрывает грузы только когда прошла дата погрузки включительно."""
+    while True:
+        try:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT load_id, date, created_at FROM loads WHERE status = 'ACTIVE'")
+            rows = cursor.fetchall()
+            
+            today = datetime.now().date()
+            expired_ids = []
+            
+            for load_id, date_str, created_at in rows:
+                cargo_d = parse_cargo_date(date_str)
+                if cargo_d:
+                    # Груз активен ДО даты погрузки включительно! Только на следующий день он истекает.
+                    if today > cargo_d:
+                        expired_ids.append(load_id)
+                else:
+                    # Если дата не распознана (напр. "Срочно"), храним 7 дней с момента создания
+                    if created_at:
+                        try:
+                            c_time = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
+                            if datetime.now() - c_time > timedelta(days=7):
+                                expired_ids.append(load_id)
+                        except Exception:
+                            pass
+
+            for eid in expired_ids:
+                cursor.execute("UPDATE loads SET status = 'EXPIRED' WHERE load_id = ?", (eid,))
+            conn.commit()
+            conn.close()
+            
+            for eid in expired_ids:
+                await update_cargo_messages_for_all_users(eid)
+
+        except Exception as e:
+            logging.error(f"Error in auto_clean_expired_cargos: {e}")
+            
+        await asyncio.sleep(900)  # Проверка каждые 15 минут
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ ====================
@@ -676,9 +746,9 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     current_cars_str, raw_cargo_text, price_str, date_str, route_str, details_text, status = load_row
     
-    if status == 'CLOSED':
+    if status in ['CLOSED', 'EXPIRED']:
         conn.close()
-        await message.answer("Этот груз уже закрыт.", reply_markup=get_main_reply_markup())
+        await message.answer("Этот груз уже закрыт или истек его срок.", reply_markup=get_main_reply_markup())
         await state.clear()
         return
 
@@ -762,9 +832,9 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
         return
         
     current_cars_str, raw_cargo_text, status = load_row
-    if status == 'CLOSED':
+    if status in ['CLOSED', 'EXPIRED']:
         conn.close()
-        await message.answer("Этот груз уже закрыт.", reply_markup=get_main_reply_markup())
+        await message.answer("Этот груз уже закрыт или истек.", reply_markup=get_main_reply_markup())
         await state.clear()
         return
 
@@ -843,7 +913,7 @@ async def admin_accept_bid(callback: types.CallbackQuery):
     
     if row:
         current_cars_str, date_str, route_str, details_str, base_price, status = row
-        if status == 'CLOSED':
+        if status in ['CLOSED', 'EXPIRED']:
             await callback.message.edit_text(callback.message.text + "\n\n[ОШИБКА: Груз уже закрыт]")
             conn.close()
             return
@@ -949,7 +1019,7 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
 
     if row:
         current_cars_str, date_str, route_str, details_str, base_price, status = row
-        if status == 'CLOSED':
+        if status in ['CLOSED', 'EXPIRED']:
             await callback.message.edit_text(callback.message.text + "\n\n[ОШИБКА: Груз закрыт]", reply_markup=None)
             conn.close()
             return
@@ -1124,7 +1194,7 @@ async def admin_menu_back(callback: types.CallbackQuery):
 async def admin_menu_active(callback: types.CallbackQuery):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, text FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 15")
+    cursor.execute("SELECT load_id, text FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 30")
     active_loads = cursor.fetchall()
     conn.close()
     
@@ -1171,7 +1241,7 @@ async def admin_show_confirmed_by_dir(callback: types.CallbackQuery):
         JOIN loads l ON cd.load_id = l.load_id
         LEFT JOIN users u ON cd.user_id = u.user_id
         WHERE l.destination_country = ?
-        ORDER BY cd.id DESC LIMIT 15
+        ORDER BY cd.id DESC LIMIT 20
     """
     cursor.execute(query, (direction,))
     deals = cursor.fetchall()
@@ -2100,7 +2170,7 @@ async def get_loads_api(request):
         query += " AND (destination_country LIKE ? OR route LIKE ?)"
         params.extend([f"%{country}%", f"%{country}%"])
         
-    query += " ORDER BY load_id DESC LIMIT 50"
+    query += " ORDER BY load_id DESC"
     
     try:
         cursor.execute(query, params)
@@ -2135,7 +2205,7 @@ async def my_loads_api(request):
         SELECT id, date, route, cars, price 
         FROM confirmed_deals 
         WHERE user_id = ? 
-        ORDER BY id DESC LIMIT 30
+        ORDER BY id DESC
     """, (user_id,))
     rows = cursor.fetchall()
     conn.close()
@@ -2367,24 +2437,34 @@ async def serve_directions(request):
     return web.Response(text=DIRECTIONS_HTML, content_type='text/html')
 
 
-# ==================== СЕРВЕР И САМОПИНГ ====================
+# ==================== СЕРВЕР И САМОПИНГ (ЗАЩИТА ОТ СПЯЩЕГО РЕЖИМА) ====================
 async def handle_ping(request):
     return web.Response(text="Bot is running!", status=200)
 
 async def self_ping():
-    await asyncio.sleep(30)
+    """Пингует веб-сервер каждые 3 минуты, чтобы Render/хостинг не усыплял бота."""
+    await asyncio.sleep(10)
     import aiohttp
+    url = RENDER_URL.rstrip('/') if RENDER_URL else None
+    
+    if not url or "your-app-name" in url:
+        logging.warning("⚠️ RENDER_URL не настроен! Самопинг отключен. Задайте переменную RENDER_URL в настройках хостинга.")
+        return
+
+    ping_url = f"{url}/ping"
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(RENDER_URL) as response:
-                    logging.info(f"Self-ping status: {response.status}")
+                async with session.get(ping_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    logging.info(f"Self-ping ({ping_url}) status: {response.status}")
         except Exception as e:
             logging.error(f"Self-ping error: {e}")
-        await asyncio.sleep(600)
+            
+        await asyncio.sleep(180)  # Пинг каждые 3 минуты (180 секунд)
 
 async def webserver_on_startup(app):
     asyncio.create_task(self_ping())
+    asyncio.create_task(auto_clean_expired_cargos())
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
@@ -2420,3 +2500,13 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+'''
+
+try:
+    ast.parse(full_code)
+    print("Syntax verification SUCCESSFUL!")
+    with open('bot.py', 'w', encoding='utf-8') as f:
+        f.write(full_code)
+    print("Written bot.py cleanly! Length:", len(full_code))
+except Exception as e:
+    print("Failed:", e)
