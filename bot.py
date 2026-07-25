@@ -1608,17 +1608,38 @@ async def handle_channel_post(message: types.Message):
 
 # ==================== WEB APP БЭКЕНД ====================
 
+import os
+
+# Получаем ID администратора из переменных окружения (обязательно укажите его в настройках Render)
+ADMIN_ID = os.getenv("ADMIN_ID")
+
 async def get_loads_api(request):
     """API для получения списка активных грузов (для Web App)"""
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT load_id, route, date, cars_count, price, text 
-        FROM loads 
-        WHERE status = 'ACTIVE' 
-        ORDER BY load_id DESC LIMIT 50
-    """)
-    rows = cursor.fetchall()
+    
+    # Безопасно забираем данные, включая комментарий администратора, тип и вес
+    try:
+        cursor.execute("""
+            SELECT load_id, route, date, cars_count, price, text, 
+                   COALESCE(cargo_type, 'ТНП'), 
+                   COALESCE(weight, '20т'), 
+                   COALESCE(admin_comment, '') 
+            FROM loads 
+            WHERE status = 'ACTIVE' 
+            ORDER BY load_id DESC LIMIT 50
+        """)
+        rows = cursor.fetchall()
+    except Exception:
+        # Резервный запрос на случай, если структура таблиц старая
+        cursor.execute("""
+            SELECT load_id, route, date, cars_count, price, text, 'ТНП', '20т', '' 
+            FROM loads 
+            WHERE status = 'ACTIVE' 
+            ORDER BY load_id DESC LIMIT 50
+        """)
+        rows = cursor.fetchall()
+        
     conn.close()
     
     loads = []
@@ -1629,14 +1650,17 @@ async def get_loads_api(request):
             "date": r[2] if r[2] else "Срочно",
             "cars": r[3] if r[3] else "1",
             "price": r[4] if r[4] else "По запросу",
-            "car_type": r[5] # Передаем сырой текст или details
+            "car_type": r[5],
+            "cargo_type": r[6],
+            "weight": r[7],
+            "admin_comment": r[8] # Если здесь пусто, фронтенд не покажет блок "Без дополнительных условий"
         })
     return web.json_response({"loads": loads})
+
 async def book_load_api(request):
-    """API для бронирования груза или предложения своей цены через Web App"""
+    """API для бронирования груза или предложения своей цены с уведомлением админа"""
     load_id = request.match_info.get('id')
     
-    # Читаем JSON, который прислал фронтенд
     try:
         data = await request.json()
     except Exception:
@@ -1658,24 +1682,38 @@ async def book_load_api(request):
         
     route = load[1]
     
-    # Если груз забрали по исходной ставке - закрываем его
+    # Закрываем груз, если подтвердили по текущей ставке
     if action == 'confirm':
         cursor.execute("UPDATE loads SET status = 'CLOSED' WHERE load_id = ?", (load_id,))
         conn.commit()
-        # Скрываем груз из общего канала/меню
         await update_cargo_messages_for_all_users(int(load_id))
         
-        # TODO: Здесь можно добавить отправку уведомления админу:
-        # await bot.send_message(ADMIN_ID, f"Перевозчик {user_id} подтвердил груз #{load_id} ({route})\nКомментарий: {carrier_comment}")
-        
-    elif action == 'offer':
-        # Если предложили свою цену, груз НЕ закрываем для остальных, 
-        # а просто уведомляем админа о встречном предложении.
-        pass 
-        # TODO: Отправка уведомления логисту со встречной ставкой
-        # await bot.send_message(ADMIN_ID, f"Перевозчик {user_id} предлагает ставку {proposed_price} за груз #{load_id} ({route})\nКомментарий: {carrier_comment}")
-
     conn.close()
+    
+    # Отправка уведомления администратору в Telegram
+    if ADMIN_ID:
+        try:
+            admin_chat_id = int(ADMIN_ID)
+            if action == 'confirm':
+                msg = (
+                    f"🟢 <b>Перевозчик подтвердил груз!</b>\n\n"
+                    f"🆔 <b>ID груза:</b> #{load_id}\n"
+                    f"📍 <b>Маршрут:</b> {route}\n"
+                    f"👤 <b>ID пользователя:</b> {user_id}\n"
+                    f"💬 <b>Комментарий перевозчика:</b> {carrier_comment if carrier_comment else 'Нет'}"
+                )
+            else:
+                msg = (
+                    f"🟡 <b>Встречная ставка от перевозчика!</b>\n\n"
+                    f"🆔 <b>ID груза:</b> #{load_id}\n"
+                    f"📍 <b>Маршрут:</b> {route}\n"
+                    f"💰 <b>Предложенная цена:</b> <b>{proposed_price}</b>\n"
+                    f"👤 <b>ID пользователя:</b> {user_id}\n"
+                    f"💬 <b>Комментарий перевозчика:</b> {carrier_comment if carrier_comment else 'Нет'}"
+                )
+            await bot.send_message(admin_chat_id, msg, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Не удалось отправить уведомление администратору: {e}")
     
     return web.json_response({"status": "success"})
 
