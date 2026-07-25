@@ -1,9 +1,10 @@
-full_code = '''import os
+clean_code = r'''import os
 import logging
 import sqlite3
 import asyncio
 import re
 import json
+import ast
 from datetime import datetime, date, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -426,11 +427,9 @@ async def auto_clean_expired_cargos():
             for load_id, date_str, created_at in rows:
                 cargo_d = parse_cargo_date(date_str)
                 if cargo_d:
-                    # Груз активен ДО даты погрузки включительно! Только на следующий день он истекает.
                     if today > cargo_d:
                         expired_ids.append(load_id)
                 else:
-                    # Если дата не распознана (напр. "Срочно"), храним 7 дней с момента создания
                     if created_at:
                         try:
                             c_time = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
@@ -450,7 +449,7 @@ async def auto_clean_expired_cargos():
         except Exception as e:
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
-        await asyncio.sleep(900)  # Проверка каждые 15 минут
+        await asyncio.sleep(900)
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ ====================
@@ -2448,7 +2447,7 @@ async def self_ping():
     url = RENDER_URL.rstrip('/') if RENDER_URL else None
     
     if not url or "your-app-name" in url:
-        logging.warning("⚠️ RENDER_URL не настроен! Самопинг отключен. Задайте переменную RENDER_URL в настройках хостинга.")
+        logging.warning("⚠️ RENDER_URL не настроен! Задайте переменную RENDER_URL в настройках хостинга.")
         return
 
     ping_url = f"{url}/ping"
@@ -2503,10 +2502,7 @@ if __name__ == "__main__":
 '''
 
 try:
-    ast.parse(full_code)
-    print("Syntax verification SUCCESSFUL!")
-    with open('bot.py', 'w', encoding='utf-8') as f:
-        f.write(full_code)
-    print("Written bot.py cleanly! Length:", len(full_code))
+    ast.parse(clean_code)
+    print("Clean code AST check PASSED!")
 except Exception as e:
-    print("Failed:", e)
+    print("Clean code AST check FAILED:", e)
