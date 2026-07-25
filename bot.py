@@ -1,10 +1,9 @@
-bot_script = r'''import os
+import os
 import logging
 import sqlite3
 import asyncio
 import re
 import json
-import ast
 from datetime import datetime, date, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -1778,7 +1777,6 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
     </div>
 
-    <!-- Фильтр направлений -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
         <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
@@ -1789,7 +1787,6 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
     </div>
 
-    <!-- Список грузов / Таблица -->
     <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
@@ -1800,7 +1797,6 @@ INDEX_HTML = """<!DOCTYPE html>
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
-    <!-- Блок личного кабинета -->
     <div id="profile-container" style="display: none;">
         <div class="profile-card">
             <div class="profile-title">👤 Данные компании</div>
@@ -1833,7 +1829,6 @@ INDEX_HTML = """<!DOCTYPE html>
         <button class="btn-confirm" style="width: 100%; padding: 12px; font-size: 13px;" onclick="saveProfile()">💾 Сохранить данные профиля</button>
     </div>
 
-    <!-- Модальное окно "Своя ставка" -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
             <div class="modal-title">💰 Предложить свою цену</div>
@@ -2498,8 +2493,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-'''
-
-import ast
-ast.parse(bot_script)
-print("No syntax errors or SyntaxWarnings!")
