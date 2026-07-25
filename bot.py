@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import asyncio
 import re
+import json
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -111,9 +112,6 @@ def init_db():
         )
     """)
     
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('timer_hours', '24')")
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_comment', 'Стандартные условия оплаты')")
-    
     migrations = [
         "ALTER TABLE confirmed_deals ADD COLUMN load_id INTEGER",
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
@@ -147,7 +145,6 @@ class DealStates(StatesGroup):
 
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
-    waiting_for_setting_value = State()
 
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -162,7 +159,13 @@ def get_main_reply_markup():
     builder.add(types.KeyboardButton(text="📦 Мои подтвержденные грузы"))
     builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
-    
+
+def is_auction_price(price_str: str) -> bool:
+    if not price_str:
+        return True
+    p = str(price_str).lower().strip()
+    return any(w in p for w in ['торг', 'запрос', 'договор', 'аукцион', 'по запросу']) or not any(c.isdigit() for c in p)
+
 def extract_price(text: str) -> str:
     price_pattern = re.compile(
         r'([\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб|долл|доллар|долларов|\$|€|тг))', 
@@ -237,7 +240,7 @@ def parse_cargo_raw(raw_text: str):
     if not route_str:
         route_str = clean_lines[0] if clean_lines else "Маршрут не указан"
     if not price_str:
-        price_str = "По запросу"
+        price_str = "Торги"
     if not cars_str:
         cars_str = "1"
 
@@ -311,15 +314,15 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                     chat_id=u_id,
                     message_id=msg_id,
                     text=new_text,
-                    reply_markup=None,
-                    parse_mode="Markdown"
+                    reply_markup=None
                 )
             else:
                 builder = InlineKeyboardBuilder()
-                builder.row(types.InlineKeyboardButton(
-                    text=f"✅ Подтвердить за {price_str}",
-                    callback_data=f"confirm_{cargo_id}"
-                ))
+                if not is_auction_price(price_str):
+                    builder.row(types.InlineKeyboardButton(
+                        text=f"✅ Подтвердить за {price_str}",
+                        callback_data=f"confirm_{cargo_id}"
+                    ))
                 builder.row(types.InlineKeyboardButton(
                     text="💰 Своя ставка",
                     callback_data=f"bid_{cargo_id}"
@@ -328,8 +331,7 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                     chat_id=u_id,
                     message_id=msg_id,
                     text=new_text,
-                    reply_markup=builder.as_markup(),
-                    parse_mode="Markdown"
+                    reply_markup=builder.as_markup()
                 )
         except Exception:
             pass
@@ -356,10 +358,11 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
     
     builder = InlineKeyboardBuilder()
     if not is_closed:
-        builder.row(types.InlineKeyboardButton(
-            text=f"✅ Подтвердить за {price_str}",
-            callback_data=f"confirm_{cargo_id}"
-        ))
+        if not is_auction_price(price_str):
+            builder.row(types.InlineKeyboardButton(
+                text=f"✅ Подтвердить за {price_str}",
+                callback_data=f"confirm_{cargo_id}"
+            ))
         builder.row(types.InlineKeyboardButton(
             text="💰 Своя ставка",
             callback_data=f"bid_{cargo_id}"
@@ -369,8 +372,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         msg = await bot.send_message(
             chat_id=user_id, 
             text=formatted_text, 
-            reply_markup=builder.as_markup() if not is_closed else None, 
-            parse_mode="Markdown"
+            reply_markup=builder.as_markup() if not is_closed else None
         )
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
@@ -387,7 +389,6 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 async def handle_webapp_data(message: types.Message):
     user_id = message.from_user.id
     try:
-        import json
         data = json.loads(message.web_app_data.data)
         if isinstance(data, list):
             new_subs = ",".join(data)
@@ -552,7 +553,7 @@ async def show_confirmed_cargos_handler(message: types.Message):
         if details_text:
             card_text += f"\n📦 {details_text}"
         try:
-            await message.answer(card_text, parse_mode="Markdown")
+            await message.answer(card_text)
             await asyncio.sleep(0.05)
         except Exception:
             pass
@@ -597,7 +598,7 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
 
     cargo_id = int(callback.data.replace("bid_", ""))
     await state.update_data(cargo_id=cargo_id, action_type="bid")
-    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):", parse_mode="Markdown")
+    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):")
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
 
@@ -651,19 +652,13 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     
     if action_type == "bid":
         await state.update_data(requested_cars=qty_input)
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'default_comment'")
-        s_row = cursor.fetchone()
-        conn.close()
-        def_comm = s_row[0] if s_row else "Нет"
-        await message.answer(f"Введите комментарий к ставке (например, сроки подачи машины, особенности оплаты).\n\nПо умолчанию (можно отправить `-` для пропуска): `{def_comm}`", parse_mode="Markdown")
+        await message.answer("Введите комментарий к ставке (например, сроки подачи машины, особенности оплаты).\n\nОтправьте `-` для пропуска:")
         await state.set_state(DealStates.waiting_for_comment)
         return
 
     cargo_id = data.get("cargo_id")
     user_obj = message.from_user
-    user_link = f"@{user_obj.username}" if user_obj.username else f"[{user_obj.full_name}](tg://user?id={user_id})"
+    user_link = f"@{user_obj.username}" if user_obj.username else f"{user_obj.full_name} (ID: {user_id})"
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -696,7 +691,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         warning_text = f"⚠️ Столько грузов нет, доступно только {current_cars} авто. Берем в работу {current_cars} авто.\n\n"
 
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
-    carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
+    carrier_info = f"👤 Перевозчик: {user_link} | Компания: {company} | Имя: {name} | Тел: {phone}"
     
     if current_cars > requested_cars:
         left_cars = current_cars - requested_cars
@@ -714,13 +709,13 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     await update_cargo_messages_for_all_users(cargo_id)
         
     admin_notification = (
-        f"🎯 **Заявка на груз!**\n\n"
+        f"🎯 Заявка на груз!\n\n"
         f"📦 Описание:\n{raw_cargo_text}\n\n"
-        f"🚛 Забирает грузов: **{requested_cars}**\n"
+        f"🚛 Забирает авто: {requested_cars}\n"
         f"{carrier_info}"
     )
     try:
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification)
     except Exception:
         pass
         
@@ -739,17 +734,10 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
         await message.answer("Ваш аккаунт заблокирован администратором.")
         await state.clear()
         return
-    
-    cursor.execute("SELECT value FROM settings WHERE key = 'default_comment'")
-    s_row = cursor.fetchone()
-    def_comm = s_row[0] if s_row else ""
     conn.close()
 
     comment_input = message.text.strip()
-    if comment_input == "-" or not comment_input:
-        comment_text = def_comm
-    else:
-        comment_text = comment_input
+    comment_text = "-" if comment_input == "-" else comment_input
 
     data = await state.get_data()
     cargo_id = data.get("cargo_id")
@@ -757,7 +745,7 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
     qty_input = data.get("requested_cars", "1")
     
     user_obj = message.from_user
-    user_link = f"@{user_obj.username}" if user_obj.username else f"[{user_obj.full_name}](tg://user?id={user_id})"
+    user_link = f"@{user_obj.username}" if user_obj.username else f"{user_obj.full_name} (ID: {user_id})"
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -789,7 +777,7 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
         warning_text = f"⚠️ Запрошено больше, чем доступно. Передаем ставку на {current_cars} авто.\n\n"
 
     company, name, phone = user_info if user_info else ("Не указана", "Не указано", "Не указан")
-    carrier_info = f"👤 Перевозчик: {user_link} | {company} | {name} | {phone}"
+    carrier_info = f"👤 Перевозчик: {user_link} | Компания: {company} | Имя: {name} | Тел: {phone}"
 
     cursor.execute("""
         INSERT INTO bids (load_id, user_id, cars, rate, comment)
@@ -800,12 +788,12 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
     conn.close()
     
     bid_notification = (
-        f"💰 **Новая ставка от перевозчика!**\n\n"
+        f"💰 Новая ставка от перевозчика!\n\n"
         f"📦 Груз:\n{raw_cargo_text}\n\n"
-        f"💵 Ставка: **{rate}** | 🚛 Авто: **{requested_cars}**\n"
-        f"💬 Комментарий: *{comment_text}*\n"
+        f"💵 Ставка: {rate} | 🚛 Авто: {requested_cars}\n"
+        f"💬 Комментарий: {comment_text}\n"
         f"{carrier_info}\n\n"
-        f"*(Груз остается активным)*"
+        f"(Груз остается активным)"
     )
     
     admin_builder = InlineKeyboardBuilder()
@@ -819,8 +807,7 @@ async def process_deal_comment(message: types.Message, state: FSMContext):
         await bot.send_message(
             chat_id=ADMIN_CHANNEL_ID, 
             text=bid_notification, 
-            reply_markup=admin_builder.as_markup(), 
-            parse_mode="Markdown"
+            reply_markup=admin_builder.as_markup()
         )
     except Exception:
         pass
@@ -857,7 +844,7 @@ async def admin_accept_bid(callback: types.CallbackQuery):
     if row:
         current_cars_str, date_str, route_str, details_str, base_price, status = row
         if status == 'CLOSED':
-            await callback.message.edit_text(callback.message.text + "\n\n**[ОШИБКА: Груз уже закрыт]**", parse_mode="Markdown")
+            await callback.message.edit_text(callback.message.text + "\n\n[ОШИБКА: Груз уже закрыт]")
             conn.close()
             return
             
@@ -888,18 +875,17 @@ async def admin_accept_bid(callback: types.CallbackQuery):
         await bot.send_message(
             chat_id=carrier_id, 
             text=(
-                f"✅ **Администратор подтвердил вашу ставку! Груз закреплен за вами.**\n\n"
-                f"📅 Дата: *{row[1]}*\n"
-                f"📍 Маршрут: *{row[2]}*\n"
-                f"💰 Цена: *{agreed_rate}*\n"
-                f"🚛 Авто: *{requested_qty}*"
-            ), 
-            parse_mode="Markdown"
+                f"✅ Администратор подтвердил вашу ставку! Груз закреплен за вами.\n\n"
+                f"📅 Дата: {row[1]}\n"
+                f"📍 Маршрут: {row[2]}\n"
+                f"💰 Цена: {agreed_rate}\n"
+                f"🚛 Авто: {requested_qty}"
+            )
         )
     except Exception:
         pass
         
-    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: Подтверждено ✅]**", reply_markup=None, parse_mode="Markdown")
+    await callback.message.edit_text(callback.message.text + "\n\n[СТАТУС: Подтверждено ✅]", reply_markup=None)
     await callback.answer("Ставка подтверждена!")
 
 @dp.callback_query(F.data.startswith("partial_bid_"))
@@ -935,9 +921,8 @@ async def admin_partial_bid(callback: types.CallbackQuery):
     builder.adjust(3)
     
     await callback.message.edit_text(
-        text=callback.message.text + f"\n\n**Выберите количество авто (макс {allowed_max}):**",
-        reply_markup=builder.as_markup(),
-        parse_mode="Markdown"
+        text=callback.message.text + f"\n\nВыберите количество авто (макс {allowed_max}):",
+        reply_markup=builder.as_markup()
     )
     await callback.answer()
 
@@ -965,7 +950,7 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
     if row:
         current_cars_str, date_str, route_str, details_str, base_price, status = row
         if status == 'CLOSED':
-            await callback.message.edit_text(callback.message.text + "\n\n**[ОШИБКА: Груз закрыт]**", reply_markup=None, parse_mode="Markdown")
+            await callback.message.edit_text(callback.message.text + "\n\n[ОШИБКА: Груз закрыт]", reply_markup=None)
             conn.close()
             return
 
@@ -994,21 +979,19 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
         await bot.send_message(
             chat_id=carrier_id,
             text=(
-                f"✅ **Частичное подтверждение ставки!**\n\n"
-                f"📍 Маршрут: *{row[2]}*\n"
-                f"💰 Цена: *{agreed_rate}*\n"
-                f"🚛 Авто: *{confirmed_qty}*"
-            ),
-            parse_mode="Markdown"
+                f"✅ Частичное подтверждение ставки!\n\n"
+                f"📍 Маршрут: {row[2]}\n"
+                f"💰 Цена: {agreed_rate}\n"
+                f"🚛 Авто: {confirmed_qty}"
+            )
         )
     except Exception:
         pass
 
-    old_text = callback.message.text.split("**Выберите количество")[0].strip()
+    old_text = callback.message.text.split("Выберите количество")[0].strip()
     await callback.message.edit_text(
-        old_text + f"\n\n**[СТАТУС: Частично подтверждено ({confirmed_qty} авто) ✅]**",
-        reply_markup=None,
-        parse_mode="Markdown"
+        old_text + f"\n\n[СТАТУС: Частично подтверждено ({confirmed_qty} авто) ✅]",
+        reply_markup=None
     )
     await callback.answer("Успешно!")
 
@@ -1036,17 +1019,16 @@ async def admin_decline_bid(callback: types.CallbackQuery):
     try:
         await bot.send_message(
             chat_id=carrier_id, 
-            text=f"❌ Ваша ставка ({rate}) по грузу отклонена администратором.", 
-            parse_mode="Markdown"
+            text=f"❌ Ваша ставка ({rate}) по грузу отклонена администратором."
         )
     except Exception:
         pass
         
-    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: Отклонено ❌]**", reply_markup=None, parse_mode="Markdown")
+    await callback.message.edit_text(callback.message.text + "\n\n[СТАТУС: Отклонено ❌]", reply_markup=None)
     await callback.answer("Отклонено.")
 
 
-# ==================== АДМИН-ПАНЕЛЬ И НАСТРОЙКИ ====================
+# ==================== АДМИН-ПАНЕЛЬ ====================
 @dp.callback_query(F.data.startswith("adm_start_del_"))
 async def admin_delete_cargo(callback: types.CallbackQuery):
     cargo_id = int(callback.data.replace("adm_start_del_", ""))
@@ -1057,7 +1039,7 @@ async def admin_delete_cargo(callback: types.CallbackQuery):
     conn.close()
     
     await update_cargo_messages_for_all_users(cargo_id)
-    await callback.message.edit_text(callback.message.text + "\n\n**[СТАТУС: ГРУЗ ЗАКРЫТ 🚫]**", reply_markup=None, parse_mode="Markdown")
+    await callback.message.edit_text(callback.message.text + "\n\n[СТАТУС: ГРУЗ ЗАКРЫТ 🚫]", reply_markup=None)
     await callback.answer("Груз закрыт!")
 
 @dp.callback_query(F.data.startswith("adm_start_edit_"))
@@ -1106,7 +1088,6 @@ async def handle_admin_messages_and_posts(event: types.Message):
         builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
         builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
         builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
-        builder.row(types.InlineKeyboardButton(text="⚙️ Настройки (таймер/комментарий)", callback_data="adm_menu_settings"))
         await event.answer("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
         return
 
@@ -1131,61 +1112,12 @@ async def handle_admin_messages_and_posts(event: types.Message):
                 pass
         await event.answer(f"✅ Рассылка завершена ({success_count} польз.).")
 
-# --- Меню Настроек ---
-@dp.callback_query(F.data == "adm_menu_settings")
-async def admin_menu_settings(callback: types.CallbackQuery):
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT key, value FROM settings")
-    settings = dict(cursor.fetchall())
-    conn.close()
-    
-    timer_val = settings.get('timer_hours', '24')
-    comm_val = settings.get('default_comment', '-')
-    
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text=f"⏱ Таймер удаления/обновления: {timer_val}ч", callback_data="adm_set_timer"))
-    builder.row(types.InlineKeyboardButton(text=f"💬 Комментарий по умолч.: {comm_val[:20]}...", callback_data="adm_set_comment"))
-    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="adm_menu_back"))
-    
-    await callback.message.edit_text("⚙️ **Настройки системы:**\nНажмите на параметр для изменения:", reply_markup=builder.as_markup(), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "adm_set_timer")
-async def admin_set_timer(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(setting_key="timer_hours")
-    await callback.message.answer("Введите новое значение для таймера (в часах, например: `12` или `24`):", parse_mode="Markdown")
-    await state.set_state(AdminEditStates.waiting_for_setting_value)
-    await callback.answer()
-
-@dp.callback_query(F.data == "adm_set_comment")
-async def admin_set_comment(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(setting_key="default_comment")
-    await callback.message.answer("Введите новый комментарий по умолчанию для ставок перевозчиков:", parse_mode="Markdown")
-    await state.set_state(AdminEditStates.waiting_for_setting_value)
-    await callback.answer()
-
-@dp.message(AdminEditStates.waiting_for_setting_value)
-async def admin_save_setting(message: types.Message, state: FSMContext):
-    val = message.text.strip()
-    data = await state.get_data()
-    key = data.get("setting_key")
-    
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, val))
-    conn.commit()
-    conn.close()
-    
-    await state.clear()
-    await message.answer(f"✅ Настройка успешно сохранена!", reply_markup=get_main_reply_markup())
-
 @dp.callback_query(F.data == "adm_menu_back")
 async def admin_menu_back(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
     builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
     builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
-    builder.row(types.InlineKeyboardButton(text="⚙️ Настройки (таймер/комментарий)", callback_data="adm_menu_settings"))
     await callback.message.edit_text("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "adm_menu_active")
@@ -1213,8 +1145,7 @@ async def admin_menu_active(callback: types.CallbackQuery):
             await bot.send_message(
                 chat_id=ADMIN_CHANNEL_ID,
                 text=f"ID: #{load_id}\n\n{load_text}",
-                reply_markup=admin_kb.as_markup(),
-                parse_mode="Markdown"
+                reply_markup=admin_kb.as_markup()
             )
             await asyncio.sleep(0.05)
         except Exception:
@@ -1225,7 +1156,7 @@ async def admin_menu_confirmed(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     for direction in CHANNELS.keys():
         builder.row(types.InlineKeyboardButton(text=direction, callback_data=f"adm_dir_{direction}"[:64]))
-    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="adm_menu_back"))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад в меню админа", callback_data="adm_menu_back"))
     await callback.message.edit_text("🤝 **Выберите направление:**", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("adm_dir_"))
@@ -1252,14 +1183,17 @@ async def admin_show_confirmed_by_dir(callback: types.CallbackQuery):
         
     await callback.answer("Загружаю...")
     for deal_id, load_id, date, route, cars, price, company, name, phone, user_id in deals:
+        comp_str = company or "Не указана"
+        name_str = name or "Пользователь"
+        phone_str = phone or "Не указан"
         text = (
-            f"🤝 **Сделка #{deal_id} (Груз #{load_id})**\n\n"
-            f"📍 {route}\n📅 Дата: {date}\n🚛 Авто: **{cars}** | 💰 Ставка: **{price}**\n\n"
-            f"👤 {company} | {name} | {phone}\n💬 [Написать](tg://user?id={user_id})"
+            f"🤝 Сделка #{deal_id} (Груз #{load_id})\n\n"
+            f"📍 {route}\n📅 Дата: {date}\n🚛 Авто: {cars} | 💰 Ставка: {price}\n\n"
+            f"👤 {comp_str} | {name_str} | {phone_str}\n💬 Написать: tg://user?id={user_id}"
         )
         kb = InlineKeyboardBuilder()
         kb.row(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"adm_ask_cancel_qty_{deal_id}"))
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=text, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("adm_ask_cancel_qty_"))
 async def admin_ask_cancel_qty(callback: types.CallbackQuery):
@@ -1279,7 +1213,7 @@ async def admin_ask_cancel_qty(callback: types.CallbackQuery):
     for i in range(1, max_cars + 1):
         builder.add(types.InlineKeyboardButton(text=f"{i} авто", callback_data=f"adm_exec_cancel_{deal_id}_{i}"))
     builder.adjust(3)
-    await callback.message.edit_text(text=callback.message.text + f"\n\n**Сколько авто отменить из {max_cars}?**", reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.message.edit_text(text=callback.message.text + f"\n\nСколько авто отменить из {max_cars}?", reply_markup=builder.as_markup())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("adm_exec_cancel_"))
@@ -1305,28 +1239,29 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
         conn.commit()
         conn.close()
         try:
-            await bot.send_message(chat_id=carrier_id, text=f"⚠️ Ваш груз по маршруту {route} отменен администратором.", parse_mode="Markdown")
+            await bot.send_message(chat_id=carrier_id, text=f"⚠️ Ваш груз по маршруту {route} отменен администратором.")
         except Exception:
             pass
-        await callback.message.edit_text(callback.message.text + "\n\n**[ОТМЕНЕНО 🔒]**", reply_markup=None, parse_mode="Markdown")
+        await callback.message.edit_text(callback.message.text + "\n\n[ОТМЕНЕНО 🔒]", reply_markup=None)
     else:
         new_cars = current_deal_cars - cancel_qty
         cursor.execute("UPDATE confirmed_deals SET cars = ? WHERE id = ?", (new_cars, deal_id))
         conn.commit()
         conn.close()
         try:
-            await bot.send_message(chat_id=carrier_id, text=f"⚠️ По сделке ({route}) отменено {cancel_qty} авто. Осталось в сделке: {new_cars}.", parse_mode="Markdown")
+            await bot.send_message(chat_id=carrier_id, text=f"⚠️ По сделке ({route}) отменено {cancel_qty} авто. Осталось в сделке: {new_cars}.")
         except Exception:
             pass
-        await callback.message.edit_text(callback.message.text + f"\n\n**[Отменено авто: {cancel_qty}]**", reply_markup=None, parse_mode="Markdown")
+        await callback.message.edit_text(callback.message.text + f"\n\n[Отменено авто: {cancel_qty}]", reply_markup=None)
     await callback.answer("Готово!")
 
 @dp.callback_query(F.data == "adm_menu_carriers")
 async def admin_menu_carriers(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🌐 По всем направлениям", callback_data="adm_car_dir_ALL"))
     for direction in CHANNELS.keys():
         builder.row(types.InlineKeyboardButton(text=direction, callback_data=f"adm_car_dir_{direction}"[:64]))
-    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="adm_menu_back"))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад в меню админа", callback_data="adm_menu_back"))
     await callback.message.edit_text("👥 **Выберите направление:**", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("adm_car_dir_"))
@@ -1338,45 +1273,86 @@ async def admin_show_carriers_by_dir(callback: types.CallbackQuery):
     all_users = cursor.fetchall()
     conn.close()
     
+    found_any = False
     for u_id, comp, name, phone, u_status, subs_str in all_users:
         subs = subs_str.split(",") if subs_str else []
-        if direction in subs:
+        if direction == "ALL" or direction in subs:
+            found_any = True
+            comp_str = comp or "Не указана"
+            name_str = name or "Не указано"
+            phone_str = phone or "Не указан"
             status_label = "🟢 Активен" if u_status != 'BLOCKED' else "🔴 Заблокирован"
-            text = f"🏢 {comp} | 👤 {name}\n📞 {phone}\nID: `{u_id}` | {status_label}"
+            text = f"🏢 {comp_str} | 👤 {name_str}\n📞 {phone_str}\nID: `{u_id}` | {status_label}"
+            
             kb = InlineKeyboardBuilder()
             if u_status != 'BLOCKED':
-                kb.row(types.InlineKeyboardButton(text="🔴 Блок", callback_data=f"adm_block_user_{u_id}_{direction}"))
+                kb.row(types.InlineKeyboardButton(text="🔴 Заблокировать", callback_data=f"adm_block_user_{u_id}_{direction}"))
             else:
-                kb.row(types.InlineKeyboardButton(text="🟢 Разблок", callback_data=f"adm_unblock_user_{u_id}_{direction}"))
+                kb.row(types.InlineKeyboardButton(text="🟢 Разблокировать", callback_data=f"adm_unblock_user_{u_id}_{direction}"))
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=text, reply_markup=kb.as_markup(), parse_mode="Markdown")
-    await callback.answer("Список отправлен")
+            await asyncio.sleep(0.05)
+            
+    if not found_any:
+        await callback.answer("Перевозчики не найдены.", show_alert=True)
+    else:
+        await callback.answer("Список загружен")
 
 @dp.callback_query(F.data.startswith("adm_block_user_"))
 async def admin_block_user(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[3])
+    parts = callback.data.split("_")
+    user_id = int(parts[3])
+    direction = parts[4] if len(parts) > 4 else "ALL"
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET status = 'BLOCKED' WHERE user_id = ?", (user_id,))
-    conn.commit()
+    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
     conn.close()
+
     try:
         await bot.send_message(chat_id=user_id, text="❌ Ваш аккаунт заблокирован администратором.")
     except Exception:
         pass
+
+    comp_str = row[0] if row and row[0] else "Не указана"
+    name_str = row[1] if row and row[1] else "Не указано"
+    phone_str = row[2] if row and row[2] else "Не указан"
+    
+    new_text = f"🏢 {comp_str} | 👤 {name_str}\n📞 {phone_str}\nID: `{user_id}` | 🔴 Заблокирован"
+    kb = InlineKeyboardBuilder()
+    kb.row(types.InlineKeyboardButton(text="🟢 Разблокировать", callback_data=f"adm_unblock_user_{user_id}_{direction}"))
+
+    await callback.message.edit_text(text=new_text, reply_markup=kb.as_markup(), parse_mode="Markdown")
     await callback.answer("Заблокирован!")
 
 @dp.callback_query(F.data.startswith("adm_unblock_user_"))
 async def admin_unblock_user(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[3])
+    parts = callback.data.split("_")
+    user_id = int(parts[3])
+    direction = parts[4] if len(parts) > 4 else "ALL"
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET status = 'ACTIVE' WHERE user_id = ?", (user_id,))
-    conn.commit()
+    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
     conn.close()
+
     try:
         await bot.send_message(chat_id=user_id, text="✅ Ваш аккаунт разблокирован!")
     except Exception:
         pass
+
+    comp_str = row[0] if row and row[0] else "Не указана"
+    name_str = row[1] if row and row[1] else "Не указано"
+    phone_str = row[2] if row and row[2] else "Не указан"
+
+    new_text = f"🏢 {comp_str} | 👤 {name_str}\n📞 {phone_str}\nID: `{user_id}` | 🟢 Активен"
+    kb = InlineKeyboardBuilder()
+    kb.row(types.InlineKeyboardButton(text="🔴 Заблокировать", callback_data=f"adm_block_user_{user_id}_{direction}"))
+
+    await callback.message.edit_text(text=new_text, reply_markup=kb.as_markup(), parse_mode="Markdown")
     await callback.answer("Разблокирован!")
 
 
@@ -1460,7 +1436,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .main-nav {
             display: flex;
-            gap: 6px;
+            gap: 4px;
             margin-bottom: 10px;
             background: var(--card);
             padding: 4px;
@@ -1470,14 +1446,15 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .nav-btn {
             flex: 1;
-            padding: 8px;
+            padding: 8px 4px;
             text-align: center;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             border-radius: 7px;
             cursor: pointer;
             color: var(--hint);
             transition: all 0.2s;
+            white-space: nowrap;
         }
 
         .nav-btn.active {
@@ -1611,7 +1588,7 @@ INDEX_HTML = """<!DOCTYPE html>
             font-weight: 700;
         }
 
-        textarea {
+        textarea, input[type="text"] {
             width: 100%;
             box-sizing: border-box;
             background: var(--card);
@@ -1622,9 +1599,9 @@ INDEX_HTML = """<!DOCTYPE html>
             font-size: 12px;
             margin-bottom: 10px;
             font-family: inherit;
-            resize: none;
-            height: 42px;
         }
+
+        textarea { resize: none; height: 42px; }
 
         .buttons {
             display: flex;
@@ -1650,6 +1627,57 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
 
+        /* Профиль / Кабинет */
+        .profile-card {
+            background: var(--card);
+            border-radius: 10px;
+            padding: 14px;
+            border: 1px solid var(--border);
+            margin-bottom: 12px;
+        }
+
+        .profile-title {
+            font-weight: 700;
+            font-size: 13px;
+            margin-bottom: 10px;
+            color: var(--text);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--hint);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .subs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .sub-item {
+            background: var(--bg);
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sub-item input { width: 16px; height: 16px; margin: 0; }
+
         .modal-overlay {
             display: none;
             position: fixed;
@@ -1670,17 +1698,6 @@ INDEX_HTML = """<!DOCTYPE html>
             box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         }
         .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center; }
-        .modal-card input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 9px;
-            margin-bottom: 10px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--bg);
-            color: var(--text);
-            font-size: 13px;
-        }
     </style>
 </head>
 <body>
@@ -1688,10 +1705,12 @@ INDEX_HTML = """<!DOCTYPE html>
     <div class="header-title">ЧТУП «Белкаспиан» | Биржа</div>
 
     <div class="main-nav">
-        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Доступные грузы</div>
+        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Биржа</div>
         <div class="nav-btn" id="tab-my" onclick="switchTab('my')">📦 Мои заявки</div>
+        <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
     </div>
 
+    <!-- Фильтр направлений -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
         <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
@@ -1702,7 +1721,8 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
     </div>
 
-    <div class="table-container">
+    <!-- Список грузов / Таблица -->
+    <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
             <div>Направление</div>
@@ -1712,6 +1732,40 @@ INDEX_HTML = """<!DOCTYPE html>
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
+    <!-- Блок личного кабинета -->
+    <div id="profile-container" style="display: none;">
+        <div class="profile-card">
+            <div class="profile-title">👤 Данные компании</div>
+            <div class="form-group">
+                <label>Компания:</label>
+                <input type="text" id="profCompany" placeholder="Название вашей компании..." />
+            </div>
+            <div class="form-group">
+                <label>Имя контактного лица:</label>
+                <input type="text" id="profName" placeholder="Ваше имя..." />
+            </div>
+            <div class="form-group">
+                <label>Телефон:</label>
+                <input type="text" id="profPhone" placeholder="+375 / +7..." />
+            </div>
+        </div>
+
+        <div class="profile-card">
+            <div class="profile-title">🔔 Подписки на направления</div>
+            <div class="subs-grid">
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Казахстан 🇰🇿"> 🇰🇿 Казахстан</div>
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</div>
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</div>
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Грузия 🇬🇪"> 🇬🇪 Грузия</div>
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</div>
+                <div class="sub-item"><input type="checkbox" class="sub-cb" value="Армения 🇦🇲"> 🇦🇲 Армения</div>
+            </div>
+        </div>
+
+        <button class="btn-confirm" style="width: 100%; padding: 12px; font-size: 13px;" onclick="saveProfile()">💾 Сохранить данные профиля</button>
+    </div>
+
+    <!-- Модальное окно "Своя ставка" -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
             <div class="modal-title">💰 Предложить свою цену</div>
@@ -1751,8 +1805,17 @@ INDEX_HTML = """<!DOCTYPE html>
             currentTab = tab;
             document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
             document.getElementById('tab-my').classList.toggle('active', tab === 'my');
+            document.getElementById('tab-profile').classList.toggle('active', tab === 'profile');
+
             document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'flex' : 'none';
-            loadData();
+            document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
+            document.getElementById('profile-container').style.display = (tab === 'profile') ? 'block' : 'none';
+
+            if (tab === 'profile') {
+                loadProfile();
+            } else {
+                loadData();
+            }
         }
 
         function setFilter(country, el) {
@@ -1765,7 +1828,8 @@ INDEX_HTML = """<!DOCTYPE html>
 
         async function loadData() {
             tbody.innerHTML = '<div class="loader">Загрузка...</div>';
-            let userId = tg.initDataUnsafe?.user?.id || 0;
+            let user = tg.initDataUnsafe?.user || {};
+            let userId = user.id || 0;
 
             try {
                 if (currentTab === 'catalog') {
@@ -1798,6 +1862,18 @@ INDEX_HTML = """<!DOCTYPE html>
                             carsSelect = `<input type="hidden" id="qty-${l.id}" value="1">`;
                         }
 
+                        let isAuction = !l.price || /торг|запрос|договор|по запросу/i.test(l.price);
+
+                        let actionButtons = '';
+                        if (isAuction) {
+                            actionButtons = `<button class="btn-offer" style="width:100%;" onclick="openOfferModal('${l.id}', event)">💰 Предложить авто по цене</button>`;
+                        } else {
+                            actionButtons = `
+                                <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">✅ Подтвердить</button>
+                                <button class="btn-offer" onclick="openOfferModal('${l.id}', event)">💰 Своя цена</button>
+                            `;
+                        }
+
                         return `
                         <div class="t-row" onclick="toggleRow('${l.id}')">
                             <div class="col-date">${l.date}</div>
@@ -1820,13 +1896,12 @@ INDEX_HTML = """<!DOCTYPE html>
                             <textarea id="comment-${l.id}" placeholder="Комментарий / Заметка к заявке..."></textarea>
                             
                             <div class="buttons">
-                                <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">✅ Подтвердить</button>
-                                <button class="btn-offer" onclick="openOfferModal('${l.id}', event)">💰 Своя цена</button>
+                                ${actionButtons}
                             </div>
                         </div>
                     `}).join('');
 
-                } else {
+                } else if (currentTab === 'my') {
                     let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
 
@@ -1847,6 +1922,63 @@ INDEX_HTML = """<!DOCTYPE html>
 
             } catch(e) {
                 tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+            }
+        }
+
+        async function loadProfile() {
+            let user = tg.initDataUnsafe?.user || {};
+            let userId = user.id || 0;
+            if (!userId) return;
+
+            try {
+                let res = await fetch(`/api/profile?user_id=${userId}&t=` + Date.now());
+                let data = await res.json();
+                if (data.profile) {
+                    document.getElementById('profCompany').value = data.profile.company || '';
+                    document.getElementById('profName').value = data.profile.name || user.first_name || '';
+                    document.getElementById('profPhone').value = data.profile.phone || '';
+
+                    let subs = (data.profile.subscriptions || '').split(',');
+                    document.querySelectorAll('.sub-cb').forEach(cb => {
+                        cb.checked = subs.some(s => s.trim() && cb.value.includes(s.trim()));
+                    });
+                }
+            } catch(e) {}
+        }
+
+        async function saveProfile() {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+            let user = tg.initDataUnsafe?.user || {};
+            let userId = user.id || 11111111;
+
+            let company = document.getElementById('profCompany').value.trim();
+            let name = document.getElementById('profName').value.trim();
+            let phone = document.getElementById('profPhone').value.trim();
+
+            let selectedSubs = [];
+            document.querySelectorAll('.sub-cb:checked').forEach(cb => selectedSubs.push(cb.value));
+
+            try {
+                let res = await fetch('/api/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        company: company,
+                        name: name,
+                        phone: phone,
+                        subscriptions: selectedSubs.join(',')
+                    })
+                });
+
+                if (res.ok) {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                    notify('✅ Данные профиля и подписки успешно сохранены!');
+                } else {
+                    notify('❌ Ошибка сохранения данных.');
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
             }
         }
 
@@ -1929,7 +2061,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 
                 let respData = await res.json();
 
-                if (res.ok) {
+                if (res.ok && respData.status === 'success') {
                     if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
                     notify('✅ Заявка успешно отправлена логисту!');
                     loadData(); 
@@ -1983,7 +2115,7 @@ async def get_loads_api(request):
         "route": r[1] if r[1] else "Не указан",
         "date": r[2] if r[2] else "Срочно",
         "cars": r[3] if r[3] else "1",
-        "price": r[4] if r[4] else "По запросу",
+        "price": r[4] if r[4] else "Торги",
         "raw_text": r[5],
         "cargo_type": r[6],
         "weight": r[7],
@@ -2016,6 +2148,59 @@ async def my_loads_api(request):
         "price": r[4]
     } for r in rows]
     return web.json_response({"deals": deals})
+
+async def profile_get_api(request):
+    user_id = request.query.get('user_id')
+    if not user_id:
+        return web.json_response({"profile": None})
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT company, name, phone, subscriptions FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return web.json_response({
+            "profile": {
+                "company": row[0] or "",
+                "name": row[1] or "",
+                "phone": row[2] or "",
+                "subscriptions": row[3] or ""
+            }
+        })
+    return web.json_response({"profile": None})
+
+async def profile_post_api(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Bad JSON"}, status=400)
+
+    user_id = data.get('user_id')
+    if not user_id:
+        return web.json_response({"error": "No user_id"}, status=400)
+
+    company = data.get('company', '')
+    name = data.get('name', '')
+    phone = data.get('phone', '')
+    subscriptions = data.get('subscriptions', '')
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO users (user_id, company, name, phone, subscriptions, status)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+        ON CONFLICT(user_id) DO UPDATE SET
+            company = excluded.company,
+            name = excluded.name,
+            phone = excluded.phone,
+            subscriptions = excluded.subscriptions
+    """, (user_id, company, name, phone, subscriptions))
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success"})
 
 async def book_load_api(request):
     load_id = int(request.match_info.get('id'))
@@ -2063,8 +2248,8 @@ async def book_load_api(request):
     status, route, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
     current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
 
-    user_link = f"@{username}" if username else f"[{u_name}](tg://user?id={user_id})"
-    carrier_info = f"👤 Перевозчик: {user_link} | {company_name or 'Не указана'} | {u_name} | {u_phone or 'Не указан'}"
+    user_link = f"@{username}" if username else f"{u_name} (ID: {user_id})"
+    carrier_info = f"👤 Перевозчик: {user_link} | Компания: {company_name or 'Не указана'} | Имя: {u_name} | Тел: {u_phone or 'Не указан'}"
 
     if action == 'confirm':
         if requested_cars > current_cars:
@@ -2087,14 +2272,14 @@ async def book_load_api(request):
         await update_cargo_messages_for_all_users(load_id)
 
         admin_notification = (
-            f"🎯 **Заявка на груз из Web App!**\n\n"
+            f"🎯 Заявка на груз из Web App!\n\n"
             f"📦 Описание:\n{raw_cargo_text or route}\n\n"
-            f"🚛 Забирает авто: **{requested_cars}**\n"
-            f"💬 Комментарий: *{carrier_comment or 'Нет'}*\n"
+            f"🚛 Забирает авто: {requested_cars}\n"
+            f"💬 Комментарий: {carrier_comment or 'Нет'}\n"
             f"{carrier_info}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification)
         except Exception as e:
             logging.error(f"Error sending admin notification: {e}")
 
@@ -2120,14 +2305,13 @@ async def book_load_api(request):
             await bot.send_message(
                 chat_id=ADMIN_CHANNEL_ID,
                 text=(
-                    f"💰 **Новая ставка через Web App!**\n\n"
+                    f"💰 Новая ставка через Web App!\n\n"
                     f"🆔 Груз #{load_id} | Маршрут: {route}\n"
-                    f"💵 Ставка: **{proposed_price}** | 🚛 Авто: **{requested_cars}**\n"
-                    f"💬 Комментарий: *{carrier_comment or 'Нет'}*\n"
+                    f"💵 Ставка: {proposed_price} | 🚛 Авто: {requested_cars}\n"
+                    f"💬 Комментарий: {carrier_comment or 'Нет'}\n"
                     f"{carrier_info}"
                 ),
-                reply_markup=admin_builder.as_markup(),
-                parse_mode="Markdown"
+                reply_markup=admin_builder.as_markup()
             )
         except Exception as e:
             logging.error(f"Error sending bid notification: {e}")
@@ -2215,6 +2399,8 @@ async def web_server():
     app.router.add_get("/directions", serve_directions)
     app.router.add_get("/api/loads", get_loads_api)
     app.router.add_get("/api/my_loads", my_loads_api)
+    app.router.add_get("/api/profile", profile_get_api)
+    app.router.add_post("/api/profile", profile_post_api)
     app.router.add_post("/api/book/{id}", book_load_api)
     
     app.on_startup.append(webserver_on_startup)
