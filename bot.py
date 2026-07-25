@@ -70,7 +70,6 @@ def init_db():
         )
     """)
     
-    # Новая таблица для сохранения подтвержденных сделок (чтобы корректно отображать "Мои грузы")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS confirmed_deals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -416,7 +415,7 @@ async def show_main_menu(message: types.Message):
     
     text = (
         "⚙️ **Главное меню и направления**\n\n"
-        "Нажимайте на направления ниже, чтобы подписаться или отписаться (это влияет только на кнопку «Посмотреть актуальные грузы»):\n\n"
+        "Нажимайте на направления ниже, чтобы подписаться или отписаться:\n\n"
         f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
     )
     
@@ -498,7 +497,6 @@ async def show_confirmed_cargos_handler(message: types.Message):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    # Вытягиваем сделки ИМЕННО из подтвержденной таблицы, чистые данные
     cursor.execute("SELECT date, route, cars, price, details FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC", (user_id,))
     confirmed_loads = cursor.fetchall()
     conn.close()
@@ -621,7 +619,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
             
-        # Записываем в отдельную таблицу "Мои грузы"
         cursor.execute("""
             INSERT INTO confirmed_deals (user_id, date, route, cars, price, details)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -713,7 +710,6 @@ async def admin_accept_bid(callback: types.CallbackQuery):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', price = ? WHERE load_id = ?", (agreed_rate, cargo_id))
             
-        # Записываем в сделки
         cursor.execute("""
             INSERT INTO confirmed_deals (user_id, date, route, cars, price, details)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -771,7 +767,6 @@ async def admin_partial_bid(callback: types.CallbackQuery):
         await callback.answer("Свободных авто по этому грузу не осталось!", show_alert=True)
         return
     
-    # Генерация кнопок с конкретным количеством (от 1 до allowed_max)
     builder = InlineKeyboardBuilder()
     safe_rate = agreed_rate.replace(" ", "_")
     
@@ -817,7 +812,6 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', price = ? WHERE load_id = ?", (agreed_rate, cargo_id))
 
-        # Записываем в подтвержденные сделки
         cursor.execute("""
             INSERT INTO confirmed_deals (user_id, date, route, cars, price, details)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -851,8 +845,6 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    # Убираем клавиатуру с кнопками "1 авто", "2 авто" и ставим статус
-    # Отрезаем последний абзац "Выберите количество авто..." чтобы карточка выглядела чисто
     old_text = callback.message.text.split("**Выберите количество авто")[0].strip()
     
     await callback.message.edit_text(
@@ -1005,9 +997,8 @@ async def handle_admin_messages_and_posts(event: types.Message):
                 pass
         return
 
-    # Логика рассылки: если сообщение начинается с '!', отправляем как текст пользователям. В базу как груз НЕ идет.
     if cleaned_text.startswith("!"):
-        broadcast_text = cleaned_text[1:].lstrip() # Убираем '!' и пробелы
+        broadcast_text = cleaned_text[1:].lstrip()
         if not broadcast_text:
             return
 
@@ -1028,7 +1019,6 @@ async def handle_admin_messages_and_posts(event: types.Message):
                     
         await event.answer(f"✅ Сообщение ({success_count} шт.) успешно разослано пользователям в чистом виде.")
     else:
-        # Любой другой текст (без '!') просто игнорируется
         return
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
@@ -1059,14 +1049,19 @@ async def handle_channel_post(message: types.Message):
         
     conn.commit()
     
-    cursor.execute("SELECT user_id FROM users")
+    # ❗️ ИСПРАВЛЕНИЕ ЗДЕСЬ: запрашиваем юзеров И их подписки
+    cursor.execute("SELECT user_id, subscriptions FROM users")
     all_users = cursor.fetchall()
     conn.close()
     
     for cargo_id in created_cargo_ids:
-        for (u_id,) in all_users:
-            await send_cargo_to_user(u_id, cargo_id)
-            await asyncio.sleep(0.05)
+        for u_id, subs in all_users:
+            # ❗️ Сравниваем направление груза с подписками юзера
+            if subs:
+                user_subs = [s.strip() for s in subs.split(",")]
+                if direction in user_subs:
+                    await send_cargo_to_user(u_id, cargo_id)
+                    await asyncio.sleep(0.05)
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
