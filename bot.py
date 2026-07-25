@@ -92,7 +92,6 @@ class AdminEditStates(StatesGroup):
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="🏠 Меню и направления"))
-    # Располагаем две кнопки в один ряд
     builder.add(types.KeyboardButton(text="📋 Посмотреть актуальные грузы"))
     builder.add(types.KeyboardButton(text="📦 Мои подтвержденные грузы"))
     builder.adjust(1, 2)
@@ -488,7 +487,7 @@ async def show_confirmed_cargos_handler(message: types.Message):
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, date, route, price, cars_count, details, status FROM loads WHERE taken_by = ? ORDER BY load_id DESC", (user_id,))
+    cursor.execute("SELECT date, route, price, cars_count, details, status FROM loads WHERE taken_by = ? ORDER BY load_id DESC", (user_id,))
     confirmed_loads = cursor.fetchall()
     conn.close()
     
@@ -497,11 +496,11 @@ async def show_confirmed_cargos_handler(message: types.Message):
         return
         
     await message.answer("📦 **Ваши подтвержденные грузы:**", parse_mode="Markdown", reply_markup=get_main_reply_markup())
-    for load_id, date_str, route_str, price_str, cars_str, details_text, status in confirmed_loads:
+    for date_str, route_str, price_str, cars_str, details_text, status in confirmed_loads:
         is_closed = (status == 'CLOSED')
         card_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=is_closed)
         try:
-            await message.answer(f"ID: #{load_id}\n\n{card_text}", parse_mode="Markdown")
+            await message.answer(card_text, parse_mode="Markdown")
             await asyncio.sleep(0.05)
         except Exception as e:
             logging.error(f"Не удалось отправить подтвержденный груз пользователю: {e}")
@@ -636,7 +635,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
         admin_builder = InlineKeyboardBuilder()
         btn_accept = types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{cargo_id}_{user_id}_{requested_cars}_{safe_rate}")
-        btn_partial = types.InlineKeyboardButton(text="🔀 Подтвердить часть", callback_data=f"partial_bid_{cargo_id}_{user_id}_{safe_rate}")
+        btn_partial = types.InlineKeyboardButton(text="🔀 Подтвердить часть", callback_data=f"partial_bid_{cargo_id}_{user_id}_{requested_cars}_{safe_rate}")
         btn_decline = types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{cargo_id}_{user_id}")
         
         admin_builder.row(btn_accept, btn_partial)
@@ -671,14 +670,18 @@ async def admin_accept_bid(callback: types.CallbackQuery):
     if row:
         current_cars_str, date_str, route_str, details_str, base_price = row
         current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
+        
+        if accepted_qty > current_cars:
+            accepted_qty = current_cars
+
         if current_cars > accepted_qty:
             left_cars = current_cars - accepted_qty
-            cursor.execute("UPDATE loads SET cars_count = ?, taken_by = ? WHERE load_id = ?", (str(left_cars), carrier_id, cargo_id))
+            cursor.execute("UPDATE loads SET cars_count = ?, price = ?, taken_by = ? WHERE load_id = ?", (str(left_cars), agreed_rate, carrier_id, cargo_id))
             conn.commit()
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
         else:
-            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', taken_by = ? WHERE load_id = ?", (carrier_id, cargo_id))
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', price = ?, taken_by = ? WHERE load_id = ?", (agreed_rate, carrier_id, cargo_id))
             conn.commit()
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
@@ -712,9 +715,8 @@ async def admin_partial_bid(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
     cargo_id = int(parts[2])
     carrier_id = int(parts[3])
-    agreed_rate = "_".join(parts[4:]).replace("_", " ")
-    
-    await state.update_data(partial_cargo_id=cargo_id, partial_carrier_id=carrier_id, partial_agreed_rate=agreed_rate)
+    max_requested = int(parts[4])
+    agreed_rate = "_".join(parts[5:]).replace("_", " ")
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -722,7 +724,20 @@ async def admin_partial_bid(callback: types.CallbackQuery, state: FSMContext):
     row = cursor.fetchone()
     conn.close()
     
-    await callback.message.answer(f"Введите количество грузов для подтверждения части (доступно всего: {row[0] if row else '?'}):")
+    current_cars_str = row[0] if row else "1"
+    current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
+    
+    # Максимум можно подтвердить сколько доступно в базе, но не больше чем просил перевозчик
+    allowed_max = min(current_cars, max_requested)
+    
+    await state.update_data(
+        partial_cargo_id=cargo_id, 
+        partial_carrier_id=carrier_id, 
+        partial_agreed_rate=agreed_rate,
+        partial_max=allowed_max
+    )
+    
+    await callback.message.answer(f"Введите количество грузов для подтверждения (доступно максимум: {allowed_max}):")
     await state.set_state(DealStates.waiting_for_partial_quantity)
     await callback.answer()
 
@@ -732,10 +747,16 @@ async def process_admin_partial_quantity(message: types.Message, state: FSMConte
     cargo_id = data.get("partial_cargo_id")
     carrier_id = data.get("partial_carrier_id")
     agreed_rate = data.get("partial_agreed_rate")
+    allowed_max = data.get("partial_max", 1)
     
     qty_input = message.text.strip()
     match_qty = re.search(r'\d+', qty_input)
     partial_qty = int(match_qty.group(0)) if match_qty else 1
+    
+    if partial_qty > allowed_max:
+        partial_qty = allowed_max
+    if partial_qty < 1:
+        partial_qty = 1
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -746,17 +767,14 @@ async def process_admin_partial_quantity(message: types.Message, state: FSMConte
         current_cars_str, date_str, route_str, details_str, base_price = row
         current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
         
-        if partial_qty > current_cars:
-            partial_qty = current_cars
-            
         if current_cars > partial_qty:
             left_cars = current_cars - partial_qty
-            cursor.execute("UPDATE loads SET cars_count = ?, taken_by = ? WHERE load_id = ?", (str(left_cars), carrier_id, cargo_id))
+            cursor.execute("UPDATE loads SET cars_count = ?, price = ?, taken_by = ? WHERE load_id = ?", (str(left_cars), agreed_rate, carrier_id, cargo_id))
             conn.commit()
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
         else:
-            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', taken_by = ? WHERE load_id = ?", (carrier_id, cargo_id))
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0', price = ?, taken_by = ? WHERE load_id = ?", (agreed_rate, carrier_id, cargo_id))
             conn.commit()
             conn.close()
             await update_cargo_messages_for_all_users(cargo_id)
@@ -928,6 +946,7 @@ async def handle_admin_messages_and_posts(event: types.Message):
                 logging.error(f"Не удалось отправить карточку админу: {e}")
         return
 
+    # Обрабатываем сообщение только если оно начинается с восклицательного знака (!)
     if cleaned_text.startswith("!"):
         cargo_payload = cleaned_text[1:].lstrip()
         if not cargo_payload:
@@ -970,19 +989,8 @@ async def handle_admin_messages_and_posts(event: types.Message):
                     
         await event.answer(f"✅ Груз успешно добавлен и разослан ВСЕМ пользователям.")
     else:
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        all_users = cursor.fetchall()
-        conn.close()
-        
-        for (u_id,) in all_users:
-            try:
-                await bot.send_message(chat_id=u_id, text=cleaned_text)
-                await asyncio.sleep(0.05)
-            except Exception:
-                pass
-        await event.answer("✅ Текст отправлен рассылкой всем пользователям.")
+        # Обычные сообщения в админ-канале без восклицательного знака просто пропускаются (ничего не постим)
+        return
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
 async def handle_channel_post(message: types.Message):
