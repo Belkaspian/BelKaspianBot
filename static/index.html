@@ -2,56 +2,219 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Каталог грузов</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Биржа грузов</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: sans-serif; background: var(--tg-theme-bg-color, #f5f5f5); color: var(--tg-theme-text-color, #000); padding: 10px; margin: 0; }
-        .card { background: var(--tg-theme-secondary-bg-color, #fff); padding: 12px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        button { background: #2481cc; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; margin-top: 5px; }
+        /* Настройки цветов под светлую/темную тему Telegram */
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f4f6f8);
+            --text-color: var(--tg-theme-text-color, #333333);
+            --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+            --button-color: var(--tg-theme-button-color, #0056b3);
+            --button-text: var(--tg-theme-button-text-color, #ffffff);
+            --hint-color: var(--tg-theme-hint-color, #888888);
+        }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color); 
+            color: var(--text-color); 
+            padding: 16px; 
+            margin: 0; 
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        /* Шапка интерфейса */
+        .header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        
+        .header h2 {
+            margin: 0 0 5px 0;
+            font-size: 22px;
+            color: var(--text-color);
+        }
+        
+        .header p {
+            margin: 0;
+            font-size: 14px;
+            color: var(--hint-color);
+            line-height: 1.4;
+        }
+
+        /* Карточки грузов */
+        .card { 
+            background: var(--card-bg); 
+            padding: 18px; 
+            margin-bottom: 16px; 
+            border-radius: 16px; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06); 
+            border: 1px solid rgba(0,0,0,0.04);
+        }
+        
+        .route { 
+            font-size: 16px; 
+            font-weight: 700; 
+            margin-bottom: 14px; 
+            display: flex; 
+            align-items: flex-start; 
+        }
+        
+        .route-icon { margin-right: 8px; font-size: 18px; }
+        
+        .details { 
+            font-size: 14px; 
+            margin-bottom: 16px; 
+            line-height: 1.6; 
+            color: var(--text-color); 
+        }
+        
+        .price-tag {
+            display: inline-block;
+            background: rgba(46, 204, 113, 0.15);
+            color: #27ae60;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 15px;
+            margin-top: 8px;
+        }
+        
+        /* Кнопка действия */
+        button { 
+            background-color: var(--button-color); 
+            color: var(--button-text); 
+            border: none; 
+            padding: 14px; 
+            border-radius: 12px; 
+            cursor: pointer; 
+            width: 100%; 
+            font-weight: 600; 
+            font-size: 16px; 
+            transition: opacity 0.2s;
+        }
+        
+        button:active { opacity: 0.8; }
+        
+        /* Системные сообщения */
+        .status-message { 
+            text-align: center; 
+            margin-top: 40px; 
+            color: var(--hint-color);
+            font-size: 15px;
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        
+        .debug-info {
+            font-size: 11px;
+            color: #e74c3c;
+            margin-top: 12px;
+            text-align: left;
+            word-break: break-all;
+            background: rgba(231, 76, 60, 0.1);
+            padding: 8px;
+            border-radius: 6px;
+        }
     </style>
 </head>
 <body>
-    <h3>📋 Актуальные грузы</h3>
-    <div id="loads-container">Загрузка...</div>
+    <div class="header">
+        <h2>ЧТУП «Белкаспиан»</h2>
+        <p>Грузы для привлеченного транспорта<br>Центральная Азия и Кавказ</p>
+    </div>
+
+    <div id="loads-container">
+        <div class="status-message">🔄 Загрузка актуальных рейсов...</div>
+    </div>
 
     <script>
+        // Инициализация Telegram Web App
         const tg = window.Telegram.WebApp;
-        tg.expand();
+        tg.expand(); // Открываем приложение на весь экран
+        tg.setHeaderColor('secondary_bg_color'); // Красим системный хедер
+
+        const container = document.getElementById('loads-container');
 
         async function loadData() {
             try {
-                let res = await fetch('/api/loads');
+                // Добавляем timestamp (?t=...) для предотвращения жесткого кэширования в ТГ
+                let res = await fetch('/api/loads?t=' + new Date().getTime());
+                
+                if (!res.ok) {
+                    throw new Error(`Ошибка сервера: статус ${res.status}`);
+                }
+                
                 let data = await res.json();
-                let container = document.getElementById('loads-container');
-                if (data.loads.length === 0) {
-                    container.innerHTML = '<p>Нет активных грузов</p>';
+                
+                // Если база данных пуста или нет активных грузов
+                if (!data.loads || data.loads.length === 0) {
+                    container.innerHTML = `
+                        <div class="status-message">
+                            📭 В базе пока нет активных грузов.<br>
+                            <small style="display:block; margin-top:8px;">Ожидайте появления новых заявок от логистов.</small>
+                        </div>`;
                     return;
                 }
+                
+                // Отрисовка карточек, если данные есть
                 container.innerHTML = data.loads.map(l => `
                     <div class="card">
-                        <b>📍 ${l.route}</b><br>
-                        📅 Дата: ${l.date} | 🚚 Авто: ${l.cars}<br>
-                        💰 Цена: <b>${l.price}</b><br>
-                        📝 ${l.car_type}<br>
-                        <button onclick="book(${l.id})">Взять груз</button>
+                        <div class="route">
+                            <span class="route-icon">📍</span> 
+                            <span>${l.route}</span>
+                        </div>
+                        <div class="details">
+                            📅 <b>Дата погрузки:</b> ${l.date}<br>
+                            🚚 <b>Тип авто:</b> ${l.car_type || 'По запросу'}<br>
+                            🚛 <b>Количество авто:</b> ${l.cars} шт.<br>
+                            <div class="price-tag">💰 ${l.price}</div>
+                        </div>
+                        <button onclick="book(${l.id})">Забронировать транспорт</button>
                     </div>
                 `).join('');
+                
             } catch(e) {
-                document.getElementById('loads-container'].innerHTML = 'Ошибка загрузки';
+                // Если запрос упал (например, сервер не отвечает) — выводим ошибку на экран
+                container.innerHTML = `
+                    <div class="status-message">
+                        ⚠️ Не удалось загрузить данные.<br>
+                        <div class="debug-info">Техническая деталь: ${e.message}</div>
+                    </div>`;
             }
         }
 
         async function book(id) {
-            let userId = tg.initDataUnsafe?.user?.id || 12345;
-            let res = await fetch(`/api/book/${id}?user_id=${userId}`, { method: 'POST' });
-            if (res.ok) {
-                alert('Груз успешно забронирован!');
-                loadData();
-            } else {
-                alert('Груз уже занят кем-то другим.');
-                loadData();
+            let userId = tg.initDataUnsafe?.user?.id;
+            
+            // Если открыли просто в браузере (для тестов)
+            if (!userId) {
+                userId = 11111111; 
+            }
+            
+            try {
+                if (tg.HapticFeedback) {
+                    tg.HapticFeedback.impactOccurred('light'); // Легкая вибрация при нажатии
+                }
+                
+                let res = await fetch(`/api/book/${id}?user_id=${userId}`, { method: 'POST' });
+                if (res.ok) {
+                    tg.showAlert('✅ Груз успешно забронирован! Данные переданы в систему.');
+                    loadData(); // Перезагружаем список (груз должен исчезнуть)
+                } else {
+                    tg.showAlert('❌ К сожалению, этот груз уже закрыт или недоступен.');
+                    loadData();
+                }
+            } catch(e) {
+                tg.showAlert('⚠️ Ошибка соединения с сервером.');
             }
         }
+        
+        // Запускаем загрузку данных при открытии
         loadData();
     </script>
 </body>
