@@ -1595,6 +1595,63 @@ async def handle_channel_post(message: types.Message):
                     await send_cargo_to_user(u_id, cargo_id)
                     await asyncio.sleep(0.05)
 
+# ==================== WEB APP БЭКЕНД ====================
+
+async def get_loads_api(request):
+    """API для получения списка активных грузов (для Web App)"""
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT load_id, route, date, cars_count, price, text 
+        FROM loads 
+        WHERE status = 'ACTIVE' 
+        ORDER BY load_id DESC LIMIT 50
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    loads = []
+    for r in rows:
+        loads.append({
+            "id": r[0],
+            "route": r[1] if r[1] else "Не указан",
+            "date": r[2] if r[2] else "Срочно",
+            "cars": r[3] if r[3] else "1",
+            "price": r[4] if r[4] else "По запросу",
+            "car_type": r[5] # Передаем сырой текст или details
+        })
+    return web.json_response({"loads": loads})
+
+async def book_load_api(request):
+    """API для бронирования груза через Web App"""
+    load_id = request.match_info.get('id')
+    user_id = request.query.get('user_id')
+    
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+    
+    if not load or load[0] != 'ACTIVE':
+        conn.close()
+        return web.json_response({"error": "Груз недоступен"}, status=400)
+        
+    # Бронируем груз (закрываем его)
+    cursor.execute("UPDATE loads SET status = 'CLOSED' WHERE load_id = ?", (load_id,))
+    conn.commit()
+    conn.close()
+    
+    # Обновляем сообщения у всех пользователей, чтобы скрыть кнопку
+    await update_cargo_messages_for_all_users(int(load_id))
+    
+    return web.json_response({"status": "success"})
+
+# Отдача HTML-страниц
+async def serve_index(request):
+    return web.FileResponse('./static/index.html')
+
+async def serve_directions(request):
+    return web.FileResponse('./static/directions.html')
 
 # ==================== ВЕБ-СЕРВЕР RENDER И САМОПИНГ ====================
 async def handle_ping(request):
@@ -1629,6 +1686,13 @@ async def web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
     app.router.add_get("/ping", handle_ping)
+    
+    # Маршруты для фронтенда и API Web App
+    app.router.add_get("/webapp", serve_index)
+    app.router.add_get("/directions", serve_directions)
+    app.router.add_get("/api/loads", get_loads_api)
+    app.router.add_post("/api/book/{id}", book_load_api)
+    
     app.on_startup.append(webserver_on_startup)
     
     runner = web.AppRunner(app)
@@ -1637,7 +1701,7 @@ async def web_server():
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Web server and self-ping mechanism started on port {port}")
+    logging.info(f"Web server started on port {port}")
 
 async def main():
     await asyncio.gather(
