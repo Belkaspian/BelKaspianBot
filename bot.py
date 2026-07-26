@@ -712,8 +712,42 @@ class FullCargoSubmission(BaseModel):
     image_roles: list[ImageClassification] = Field(default_factory=list, description="Классификация каждого фото")
 
 
+# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
+
+class VehicleDetails(BaseModel):
+    brand_model: str = Field(description="Марка и модель ТС (например: DAF XF 105)")
+    plate: str = Field(description="Гос. номер ТС")
+    vin: str = Field(description="VIN номер (17 символов)")
+    country: str = Field(description="Страна регистрации ТС")
+
+class DocumentDetails(BaseModel):
+    number: str = Field(description="Номер документа")
+    issue_date: str = Field(description="Дата выдачи")
+    authority: str = Field(description="Орган выдачи документа (Приоритет - русский язык)")
+    country: str = Field(description="Страна выдачи документа")
+
+class DriverDetails(BaseModel):
+    full_name: str = Field(description="ФИО водителя (Приоритет - русский язык)")
+    birth_date: str = Field(description="Дата рождения водителя")
+    phones: str = Field(description="Номера телефонов (+7... первым, остальные через '/')")
+    passport: DocumentDetails
+    license: DocumentDetails
+
+class ImageClassification(BaseModel):
+    image_index: int = Field(description="Порядковый номер изображения, начиная с 0")
+    category: str = Field(
+        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
+    )
+
+class FullCargoSubmission(BaseModel):
+    truck: VehicleDetails
+    trailer: VehicleDetails
+    driver: DriverDetails
+    image_roles: list[ImageClassification]
+
+
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
-    """Распознает документы и автоматически сортирует фото в нужном порядке для PDF."""
+    """Распознает документы через Gemini и сортирует фото для PDF."""
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -761,7 +795,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
         "2. Для КАЖДОГО фото укажи его image_index (0, 1, 2...) и определи категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', "
         "'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "3. ПРИОРИТЕТ ЯЗЫКА: Все данные пиши на РУССКОМ ЯЗЫКЕ (кириллица). Только если его нет - латиница.\n"
+        "3. ПРИОРИТЕТ ЯЗЫКА: Все данные пиши на РУССКОМ ЯЗЫКЕ (кириллица).\n"
         "4. ОРГАНЫ ВЫДАЧИ: РБ паспорт — точный текст ('СТАРОДОРОЖСКИЙ РОВД...'), РБ ID-карта — 'Код органа выдачи: XXX', "
         "Казахстан — 'МВД РК', Узбекистан — 'MIA 123456', Кыргызстан — 'MIA'/'PSC', Азербайджан — 'MINISTRY OF INTERNAL AFFAIRS'.\n"
         "5. ТЕЛЕФОНЫ: Российский номер (+7...) всегда первым."
@@ -793,11 +827,11 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             import json
             raw_json = json.loads(response.text)
             
-            t = raw_json.get("truck", {})
-            tr = raw_json.get("trailer", {})
-            d = raw_json.get("driver", {})
-            p = d.get("passport", {})
-            l = d.get("license", {})
+            t = raw_json.get("truck") or {}
+            tr = raw_json.get("trailer") or {}
+            d = raw_json.get("driver") or {}
+            p = d.get("passport") or {}
+            l = d.get("license") or {}
 
             truck_str = f"{t.get('brand_model', 'Не распознан')}, {t.get('plate', 'Не распознан')}, VIN: {t.get('vin', 'Не распознан')}, {t.get('country', 'Не распознана')}"
             trailer_str = f"{tr.get('brand_model', 'Не распознан')}, {tr.get('plate', 'Не распознан')}, VIN: {tr.get('vin', 'Не распознан')}, {tr.get('country', 'Не распознана')}"
@@ -829,7 +863,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             }
 
             classified_file_priority = {}
-            for role in raw_json.get("image_roles", []):
+            for role in raw_json.get("image_roles") or []:
                 idx = role.get("image_index")
                 cat = role.get("category", "other")
                 if idx is not None and 0 <= idx < len(all_files):
@@ -840,13 +874,13 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             return formatted_output, sorted_files
 
     except Exception as e:
-        logging.error(f"Gemini Processing Error: {e}")
+        logging.error(f"Gemini Processing Exception: {e}", exc_info=True)
 
     return fallback_text, all_files
 
 
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Создает 1 чистый PDF-файл, содержащий ТОЛЬКО фотографии документов в правильном порядке."""
+    """Создает PDF только из изображений документов с правильным поворотом."""
     buffer = io.BytesIO()
     images = []
 
@@ -855,36 +889,6 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             file_info = await bot.get_file(pid)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
-            buf.seek(0)
-
-            img = Image.open(buf)
-            
-            # Автоматический поворот перевернутых снимков
-            img = ImageOps.exif_transpose(img)
-            
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-
-            images.append(img)
-        except Exception as e:
-            logging.error(f"Error processing image for PDF: {e}")
-
-    if images:
-        images[0].save(
-            buffer, 
-            format="PDF", 
-            save_all=True, 
-            append_images=images[1:]
-        )
-        buffer.seek(0)
-    else:
-        buffer.write(b"")
-        buffer.seek(0)
-
-    return buffer
-
-
-
 
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
@@ -1243,7 +1247,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
 
-    # Распаковываем текст И отсортированный список файлов
+    # Распознавание и авто-сортировка через Gemini
     ai_formatted_data, sorted_files = await process_docs_with_ai(photos, documents, notes)
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
@@ -1255,19 +1259,66 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     )
 
     try:
+        # 1. Отправляем текстовое сообщение в канал логиста
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        # Передаем отсортированный список страниц в PDF
-        pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
-        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
-        
-        await bot.send_document(
-            chat_id=ADMIN_CHANNEL_ID, 
-            document=pdf_file, 
-            caption=f"📄 **PDF-отчет по грузу** ({route_str})"
-        )
+        # 2. Если перевозчик выслал готовые PDF-документы
+        if documents:
+            if len(documents) == 1:
+                await bot.send_document(
+                    chat_id=ADMIN_CHANNEL_ID,
+                    document=documents[0],
+                    caption=f"📄 **Документ от перевозчика (PDF)** ({route_str})"
+                )
+            else:
+                # Склеиваем несколько PDF в 1 общий файл
+                try:
+                    from pypdf import PdfWriter
+                    writer = PdfWriter()
+                    
+                    for doc_id in documents:
+                        file_info = await bot.get_file(doc_id)
+                        buf = io.BytesIO()
+                        await bot.download_file(file_info.file_path, destination=buf)
+                        buf.seek(0)
+                        writer.append(buf)
+
+                    merged_buf = io.BytesIO()
+                    writer.write(merged_buf)
+                    merged_buf.seek(0)
+
+                    clean_date = date_str.replace('/', '_').replace('.', '_')
+                    pdf_file = types.BufferedInputFile(merged_buf.getvalue(), filename=f"Docs_merged_{clean_date}.pdf")
+                    
+                    await bot.send_document(
+                        chat_id=ADMIN_CHANNEL_ID,
+                        document=pdf_file,
+                        caption=f"📄 **Объединённый PDF ({len(documents)} файла)** ({route_str})"
+                    )
+                except Exception as e:
+                    logging.error(f"Error merging PDFs: {e}")
+                    for doc_id in documents:
+                        await bot.send_document(
+                            chat_id=ADMIN_CHANNEL_ID,
+                            document=doc_id,
+                            caption=f"📄 **Документ от перевозчика (PDF)** ({route_str})"
+                        )
+
+        # 3. Если перевозчик выслал отдельные фотографии — сопоставляем, сортируем и собираем 1 PDF
+        elif photos:
+            pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
+            pdf_bytes = pdf_buf.getvalue()
+            if pdf_bytes:
+                clean_date = date_str.replace('/', '_').replace('.', '_')
+                pdf_file = types.BufferedInputFile(pdf_bytes, filename=f"Docs_{clean_date}.pdf")
+                await bot.send_document(
+                    chat_id=ADMIN_CHANNEL_ID, 
+                    document=pdf_file, 
+                    caption=f"📄 **PDF-отчет по грузу (из фото)** ({route_str})"
+                )
+
     except Exception as e:
-        logging.error(f"Error forwarding docs to admin channel: {e}")
+        logging.error(f"Error forwarding docs to admin channel: {e}", exc_info=True)
 
     await state.clear()
     await message.answer("✅ Данные переданы логисту.", reply_markup=get_main_reply_markup())
