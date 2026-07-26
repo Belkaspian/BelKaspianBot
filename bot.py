@@ -4,7 +4,7 @@ import sqlite3
 import asyncio
 import re
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -75,6 +75,7 @@ def init_db():
             details TEXT,
             status TEXT DEFAULT 'ACTIVE',
             admin_comment TEXT,
+            expires_at TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -130,7 +131,8 @@ def init_db():
         "ALTER TABLE loads ADD COLUMN admin_comment TEXT",
         "ALTER TABLE loads ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE bids ADD COLUMN comment TEXT",
-        "ALTER TABLE bids ADD COLUMN counter_rate TEXT"
+        "ALTER TABLE bids ADD COLUMN counter_rate TEXT",
+        "ALTER TABLE loads ADD COLUMN expires_at TEXT"
     ]
     for migration in migrations:
         try:
@@ -221,6 +223,28 @@ def extract_price(text: str) -> str:
 
     return "Торги"
 
+def extract_time_limit(text: str):
+    """Ищет время 'до 17:00', 'до 17.00' или 'до 17' и возвращает время и строку истечения в МСК (UTC+3)."""
+    match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
+    if match:
+        raw_time = match.group(1).replace('.', ':')
+        if ':' not in raw_time:
+            hours = int(raw_time)
+            minutes = 0
+        else:
+            parts = raw_time.split(':')
+            hours, minutes = int(parts[0]), int(parts[1])
+            
+        time_formatted = f"{hours:02d}:{minutes:02d}"
+        
+        msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+        expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+        
+        expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+        return time_formatted, expire_str
+        
+    return None, None
+
 def parse_cargo_date(date_str: str) -> date | None:
     if not date_str:
         return None
@@ -253,6 +277,12 @@ def parse_cargo_raw(raw_text: str):
     price_str = extract_price(raw_text)
     cars_str = ""
     
+    # Поиск ограничения по времени
+    time_limit, expires_at = extract_time_limit(raw_text)
+    if time_limit:
+        if "по МСК" not in price_str:
+            price_str = f"{price_str} (до {time_limit} по МСК)"
+
     date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
     cars_pattern = re.compile(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', re.IGNORECASE)
     
@@ -325,7 +355,7 @@ def parse_cargo_raw(raw_text: str):
     if 'верх' in text_lower: details_list.append("Верх погрузка")
     details_text = ", ".join(details_list)
 
-    return date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight
+    return date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at
 
 def parse_multiple_cargos(raw_text: str):
     lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
@@ -477,20 +507,30 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         pass
 
 
-# ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ДАТЕ ====================
+# ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ДАТЕ И ВРЕМЕНИ (МСК) ====================
 async def auto_clean_expired_cargos():
-    """Удаляет/закрывает грузы только когда прошла дата погрузки включительно."""
+    """Удаляет/закрывает грузы при наступлении указанного времени по МСК или прошедшей даты."""
     while True:
         try:
             conn = sqlite3.connect("cargo_bot.db")
             cursor = conn.cursor()
-            cursor.execute("SELECT load_id, date, created_at FROM loads WHERE status = 'ACTIVE'")
+            cursor.execute("SELECT load_id, date, created_at, expires_at FROM loads WHERE status = 'ACTIVE'")
             rows = cursor.fetchall()
             
-            today = datetime.now().date()
+            msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+            today = msk_now.date()
             expired_ids = []
             
-            for load_id, date_str, created_at in rows:
+            for load_id, date_str, created_at, expires_at in rows:
+                if expires_at:
+                    try:
+                        exp_dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        if msk_now >= exp_dt:
+                            expired_ids.append(load_id)
+                            continue
+                    except Exception:
+                        pass
+
                 cargo_d = parse_cargo_date(date_str)
                 if cargo_d:
                     if today > cargo_d:
@@ -499,7 +539,7 @@ async def auto_clean_expired_cargos():
                     if created_at:
                         try:
                             c_time = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-                            if datetime.now() - c_time > timedelta(days=7):
+                            if msk_now.replace(tzinfo=None) - c_time > timedelta(days=7):
                                 expired_ids.append(load_id)
                         except Exception:
                             pass
@@ -515,7 +555,7 @@ async def auto_clean_expired_cargos():
         except Exception as e:
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
-        await asyncio.sleep(900)
+        await asyncio.sleep(60)
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
@@ -862,7 +902,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Защита от дублирования брони
     cursor.execute("SELECT id FROM confirmed_deals WHERE load_id = ? AND user_id = ?", (cargo_id, user_id))
     if cursor.fetchone():
         conn.close()
@@ -1342,15 +1381,15 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
         
     data = await state.get_data()
     cargo_id = data.get("editing_cargo_id")
-    date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight = parse_cargo_raw(new_raw_text)
+    date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(new_raw_text)
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE loads 
-        SET date = ?, route = ?, price = ?, cars_count = ?, text = ?, details = ?, car_type = ?, cargo_type = ?, weight = ?
+        SET date = ?, route = ?, price = ?, cars_count = ?, text = ?, details = ?, car_type = ?, cargo_type = ?, weight = ?, expires_at = ?
         WHERE load_id = ?
-    """, (date_str, route_str, price_str, cars_str, new_raw_text, details_text, car_type, cargo_type, weight, cargo_id))
+    """, (date_str, route_str, price_str, cars_str, new_raw_text, details_text, car_type, cargo_type, weight, expires_at, cargo_id))
     conn.commit()
     conn.close()
     
@@ -1655,11 +1694,11 @@ async def handle_channel_post(message: types.Message):
     created_cargo_ids = []
     
     for single_text in splitted_texts:
-        date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight = parse_cargo_raw(single_text)
+        date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(single_text)
         cursor.execute("""
-            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-        """, (direction, date_str, route_str, cars_str, price_str, single_text, details_text, car_type, cargo_type, weight))
+            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, expires_at, status) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        """, (direction, date_str, route_str, cars_str, price_str, single_text, details_text, car_type, cargo_type, weight, expires_at))
         created_cargo_ids.append(cursor.lastrowid)
         
     conn.commit()
@@ -1784,7 +1823,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .t-head {
             display: grid;
-            grid-template-columns: 48px 1fr 90px 16px;
+            grid-template-columns: 45px 1fr 145px 16px;
             background: rgba(0,0,0,0.03);
             padding: 8px 10px;
             font-size: 11px;
@@ -1796,7 +1835,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .t-row {
             display: grid;
-            grid-template-columns: 48px 1fr 90px 16px;
+            grid-template-columns: 45px 1fr 145px 16px;
             padding: 10px 8px;
             border-bottom: 1px solid var(--border);
             align-items: center;
@@ -1942,7 +1981,6 @@ INDEX_HTML = """<!DOCTYPE html>
             text-transform: uppercase;
         }
 
-        /* ЧИПЫ НАПРАВЛЕНИЙ В ЛИЧНОМ КАБИНЕТЕ */
         .subs-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -2714,7 +2752,7 @@ async def book_load_api(request):
 
     carrier_text = format_carrier_info(user_id, username, first_name)
 
-    # --- ПУНКТ 1: Забор по фиксированной ставке логиста ---
+    # --- Забор по фиксированной ставке логиста ---
     if action == 'confirm':
         cursor.execute("SELECT id FROM confirmed_deals WHERE load_id = ? AND user_id = ?", (load_id, user_id))
         if cursor.fetchone():
@@ -2755,7 +2793,7 @@ async def book_load_api(request):
 
         return web.json_response({"status": "success"})
 
-    # --- ПУНКТ 2 и 3: Предложение своей ставки логисту ---
+    # --- Предложение своей ставки логисту ---
     elif action == 'bid':
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
@@ -2822,7 +2860,7 @@ DIRECTIONS_HTML = """<!DOCTYPE html>
     <div class="item"><label><input type="checkbox" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</label></div>
     <div class="item"><label><input type="checkbox" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</label></div>
     <div class="item"><label><input type="checkbox" value="Грузия 🇬🇪"> 🇬🇪 Грузия</label></div>
-    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</label></div>
+    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦зербайджан</label></div>
     <div class="item"><label><input type="checkbox" value="Армения 🇦🇲"> 🇦🇲 Армения</label></div>
 
     <button onclick="save()">Сохранить подписки</button>
