@@ -18,6 +18,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types.web_app_info import WebAppInfo
 
+# Импорт официального библиотеки google-genai
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 # Безопасный импорт ReportLab для генерации PDF
 try:
     from reportlab.lib.pagesizes import A4
@@ -37,6 +45,17 @@ if not TOKEN:
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
 ADMIN_ID = os.getenv("ADMIN_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Инициализация Gemini Client с использованием SDK google-genai
+gemini_client = None
+if GEMINI_API_KEY and HAS_GENAI:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        logging.info("✅ Gemini API Client (google-genai) успешно инициализирован.")
+    except Exception as e:
+        logging.error(f"❌ Ошибка инициализации Gemini Client: {e}")
+elif not HAS_GENAI:
+    logging.warning("⚠️ Пакет google-genai не установлен. Установите с помощью: pip install google-genai")
 
 ADMIN_CHANNEL_ID_RAW = os.getenv("ADMIN_CHANNEL_ID", "-1004271518848")
 try:
@@ -397,12 +416,10 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Очистка названия маршрута от цен
     route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
-    # Разбор доп. полей
     car_type = "Тент/реф"
     cargo_type = "ТНП"
     weight = "до 22т"
@@ -608,61 +625,76 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         pass
 
 
-# ==================== ИИ GEMINI И ГЕНЕРАЦИЯ PDF ====================
+# ==================== ИИ GEMINI С ИСПОЛЬЗОВАНИЕМ GOOGLE-GENAI SDK И ГЕНЕРАЦИЯ PDF ====================
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
-    """Скачивает фото из Telegram, кодирует в Base64 и отправляет в Gemini 1.5 Vision API."""
-    if not GEMINI_API_KEY:
-        return (
-            "Тягач: Не распознан\n"
-            "Прицеп: Не распознан\n"
-            "Водитель: Не распознан\n"
-            f"Номера телефонов: {text_notes or 'Не указан'}\n"
-            "Паспорт: Не распознан\n"
-            "Водительское: Не распознано"
-        )
+    """Скачивает фото/файлы из Telegram и обрабатывает через Gemini API с помощью google-genai SDK."""
+    fallback_text = (
+        "Тягач: Не распознан\n"
+        "Прицеп: Не распознан\n"
+        "Водитель: Не распознан\n"
+        f"Номера телефонов: {text_notes or 'Не указан'}\n"
+        "Паспорт: Не распознан\n"
+        "Водительское: Не распознано"
+    )
 
-    parts = []
-    prompt = (
-        "Ты — ИИ-ассистент логистической компании. Твоя задача — извлечь данные с фото документов и вернуть текст СТРОГО по шаблону ниже.\n"
-        f"Заметки/телефон от водителя: '{text_notes or 'Нет'}'.\n\n"
-        "Заполняй только найденные данные, без звезд (*), маркдауна и лишних пояснений:\n\n"
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
+        logging.warning("⚠️ Gemini API недоступен или не настроен GEMINI_API_KEY.")
+        return fallback_text
+
+    prompt_text = (
+        "Ты — ИИ-ассистент логистической компании. Твоя задача — извлечь данные с фото документов "
+        "и вернуть текст СТРОГО по шаблону ниже без лишних символов и маркдаун-выделений (*):\n\n"
         "Тягач: Марка, модель, гос. номер, вин номер, страна регистрации\n"
         "Прицеп: Марка, модель, гос. номер, вин номер, страна регистрации\n"
         "Водитель: ФИО, дата рождения\n"
-        "Номера телефонов: Рос номер / далее остальные номера\n"
+        f"Номера телефонов: {text_notes or 'Рос номер / далее остальные номера'}\n"
         "Паспорт: Номер паспорта, дата выдачи, орган выдачи, страна паспорта\n"
         "Водительское: Номер водительского, дата выдачи, орган выдачи, страна водительского"
     )
-    
-    parts.append({"text": prompt})
 
+    contents = [prompt_text]
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
+
     for file_id in all_files:
         try:
             file_info = await bot.get_file(file_id)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
             img_bytes = buf.getvalue()
-            b64_str = base64.b64encode(img_bytes).decode('utf-8')
-            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_str}})
+
+            mime_type = "image/jpeg"
+            if file_info.file_path:
+                if file_info.file_path.lower().endswith('.png'):
+                    mime_type = "image/png"
+                elif file_info.file_path.lower().endswith('.pdf'):
+                    mime_type = "application/pdf"
+
+            contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
         except Exception as e:
-            logging.error(f"Error loading file for AI: {e}")
+            logging.error(f"Error downloading file for Gemini AI processing: {e}")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json={"contents": [{"parts": parts}]}, timeout=aiohttp.ClientTimeout(total=45)) as response:
-                if response.status == 200:
-                    res_json = await response.json()
-                    candidates = res_json.get('candidates', [])
-                    if candidates:
-                        return candidates[0]['content']['parts'][0]['text'].strip()
-    except Exception as e:
-        logging.error(f"Gemini API Exception: {e}")
+        # Используем асинхронный вызов через SDK google-genai
+        if hasattr(gemini_client, 'aio'):
+            response = await gemini_client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents
+            )
+        else:
+            response = await asyncio.to_thread(
+                gemini_client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=contents
+            )
 
-    return "Тягач:\nПрицеп:\nВодитель:\nНомера телефонов:\nПаспорт:\nВодительское:"
+        if response and response.text:
+            cleaned_res = response.text.replace('*', '').strip()
+            return cleaned_res
+    except Exception as e:
+        logging.error(f"Gemini API Exception via google-genai: {e}")
+
+    return fallback_text
 
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
     """Генерирует 1 единый PDF со всеми распознанными данными и вшитыми фото документов."""
@@ -794,13 +826,11 @@ async def send_welcome_message(message: types.Message):
     inline_builder1 = InlineKeyboardBuilder()
     inline_builder1.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
 
-    # Сообщение 1
     await message.answer(
         "Приветствую!\nДля удобства использования нашего бота есть Web-App 👇",
         reply_markup=inline_builder1.as_markup()
     )
 
-    # Сообщение 2 + постоянная кнопка
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
         reply_markup=get_chat_menu_inline_markup()
@@ -1634,7 +1664,6 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         
     cleaned_text = text.strip()
 
-    # 1. Смена пароля через /setpass
     if cleaned_text.startswith("/setpass"):
         new_pass = cleaned_text.replace("/setpass", "").strip()
         if not new_pass:
@@ -1648,7 +1677,6 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         await event.answer(f"✅ Пароль от Админ-меню Web App успешно изменён на: `{new_pass}`", parse_mode="Markdown")
         return
 
-    # 2. Вызов меню админа
     if cleaned_text.lower() in ("/меню", "меню", "!меню"):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
@@ -1658,7 +1686,6 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         await event.answer("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
         return
 
-    # 3. Массовая рассылка (!текст)
     if cleaned_text.startswith("!"):
         broadcast_text = cleaned_text[1:].lstrip()
         if not broadcast_text:
@@ -1681,7 +1708,6 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         await event.answer(f"✅ Рассылка завершена ({success_count} польз.).")
         return
 
-    # 4. Встречная ставка от логиста
     await process_admin_counter_offer(event, cleaned_text, state)
 
 async def process_admin_counter_offer(event: types.Message, text: str, state: FSMContext = None):
@@ -2576,7 +2602,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
     </div>
 
-    <!-- Адаптивный фильтр направлений -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
         <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
@@ -2587,13 +2612,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
     </div>
 
-    <!-- Переключатель подраздела "Мои заявки" -->
     <div class="sub-nav" id="my-sub-nav" style="display: none;">
         <div class="sub-nav-btn active" id="subnav-active" onclick="switchMySubTab('active')">📋 Активные</div>
         <div class="sub-nav-btn" id="subnav-archive" onclick="switchMySubTab('archive')">🚚 Едущие авто (Архив)</div>
     </div>
 
-    <!-- Блок сортировки -->
     <div class="sort-bar" id="sort-container">
         <label>Сортировка:</label>
         <select id="sortSelect" onchange="loadData(false)">
@@ -2604,7 +2627,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </select>
     </div>
 
-    <!-- Список грузов / Таблица -->
     <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
@@ -2615,7 +2637,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
-    <!-- Блок личного кабинета (АВТОСОХРАНЕНИЕ) -->
     <div id="profile-container" style="display: none;">
         <div class="profile-card">
             <div class="profile-title">👤 Данные компании (Автосохранение)</div>
@@ -2646,7 +2667,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модальное окно "Своя ставка" -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
             <div class="modal-title">💰 Предложить свою цену</div>
@@ -2659,7 +2679,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модальное окно уведомлений с крестиком -->
     <div class="modal-overlay" id="notifModal">
         <div class="modal-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2671,7 +2690,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка ввода пароля Админа -->
     <div class="modal-overlay" id="adminPassModal">
         <div class="modal-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2686,7 +2704,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка Админки с 3 разделами -->
     <div class="modal-overlay" id="adminPanelModal">
         <div class="modal-card" style="max-width: 95%; width: 500px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2700,7 +2717,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
             </div>
 
-            <!-- Сортировки админки -->
             <div id="adminSortBox" style="margin-bottom:10px;">
                 <select id="adminSortSelect" onchange="applyAdminSort()">
                     <option value="name">👤 По названию/имени (А-Я)</option>
@@ -2708,7 +2724,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 </select>
             </div>
 
-            <!-- Фильтр по перевозчикам в сделках -->
             <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
                 <select id="adminCarrierSelect" onchange="renderAdminConfirmedDeals()">
                     <option value="ALL">Все перевозчики</option>
@@ -2719,7 +2734,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка редактирования груза Админом -->
     <div class="modal-overlay" id="adminEditLoadModal">
         <div class="modal-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2742,7 +2756,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка редактирования сделки Админом -->
     <div class="modal-overlay" id="adminEditDealModal">
         <div class="modal-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2773,7 +2786,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         let currentDataHash = '';
         let saveProfileTimer = null;
 
-        // Секретный триггер кликов для входа в Админку
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'carriers';
@@ -4473,7 +4485,6 @@ async def web_server():
     await site.start()
     logging.info(f"✅ Web server started on port {port}")
 
-    # Удерживаем порт открытым
     await asyncio.Event().wait()
 
 async def main():
