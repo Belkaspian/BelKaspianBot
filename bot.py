@@ -746,6 +746,40 @@ class FullCargoSubmission(BaseModel):
     image_roles: list[ImageClassification]
 
 
+# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
+
+class VehicleDetails(BaseModel):
+    brand_model: str = Field(description="Марка и модель ТС (например: DAF XF 105)")
+    plate: str = Field(description="Гос. номер ТС")
+    vin: str = Field(description="VIN номер (17 символов)")
+    country: str = Field(description="Страна регистрации ТС")
+
+class DocumentDetails(BaseModel):
+    number: str = Field(description="Номер документа")
+    issue_date: str = Field(description="Дата выдачи")
+    authority: str = Field(description="Орган выдачи документа (Приоритет - русский язык)")
+    country: str = Field(description="Страна выдачи документа")
+
+class DriverDetails(BaseModel):
+    full_name: str = Field(description="ФИО водителя (Приоритет - русский язык)")
+    birth_date: str = Field(description="Дата рождения водителя")
+    phones: str = Field(description="Номера телефонов (+7... первым, остальные через '/')")
+    passport: DocumentDetails
+    license: DocumentDetails
+
+class ImageClassification(BaseModel):
+    image_index: int = Field(description="Порядковый номер изображения, начиная с 0")
+    category: str = Field(
+        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
+    )
+
+class FullCargoSubmission(BaseModel):
+    truck: VehicleDetails
+    trailer: VehicleDetails
+    driver: DriverDetails
+    image_roles: list[ImageClassification]
+
+
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
     """Распознает документы через Gemini и сортирует фото для PDF."""
     fallback_text = (
@@ -889,6 +923,28 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             file_info = await bot.get_file(pid)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
+            buf.seek(0)
+
+            img = Image.open(buf)
+            img = ImageOps.exif_transpose(img)
+            
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            images.append(img)
+        except Exception as e:
+            logging.error(f"Error converting file {pid} for PDF: {e}")
+
+    if images:
+        images[0].save(
+            buffer, 
+            format="PDF", 
+            save_all=True, 
+            append_images=images[1:]
+        )
+        buffer.seek(0)
+
+    return buffer
 
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
