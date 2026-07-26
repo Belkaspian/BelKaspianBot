@@ -195,7 +195,7 @@ class AdminCounterStates(StatesGroup):
     waiting_for_counter_rate = State()
 
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И КЛАВИАТУРЫ ====================
+# ==================== ВАЛЮТЫ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
@@ -207,7 +207,22 @@ def get_chat_menu_inline_markup():
     builder.row(types.InlineKeyboardButton(text="🌍 Выбор направлений", callback_data="menu_directions"))
     builder.row(types.InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile"))
     builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="menu_active"))
+    builder.row(types.InlineKeyboardButton(text="📦 Забранные грузы", callback_data="menu_my_deals"))
     return builder.as_markup()
+
+def normalize_currency(curr_str: str) -> str:
+    c = curr_str.lower().strip()
+    if c in ['$', 'долл', 'usd', 'доллар', 'долларов', 'дол', 'д']:
+        return "USD"
+    elif c in ['руб', 'rub', 'rur', 'р', 'рубль', 'рублей']:
+        return "RUB"
+    elif c in ['€', 'евро', 'eur', 'е']:
+        return "EUR"
+    elif c in ['сум', 'сумм', 'узб сум', 'uzs']:
+        return "UZS"
+    elif c in ['тенге', 'тг', 'kzt']:
+        return "KZT"
+    return "USD"
 
 def is_auction_price(price_str: str) -> bool:
     if not price_str:
@@ -231,13 +246,15 @@ def extract_price(text: str) -> str:
     match = curr_pattern.search(text_clean)
     if match:
         val = match.group(1).strip(' ,.')
-        curr = match.group(2).strip()
-        return f"{val} {curr}"
+        curr_code = normalize_currency(match.group(2))
+        return f"{val} {curr_code}"
 
     prefix_pattern = re.compile(r'(\$|€)\s*(\d[\d\s\.,]*)', re.IGNORECASE)
     match_prefix = prefix_pattern.search(text_clean)
     if match_prefix:
-        return f"{match_prefix.group(2).strip(' ,.')} {match_prefix.group(1).strip()}"
+        val = match_prefix.group(2).strip(' ,.')
+        curr_code = "USD" if match_prefix.group(1) == "$" else "EUR"
+        return f"{val} {curr_code}"
 
     no_dates = re.sub(r'\d{1,2}[\./]\d{1,2}(?:[\./]\d{2,4})?', '', text_clean)
     no_cars = re.sub(r'\d+\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', '', no_dates, flags=re.IGNORECASE)
@@ -250,13 +267,21 @@ def extract_price(text: str) -> str:
         num_val = int(digits_only)
         
         if 1000 <= num_val <= 9999:
-            return f"{num_raw.strip()} долл."
+            return f"{num_raw.strip()} USD"
         elif num_val >= 10000:
-            return f"{num_raw.strip()} руб."
+            return f"{num_raw.strip()} RUB"
         elif 100 <= num_val < 1000:
-            return f"{num_raw.strip()} долл."
+            return f"{num_raw.strip()} USD"
 
     return "Торги"
+
+def format_custom_rate(rate_text: str) -> str:
+    if not rate_text:
+        return "Торги"
+    formatted = extract_price(rate_text)
+    if formatted != "Торги":
+        return formatted
+    return rate_text.strip()
 
 def extract_time_limit(text: str):
     match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
@@ -355,12 +380,11 @@ def parse_cargo_raw(raw_text: str):
 
     text_lower = raw_text.lower()
     
+    # Полное извлечение типа ТС
     car_type = "Тент/реф"
-    vehicle_keywords = ['тент', 'мега', 'сцепка', 'тандем', 'реф+8+15', 'реф', 'изотерм', 'площадка', 'контейнер']
-    for kw in vehicle_keywords:
-        if kw in text_lower:
-            car_type = kw.capitalize()
-            break
+    vehicle_match = re.search(r'\b(тент[^\n,]*|реф[^\n,]*|мега[^\n,]*|сцепка[^\n,]*|тандем[^\n,]*|изотерм[^\n,]*|площадка[^\n,]*|контейнер[^\n,]*)\b', text_lower, re.IGNORECASE)
+    if vehicle_match:
+        car_type = vehicle_match.group(1).strip().capitalize()
 
     cargo_type = "ТНП"
     cargo_match = re.search(r'груз\s*[\:\-]?\s*([^\n,]+)', raw_text, re.IGNORECASE)
@@ -589,15 +613,13 @@ async def auto_clean_expired_cargos():
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 @dp.message(Command("start"))
-@dp.message(F.text == "📱 Вызвать меню")
-@dp.message(F.state == None)
-async def cmd_start_or_menu(message: types.Message, state: FSMContext):
+async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT company, name, phone, status FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
     
     if not user:
@@ -606,15 +628,13 @@ async def cmd_start_or_menu(message: types.Message, state: FSMContext):
             VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE')
         """, (user_id, message.from_user.full_name))
         conn.commit()
-    elif user[3] == 'BLOCKED':
+    elif user[0] == 'BLOCKED':
         conn.close()
         await message.answer("Ваш аккаунт заблокирован администратором.")
         return
         
     conn.close()
-    await send_welcome_message(message)
 
-async def send_welcome_message(message: types.Message):
     web_app_url = f"{RENDER_URL}/webapp"
     inline_builder1 = InlineKeyboardBuilder()
     inline_builder1.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
@@ -631,8 +651,14 @@ async def send_welcome_message(message: types.Message):
         reply_markup=get_chat_menu_inline_markup()
     )
 
-    # Внизу одна постоянная кнопка вызвать меню
-    await message.answer("Для вызова меню в любой момент используйте кнопку ниже:", reply_markup=get_main_reply_markup())
+    # Постоянная кнопка внизу
+    await message.answer("Используйте меню ниже:", reply_markup=get_main_reply_markup())
+
+@dp.message(F.text == "📱 Вызвать меню")
+@dp.message(F.state == None)
+async def cmd_show_menu_button(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("📋 **Главное меню:**", reply_markup=get_chat_menu_inline_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "menu_directions")
 async def callback_menu_directions(callback: types.CallbackQuery):
@@ -646,11 +672,59 @@ async def callback_menu_profile(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_active")
 async def callback_menu_active(callback: types.CallbackQuery):
-    web_app_url = f"{RENDER_URL}/webapp"
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
-    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
-    await callback.message.edit_text("Посмотреть актуальные грузы можно в нашем Web App каталоге:", reply_markup=builder.as_markup())
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, date, route, price, cars_count, details FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 20")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await callback.message.answer("📦 Актуальных грузов пока нет.")
+        await callback.answer()
+        return
+
+    await callback.message.answer("📦 **Список всех актуальных грузов:**", parse_mode="Markdown")
+    for load_id, date_str, route_str, price_str, cars_str, details_str in rows:
+        card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str)
+        builder = InlineKeyboardBuilder()
+        if not is_auction_price(price_str):
+            builder.row(types.InlineKeyboardButton(text=f"✅ Подтвердить за {price_str}", callback_data=f"confirm_{load_id}"))
+        builder.row(types.InlineKeyboardButton(text="💰 Своя ставка", callback_data=f"bid_{load_id}"))
+        
+        try:
+            await callback.message.answer(card, reply_markup=builder.as_markup())
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_my_deals")
+async def callback_menu_my_deals(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT date, route, cars, price, details FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC", (user_id,))
+    confirmed_loads = cursor.fetchall()
+    conn.close()
+    
+    if not confirmed_loads:
+        await callback.answer("У вас пока нет подтвержденных грузов.", show_alert=True)
+        return
+        
+    await callback.message.answer("📦 **Ваши подтвержденные грузы:**", parse_mode="Markdown")
+    for date_str, route_str, cars_count, price_str, details_text in confirmed_loads:
+        card_text = (
+            f"📍 {date_str} | {route_str}\n"
+            f"💰 {price_str} | 🚚 {cars_count} авто"
+        )
+        if details_text:
+            card_text += f"\n📦 {details_text}"
+        try:
+            await callback.message.answer(card_text)
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
     await callback.answer()
 
 async def show_directions_menu(event):
@@ -744,7 +818,6 @@ async def show_profile_menu(event):
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить компанию", callback_data="prof_edit_company"))
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить имя", callback_data="prof_edit_name"))
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить телефон", callback_data="prof_edit_phone"))
-    builder.row(types.InlineKeyboardButton(text="📦 Забранные грузы", callback_data="prof_my_deals"))
     builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
 
     if isinstance(event, types.CallbackQuery):
@@ -755,8 +828,9 @@ async def show_profile_menu(event):
 @dp.callback_query(F.data == "back_to_main_menu")
 async def callback_back_to_main(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
-        reply_markup=get_chat_menu_inline_markup()
+        "📋 **Главное меню:**",
+        reply_markup=get_chat_menu_inline_markup(),
+        parse_mode="Markdown"
     )
     await callback.answer()
 
@@ -814,34 +888,6 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     await message.answer("✅ Телефон обновлен!")
     await show_profile_menu(message)
 
-@dp.callback_query(F.data == "prof_my_deals")
-async def prof_show_my_deals(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT date, route, cars, price, details FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC", (user_id,))
-    confirmed_loads = cursor.fetchall()
-    conn.close()
-    
-    if not confirmed_loads:
-        await callback.answer("У вас пока нет подтвержденных грузов.", show_alert=True)
-        return
-        
-    await callback.message.answer("📦 **Ваши подтвержденные грузы:**", parse_mode="Markdown")
-    for date_str, route_str, cars_count, price_str, details_text in confirmed_loads:
-        card_text = (
-            f"📍 {date_str} | {route_str}\n"
-            f"💰 {price_str} | 🚚 {cars_count} авто"
-        )
-        if details_text:
-            card_text += f"\n📦 {details_text}"
-        try:
-            await callback.message.answer(card_text)
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-    await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
@@ -883,7 +929,7 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
 
     cargo_id = int(callback.data.replace("bid_", ""))
     await state.update_data(cargo_id=cargo_id, action_type="bid")
-    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `250.000 руб` или `2000 долл`):")
+    await callback.message.answer("Введите вашу цену / ставку за этот рейс (например: `2500 USD` или `250.000 RUB`):")
     await state.set_state(DealStates.waiting_for_custom_rate)
     await callback.answer()
 
@@ -901,7 +947,7 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
         return
     conn.close()
 
-    rate = message.text.strip()
+    rate = format_custom_rate(message.text.strip())
     await state.update_data(custom_rate=rate)
     data = await state.get_data()
     cargo_id = data.get("cargo_id")
@@ -912,7 +958,7 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
     row = cursor.fetchone()
     conn.close()
     
-    await message.answer(f"Сколько грузов вы можете поставить по этой ставке? (доступно машин: {row[0] if row else '?'})")
+    await message.answer(f"Сколько грузов вы можете поставить по этой ставке ({rate})? (доступно машин: {row[0] if row else '?'})")
     await state.set_state(DealStates.waiting_for_quantity)
 
 
@@ -1002,7 +1048,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         pass
         
     await state.clear()
-    await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в личном кабинете.", reply_markup=get_main_reply_markup())
+    await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup())
 
 @dp.message(DealStates.waiting_for_comment)
 async def process_deal_comment(message: types.Message, state: FSMContext):
@@ -1333,7 +1379,7 @@ async def admin_send_counter_bid(event: types.Message, state: FSMContext = None)
     cmd_match = re.match(r'/counter_(\d+)\s+(.+)', text)
     if cmd_match:
         bid_id = int(cmd_match.group(1))
-        new_rate = cmd_match.group(2).strip()
+        new_rate = format_custom_rate(cmd_match.group(2).strip())
     else:
         chat_id = event.chat.id
         user_id = event.from_user.id if event.from_user else 0
@@ -1349,7 +1395,7 @@ async def admin_send_counter_bid(event: types.Message, state: FSMContext = None)
         else:
             bid_id = PENDING_COUNTER_OFFERS.get(chat_id) or PENDING_COUNTER_OFFERS.get(user_id)
 
-        new_rate = text
+        new_rate = format_custom_rate(text)
 
     if not bid_id or not new_rate:
         return
@@ -1834,7 +1880,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML ====================
+# ==================== WEB APP HTML (АДАПТИВНЫЙ ДИЗАЙН И АВТОСОХРАНЕНИЕ) ====================
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1860,7 +1906,7 @@ INDEX_HTML = """<!DOCTYPE html>
             background: var(--bg);
             color: var(--text);
             margin: 0;
-            padding: 8px;
+            padding: 10px;
             font-size: 13px;
             -webkit-user-select: none;
             user-select: none;
@@ -1870,8 +1916,8 @@ INDEX_HTML = """<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 8px;
-            padding: 0 4px;
+            margin-bottom: 10px;
+            padding: 0 2px;
         }
 
         .header-title {
@@ -1885,16 +1931,17 @@ INDEX_HTML = """<!DOCTYPE html>
             position: relative;
             font-size: 18px;
             cursor: pointer;
-            padding: 4px 8px;
+            padding: 6px 12px;
             background: var(--card);
-            border-radius: 20px;
+            border-radius: 12px;
             border: 1px solid var(--border);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.03);
         }
 
         .bell-badge {
             position: absolute;
-            top: -2px;
-            right: -2px;
+            top: -3px;
+            right: -3px;
             background: #dc3545;
             color: #ffffff;
             font-size: 9px;
@@ -1906,21 +1953,22 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .main-nav {
             display: flex;
-            gap: 4px;
-            margin-bottom: 10px;
+            gap: 6px;
+            margin-bottom: 12px;
             background: var(--card);
             padding: 4px;
-            border-radius: 10px;
+            border-radius: 12px;
             border: 1px solid var(--border);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
         }
 
         .nav-btn {
             flex: 1;
-            padding: 8px 4px;
+            padding: 9px 4px;
             text-align: center;
             font-weight: 600;
             font-size: 11px;
-            border-radius: 7px;
+            border-radius: 9px;
             cursor: pointer;
             color: var(--hint);
             transition: all 0.2s;
@@ -1930,24 +1978,23 @@ INDEX_HTML = """<!DOCTYPE html>
         .nav-btn.active {
             background: var(--active-tab);
             color: #ffffff;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
         }
 
+        /* Адаптивная мультистрочная сетка для ПК и телефонов */
         .filter-scroll {
             display: flex;
+            flex-wrap: wrap;
             gap: 6px;
-            overflow-x: auto;
-            padding-bottom: 8px;
-            margin-bottom: 8px;
-            scrollbar-width: none;
+            margin-bottom: 12px;
         }
-        .filter-scroll::-webkit-scrollbar { display: none; }
 
         .chip {
             white-space: nowrap;
-            padding: 6px 12px;
+            padding: 7px 12px;
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 20px;
+            border-radius: 12px;
             font-size: 11px;
             font-weight: 600;
             color: var(--hint);
@@ -1963,17 +2010,17 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .table-container {
             background: var(--card);
-            border-radius: 10px;
+            border-radius: 12px;
             overflow: hidden;
             border: 1px solid var(--border);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
         }
 
         .t-head {
             display: grid;
             grid-template-columns: 45px 1fr 145px 16px;
             background: rgba(0,0,0,0.03);
-            padding: 8px 10px;
+            padding: 9px 10px;
             font-size: 11px;
             font-weight: 700;
             color: var(--hint);
@@ -1984,7 +2031,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .t-row {
             display: grid;
             grid-template-columns: 45px 1fr 145px 16px;
-            padding: 10px 8px;
+            padding: 11px 10px;
             border-bottom: 1px solid var(--border);
             align-items: center;
             cursor: pointer;
@@ -2031,7 +2078,7 @@ INDEX_HTML = """<!DOCTYPE html>
             background: rgba(255, 193, 7, 0.15);
             color: var(--text);
             padding: 8px 10px;
-            border-radius: 6px;
+            border-radius: 8px;
             margin-bottom: 10px;
             border-left: 3px solid #ffc107;
             font-size: 12px;
@@ -2045,7 +2092,7 @@ INDEX_HTML = """<!DOCTYPE html>
             margin-bottom: 10px;
             background: var(--card);
             padding: 6px 10px;
-            border-radius: 6px;
+            border-radius: 8px;
             border: 1px solid var(--border);
         }
 
@@ -2055,7 +2102,7 @@ INDEX_HTML = """<!DOCTYPE html>
             color: var(--text);
             border: 1px solid var(--border);
             padding: 4px 8px;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 12px;
             font-weight: 700;
         }
@@ -2066,25 +2113,25 @@ INDEX_HTML = """<!DOCTYPE html>
             background: var(--card);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 8px 10px;
-            border-radius: 6px;
+            padding: 10px 12px;
+            border-radius: 10px;
             font-size: 12px;
             margin-bottom: 10px;
             font-family: inherit;
         }
 
-        textarea { resize: none; height: 42px; }
+        textarea { resize: none; height: 46px; }
 
         .buttons {
             display: flex;
             gap: 8px;
         }
 
-        .buttons button {
+        .buttons button, .btn-rounded {
             flex: 1;
-            padding: 10px;
+            padding: 11px;
             border: none;
-            border-radius: 6px;
+            border-radius: 10px;
             font-weight: 600;
             font-size: 12px;
             color: #fff;
@@ -2092,7 +2139,7 @@ INDEX_HTML = """<!DOCTYPE html>
             transition: opacity 0.15s;
         }
 
-        .buttons button:active { opacity: 0.8; }
+        .buttons button:active, .btn-rounded:active { opacity: 0.8; }
 
         .btn-confirm { background: var(--btn-green); }
         .btn-offer { background: var(--btn-orange); }
@@ -2101,10 +2148,11 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .profile-card {
             background: var(--card);
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 14px;
             border: 1px solid var(--border);
             margin-bottom: 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
         }
 
         .profile-title {
@@ -2139,7 +2187,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .sub-chip {
             background: var(--bg);
             padding: 10px 12px;
-            border-radius: 8px;
+            border-radius: 10px;
             border: 1.5px solid var(--border);
             font-size: 12px;
             font-weight: 600;
@@ -2170,11 +2218,11 @@ INDEX_HTML = """<!DOCTYPE html>
         .modal-overlay.active { display: flex; }
         .modal-card {
             background: var(--card);
-            border-radius: 12px;
-            padding: 16px;
+            border-radius: 16px;
+            padding: 18px;
             width: 100%;
             max-width: 340px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
             max-height: 80vh;
             overflow-y: auto;
         }
@@ -2183,12 +2231,12 @@ INDEX_HTML = """<!DOCTYPE html>
         .notif-item {
             background: var(--bg);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 10px;
             margin-bottom: 8px;
         }
         .notif-item.unread {
-            border-left: 3px solid var(--active-tab);
+            border-left: 4px solid var(--active-tab);
         }
         .notif-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
         .notif-text { font-size: 11px; color: var(--text); line-height: 1.3; }
@@ -2211,7 +2259,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
     </div>
 
-    <!-- Фильтр направлений -->
+    <!-- Адаптивный фильтр направлений -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
         <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
@@ -2282,7 +2330,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="modal-card">
             <div class="modal-title">🔔 Уведомления</div>
             <div id="notifList"><div class="loader">Загрузка...</div></div>
-            <button class="btn-confirm" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
+            <button class="btn-rounded" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
         </div>
     </div>
 
@@ -2989,7 +3037,8 @@ async def book_load_api(request):
     first_name = data.get('first_name', '')
     username = data.get('username', '')
     action = data.get('action') 
-    proposed_price = data.get('proposed_price', '')
+    proposed_price_raw = data.get('proposed_price', '')
+    proposed_price = format_custom_rate(proposed_price_raw)
     carrier_comment = data.get('comment', '')
     
     try:
@@ -3030,7 +3079,7 @@ async def book_load_api(request):
 
     carrier_text = format_carrier_info(user_id, username, first_name)
 
-    # --- Забор по фиксированной ставке логиста ---
+    # Забор по фиксированной ставке логиста
     if action == 'confirm':
         if requested_cars > current_cars:
             requested_cars = current_cars
@@ -3072,7 +3121,7 @@ async def book_load_api(request):
 
         return web.json_response({"status": "success"})
 
-    # --- Предложение своей ставки логисту ---
+    # Предложение своей ставки логисту
     elif action == 'bid':
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
