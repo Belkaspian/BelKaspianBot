@@ -1897,7 +1897,7 @@ async def handle_channel_post(message: types.Message):
 
 
 # ==================== WEB APP HTML ====================
-INDEX_HTML = """<!DOCTYPE html>
+INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
