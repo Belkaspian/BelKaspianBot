@@ -397,10 +397,12 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
+    # Очистка названия маршрута от цен
     route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
+    # Разбор доп. полей
     car_type = "Тент/реф"
     cargo_type = "ТНП"
     weight = "до 22т"
@@ -608,80 +610,65 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 
 # ==================== ИИ GEMINI И ГЕНЕРАЦИЯ PDF ====================
 
-async def process_docs_with_ai(photos_file_ids, text_notes):
+async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
     """Скачивает фото из Telegram, кодирует в Base64 и отправляет в Gemini 1.5 Vision API."""
     if not GEMINI_API_KEY:
-        logging.warning("⚠️ Переменная GEMINI_API_KEY не задана в Environment Variables!")
         return (
-            f"📸 **Загружено документов**: {len(photos_file_ids)} шт.\n"
-            f"📞 **Заметки/телефон**: {text_notes or 'Указаны на фото'}\n\n"
-            f"⚠️ *(Ключ GEMINI_API_KEY не настроен в Environment)*"
+            "Тягач: Не распознан\n"
+            "Прицеп: Не распознан\n"
+            "Водитель: Не распознан\n"
+            f"Номера телефонов: {text_notes or 'Не указан'}\n"
+            "Паспорт: Не распознан\n"
+            "Водительское: Не распознано"
         )
-
-    if not photos_file_ids:
-        return f"📞 **Дополнительные данные/телефон:**\n{text_notes or 'Не указаны'}"
 
     parts = []
     prompt = (
-        "Ты — специализированный ИИ-ассистент логистической компании для распознавания документов водителей и автотранспорта.\n"
-        "Тебе присланы фотографии техпаспортов (СТС) тягача и прицепа, паспорта и/или водительского удостоверения водителя.\n"
-        f"Также перевозчик указал следующий текст/телефон: '{text_notes or 'Нет'}'.\n\n"
-        "Внимательно распознай всю информацию на фото и сформируй структурированный аккуратный отчёт на русском языке:\n"
-        "1. 🚛 **Тягач**: Марка/модель, Гос. номер, Номер СТС/Техпаспорта\n"
-        "2. 🚛 **Прицеп**: Марка/модель, Гос. номер, Номер СТС/Техпаспорта\n"
-        "3. 👤 **Водитель**: ФИО полностью, Серия и номер паспорта, Номер водительского удостоверения\n"
-        "4. 📞 **Телефон водителя**: Номер телефона\n\n"
-        "Пиши строго по существу списком с эмодзи, без приветствий и лишних вводных фраз."
+        "Ты — ИИ-ассистент логистической компании. Твоя задача — извлечь данные с фото документов и вернуть текст СТРОГО по шаблону ниже.\n"
+        f"Заметки/телефон от водителя: '{text_notes or 'Нет'}'.\n\n"
+        "Заполняй только найденные данные, без звезд (*), маркдауна и лишних пояснений:\n\n"
+        "Тягач: Марка, модель, гос. номер, вин номер, страна регистрации\n"
+        "Прицеп: Марка, модель, гос. номер, вин номер, страна регистрации\n"
+        "Водитель: ФИО, дата рождения\n"
+        "Номера телефонов: Рос номер / далее остальные номера\n"
+        "Паспорт: Номер паспорта, дата выдачи, орган выдачи, страна паспорта\n"
+        "Водительское: Номер водительского, дата выдачи, орган выдачи, страна водительского"
     )
     
     parts.append({"text": prompt})
 
-    for file_id in photos_file_ids:
+    all_files = (photos_file_ids or []) + (doc_file_ids or [])
+    for file_id in all_files:
         try:
             file_info = await bot.get_file(file_id)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
             img_bytes = buf.getvalue()
             b64_str = base64.b64encode(img_bytes).decode('utf-8')
-            
-            parts.append({
-                "inline_data": {
-                    "mime_type": "image/jpeg",
-                    "data": b64_str
-                }
-            })
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_str}})
         except Exception as e:
-            logging.error(f"Error downloading photo {file_id} for Gemini: {e}")
+            logging.error(f"Error loading file for AI: {e}")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": parts}]}
-
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as response:
+            async with session.post(url, json={"contents": [{"parts": parts}]}, timeout=aiohttp.ClientTimeout(total=45)) as response:
                 if response.status == 200:
                     res_json = await response.json()
                     candidates = res_json.get('candidates', [])
                     if candidates:
-                        text_response = candidates[0]['content']['parts'][0]['text']
-                        return text_response.strip()
-                else:
-                    err_body = await response.text()
-                    logging.error(f"Gemini API error {response.status}: {err_body}")
+                        return candidates[0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        logging.error(f"Exception during Gemini API call: {e}")
+        logging.error(f"Gemini API Exception: {e}")
 
-    return (
-        f"📸 **Загружено документов**: {len(photos_file_ids)} шт.\n"
-        f"📞 **Заметки/телефон**: {text_notes or 'Указаны на фото'}"
-    )
+    return "Тягач:\nПрицеп:\nВодитель:\nНомера телефонов:\nПаспорт:\nВодительское:"
 
-def create_pdf_report(route: str, date_str: str, price: str, carrier_info: str, ai_text: str) -> io.BytesIO:
-    """Генерирует PDF-отчет с данными от ИИ-агента."""
+async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
+    """Генерирует 1 единый PDF со всеми распознанными данными и вшитыми фото документов."""
     buffer = io.BytesIO()
     if not HAS_REPORTLAB:
-        buffer.write(f"ОТЧЕТ ПО ГРУЗУ\nМаршрут: {route}\nДата: {date_str}\nСтавка: {price}\n\n{ai_text}".encode('utf-8'))
+        buffer.write(f"Маршрут: {route}\nДата: {date_str}\nСтавка: {price}\n\n{ai_text}".encode('utf-8'))
         buffer.seek(0)
         return buffer
 
@@ -689,54 +676,52 @@ def create_pdf_report(route: str, date_str: str, price: str, carrier_info: str, 
     width, height = A4
 
     font_name = "Helvetica"
-    for font_path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "DejaVuSans.ttf"
-    ]:
+    for font_path in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "DejaVuSans.ttf"]:
         if os.path.exists(font_path):
             try:
                 pdfmetrics.registerFont(TTFont('CyrillicFont', font_path))
                 font_name = 'CyrillicFont'
                 break
-            except Exception:
-                pass
+            except Exception: pass
 
-    c.setFont(font_name, 14)
-    c.drawString(40, height - 50, "ОТЧЕТ ПО ДОКУМЕНТАМ ВОДИТЕЛЯ И ТС")
+    # Страница 1: Данные
+    c.setFont(font_name, 13)
+    c.drawString(40, height - 40, "ОТЧЕТ ПО ДОКУМЕНТАМ ВОДИТЕЛЯ И ТС")
 
     c.setFont(font_name, 10)
-    y = height - 85
+    y = height - 70
     c.drawString(40, y, f"Маршрут: {route}")
-    y -= 18
-    c.drawString(40, y, f"Дата погрузки: {date_str}")
-    y -= 18
-    c.drawString(40, y, f"Ставка: {price}")
-    y -= 18
-    
+    y -= 16
+    c.drawString(40, y, f"Дата: {date_str} | Ставка: {price}")
+    y -= 16
     clean_carrier = carrier_info.replace("👤 Перевозчик: ", "").replace("🏢 ", "")
     c.drawString(40, y, f"Перевозчик: {clean_carrier}")
     y -= 25
 
-    c.setFont(font_name, 11)
-    c.drawString(40, y, "Данные распознавания (ИИ-Агент):")
-    y -= 20
-
     c.setFont(font_name, 9)
-    clean_ai_text = ai_text.replace('*', '').replace('#', '')
-    
-    for line in clean_ai_text.split('\n'):
-        line_str = line.strip()
-        if not line_str:
-            y -= 8
-            continue
+    for line in ai_text.replace('*', '').split('\n'):
+        if not line.strip(): continue
         if y < 40:
             c.showPage()
-            y = height - 50
+            y = height - 40
             c.setFont(font_name, 9)
-        
-        c.drawString(40, y, line_str[:95])
+        c.drawString(40, y, line.strip()[:95])
         y -= 14
+
+    # Добавляем изображения документов прямо в PDF
+    from reportlab.lib.utils import ImageReader
+    for pid in photo_ids:
+        try:
+            file_info = await bot.get_file(pid)
+            buf = io.BytesIO()
+            await bot.download_file(file_info.file_path, destination=buf)
+            buf.seek(0)
+            img = ImageReader(buf)
+            c.showPage()
+            c.drawString(40, height - 30, f"Приложение: Фото документа")
+            c.drawImage(img, 40, 100, width=width-80, height=height-150, preserveAspectRatio=True)
+        except Exception as e:
+            logging.error(f"PDF Image insert error: {e}")
 
     c.save()
     buffer.seek(0)
@@ -815,7 +800,7 @@ async def send_welcome_message(message: types.Message):
         reply_markup=inline_builder1.as_markup()
     )
 
-    # Сообщение 2
+    # Сообщение 2 + постоянная кнопка
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
         reply_markup=get_chat_menu_inline_markup()
@@ -1063,12 +1048,18 @@ async def handle_doc_photo(message: types.Message, state: FSMContext):
     photos = data.get("photos", [])
     photos.append(message.photo[-1].file_id)
     await state.update_data(photos=photos)
-    await message.answer(f"📸 Фото принято! (Всего загружено: {len(photos)}). Пришлите еще фото/телефон или нажмите «✅ Отправить данные логисту».")
+
+@dp.message(DocUploadStates.waiting_for_docs, F.document)
+async def handle_doc_document(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    documents = data.get("documents", [])
+    documents.append(message.document.file_id)
+    await state.update_data(documents=documents)
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
 async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Загрузка документов отменена.", reply_markup=get_main_reply_markup())
+    await message.answer("❌ Загрузка отменена.", reply_markup=get_main_reply_markup())
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
 async def handle_doc_finish(message: types.Message, state: FSMContext):
@@ -1077,14 +1068,15 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     user_obj = message.from_user
 
     photos = data.get("photos", [])
+    documents = data.get("documents", [])
     notes = data.get("text_notes", "")
     route_str = data.get("upload_route", "Маршрут")
     date_str = data.get("upload_date", "Дата")
     price_str = data.get("upload_price", "Ставка")
-    deal_id = data.get("upload_deal_id", "info")
+    deal_id = data.get("upload_deal_id")
 
-    if not photos and not notes:
-        await message.answer("⚠️ Вы не прислали ни одного фото или номера телефона. Отправьте документы и нажмите кнопку повторно.")
+    if not photos and not documents and not notes:
+        await message.answer("⚠️ Вы не прислали ни одного фото/файла или телефона.")
         return
 
     if deal_id:
@@ -1094,14 +1086,11 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
 
-    await message.answer("🤖 **ИИ-агент распознает документы и формирует PDF-отчет...** Пожалуйста, подождите немного.")
-
-    ai_formatted_data = await process_docs_with_ai(photos, notes)
+    ai_formatted_data = await process_docs_with_ai(photos, documents, notes)
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
     admin_msg = (
-        f"📄 **ПОСТУПИЛИ ДАННЫЕ ПО ГРУЗУ #{deal_id}**\n\n"
-        f"📅 {date_str} | {route_str}\n"
+        f"📅 {date_str} | 📍 {route_str}\n"
         f"💰 {price_str}\n\n"
         f"{carrier_text}\n\n"
         f"{ai_formatted_data}"
@@ -1110,23 +1099,19 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     try:
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        pdf_buf = create_pdf_report(route_str, date_str, price_str, carrier_text, ai_formatted_data)
-        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{deal_id}_{date_str}.pdf")
+        pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, photos)
+        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
+        
         await bot.send_document(
             chat_id=ADMIN_CHANNEL_ID, 
             document=pdf_file, 
-            caption=f"📄 **PDF-отчет по грузу #{deal_id}** ({route_str})"
+            caption=f"📄 **PDF-отчет по грузу** ({route_str})"
         )
-
-        for pid in photos:
-            await bot.send_photo(chat_id=ADMIN_CHANNEL_ID, photo=pid)
-            await asyncio.sleep(0.05)
-
     except Exception as e:
-        logging.error(f"Error forwarding docs and PDF to admin channel: {e}")
+        logging.error(f"Error forwarding docs to admin channel: {e}")
 
     await state.clear()
-    await message.answer("✅ Все данные и PDF-отчет успешно сформированы и переданы логисту!", reply_markup=get_main_reply_markup())
+    await message.answer("✅ Данные переданы логисту.", reply_markup=get_main_reply_markup())
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text)
 async def handle_doc_text_notes(message: types.Message, state: FSMContext):
@@ -1134,7 +1119,6 @@ async def handle_doc_text_notes(message: types.Message, state: FSMContext):
     old_notes = data.get("text_notes", "")
     new_notes = (old_notes + "\n" + message.text).strip()
     await state.update_data(text_notes=new_notes)
-    await message.answer("📝 Текст/телефон записан. Пришлите фото или нажмите «✅ Отправить данные логисту».")
 
 
 # ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК В ЧАТЕ ====================
@@ -2128,7 +2112,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML (СЫРАЯ СТРОКА С ЗАЩИТОЙ ЭКРАНИРОВАНИЯ) ====================
+# ==================== WEB APP HTML ====================
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -2313,16 +2297,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
             text-transform: uppercase;
         }
 
-        .sort-bar select {
+        .sort-bar select, select {
             flex: 1;
-            background: var(--bg);
-            color: var(--text);
+            appearance: none;
+            -webkit-appearance: none;
+            background: var(--bg) url("data:image/svg+xml;utf8,<svg fill='%236c757d' height='16' viewBox='0 0 24 24' width='16' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") no-repeat right 10px center;
+            border-radius: 10px;
+            padding: 8px 28px 8px 12px;
             border: 1px solid var(--border);
-            padding: 6px 10px;
-            border-radius: 8px;
             font-size: 11px;
             font-weight: 600;
+            color: var(--text);
             outline: none;
+            box-shadow: none;
         }
 
         .table-container {
@@ -2436,15 +2423,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
 
         .qty-picker label { font-size: 11px; color: var(--hint); font-weight: 600; flex: 1; }
-        .qty-picker select {
-            background: var(--bg);
-            color: var(--text);
-            border: 1px solid var(--border);
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-            font-weight: 700;
-        }
 
         textarea, input[type="text"], input[type="password"] {
             width: 100%;
@@ -2722,9 +2700,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
             </div>
 
+            <!-- Сортировки админки -->
+            <div id="adminSortBox" style="margin-bottom:10px;">
+                <select id="adminSortSelect" onchange="applyAdminSort()">
+                    <option value="name">👤 По названию/имени (А-Я)</option>
+                    <option value="status">🟢 По статусу (Сначала активные)</option>
+                </select>
+            </div>
+
             <!-- Фильтр по перевозчикам в сделках -->
             <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
-                <select id="adminCarrierSelect" style="width:100%; padding:8px; border-radius:8px; background:var(--bg); color:var(--text); border:1px solid var(--border);" onchange="renderAdminConfirmedDeals()">
+                <select id="adminCarrierSelect" onchange="renderAdminConfirmedDeals()">
                     <option value="ALL">Все перевозчики</option>
                 </select>
             </div>
@@ -2791,6 +2777,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'carriers';
+
+        let allAdminCarriersArray = [];
+        let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
         function handleHeaderClick() {
@@ -2849,6 +2838,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
             document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
 
+            document.getElementById('adminSortBox').style.display = (tab !== 'confirmed') ? 'block' : 'none';
             document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') {
@@ -2860,23 +2850,43 @@ INDEX_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        function applyAdminSort() {
+            if (adminSubTab === 'carriers') renderAdminCarriers();
+            else if (adminSubTab === 'exchange') renderAdminLoads();
+        }
+
         async function loadAdminCarriers() {
             let body = document.getElementById('adminContentBody');
             body.innerHTML = '<div class="loader">Загрузка перевозчиков...</div>';
             try {
                 let res = await fetch('/api/admin/carriers?t=' + Date.now());
                 let data = await res.json();
-                body.innerHTML = data.carriers.map(c => `
-                    <div class="notif-item">
-                        <div class="notif-title">🏢 ${c.company} | ${c.name}</div>
-                        <div class="notif-text">📞 ${c.phone} | ID: ${c.user_id}</div>
-                        <div class="notif-text" style="color:var(--hint); margin-top:2px;">Подписки: ${c.subscriptions || 'нет'}</div>
-                        <button class="btn-rounded" style="margin-top:6px; background:${c.status === 'ACTIVE' ? '#dc3545' : '#28a745'}; padding:6px;" onclick="toggleCarrierStatus(${c.user_id})">
-                            ${c.status === 'ACTIVE' ? '🔴 Заблокировать' : '🟢 Разблокировать'}
-                        </button>
-                    </div>
-                `).join('');
+                allAdminCarriersArray = data.carriers || [];
+                renderAdminCarriers();
             } catch(e) { body.innerHTML = 'Ошибка загрузки'; }
+        }
+
+        function renderAdminCarriers() {
+            let body = document.getElementById('adminContentBody');
+            let sortType = document.getElementById('adminSortSelect')?.value || 'name';
+            let list = [...allAdminCarriersArray];
+
+            if (sortType === 'name') {
+                list.sort((a, b) => (a.company || a.name).localeCompare(b.company || b.name));
+            } else if (sortType === 'status') {
+                list.sort((a, b) => (a.status === 'ACTIVE' ? -1 : 1));
+            }
+
+            body.innerHTML = list.map(c => `
+                <div class="notif-item">
+                    <div class="notif-title">🏢 ${c.company} | ${c.name}</div>
+                    <div class="notif-text">📞 ${c.phone} | ID: ${c.user_id}</div>
+                    <div class="notif-text" style="color:var(--hint); margin-top:2px;">Подписки: ${c.subscriptions || 'нет'}</div>
+                    <button class="btn-rounded" style="margin-top:6px; background:${c.status === 'ACTIVE' ? '#dc3545' : '#28a745'}; padding:6px;" onclick="toggleCarrierStatus(${c.user_id})">
+                        ${c.status === 'ACTIVE' ? '🔴 Заблокировать' : '🟢 Разблокировать'}
+                    </button>
+                </div>
+            `).join('');
         }
 
         async function toggleCarrierStatus(uId) {
@@ -2894,21 +2904,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
             try {
                 let res = await fetch('/api/admin/loads?t=' + Date.now());
                 let data = await res.json();
-                body.innerHTML = data.loads.map(l => `
-                    <div class="notif-item">
-                        <div class="notif-title">📍 ${l.date} | ${l.route} (${l.price})</div>
-                        <div class="notif-text">🚚 Доступно: ${l.cars} авто | Статус: <b>${l.status}</b></div>
-                        <div class="notif-text" style="color:#007aff;">👤 Перевозчик: ${l.carrier_info}</div>
-                        <div class="buttons" style="margin-top:6px;">
-                            <button class="btn-confirm" style="padding:6px;" onclick='openAdminEditModal(${JSON.stringify(l).replace(/'/g, "&#39;")})'>✏️ Изменить</button>
-                            <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="deleteAdminLoad(${l.id})">🗑 Закрыть/Удалить</button>
-                        </div>
-                    </div>
-                `).join('');
+                allAdminLoadsArray = data.loads || [];
+                renderAdminLoads();
             } catch(e) { body.innerHTML = 'Ошибка загрузки'; }
         }
 
-        function openAdminEditModal(l) {
+        function renderAdminLoads() {
+            let body = document.getElementById('adminContentBody');
+            let list = [...allAdminLoadsArray];
+
+            body.innerHTML = list.map(l => {
+                let isAct = (l.status === 'ACTIVE');
+                return `
+                <div class="notif-item">
+                    <div class="notif-title">📍 ${l.date} | ${l.route} (${l.price})</div>
+                    <div class="notif-text">🚚 Доступно: ${l.cars} авто | Статус: <b>${l.status}</b></div>
+                    <div class="notif-text" style="color:#007aff;">👤 Перевозчик: ${l.carrier_info}</div>
+                    <div class="buttons" style="margin-top:6px;">
+                        <button class="btn-confirm" style="padding:6px; background:${isAct ? '#fd7e14' : '#28a745'};" onclick="toggleAdminLoadStatus(${l.id})">
+                            ${isAct ? '🔴 Закрыть' : '🟢 Открыть'}
+                        </button>
+                        <button class="btn-confirm" style="padding:6px;" onclick="openAdminEditModalById(${l.id})">✏️ Изменить</button>
+                        <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="hardDeleteAdminLoad(${l.id})">🗑 Удалить</button>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function openAdminEditModalById(loadId) {
+            let l = allAdminLoadsArray.find(x => String(x.id) === String(loadId));
+            if (!l) return;
+
             document.getElementById('editLoadId').value = l.id;
             document.getElementById('editRoute').value = l.route;
             document.getElementById('editDate').value = l.date;
@@ -2947,9 +2973,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
             loadData(false);
         }
 
-        async function deleteAdminLoad(id) {
-            if (confirm('Закрыть/удалить этот груз для всех?')) {
-                await fetch('/api/admin/delete_load', {
+        async function toggleAdminLoadStatus(id) {
+            await fetch('/api/admin/toggle_load_active', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id: id})
+            });
+            loadAdminLoads();
+            loadData(false);
+        }
+
+        async function hardDeleteAdminLoad(id) {
+            if (confirm('Удалить этот груз безвозвратно из базы?')) {
+                await fetch('/api/admin/hard_delete_load', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({id: id})
@@ -3574,6 +3610,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 </html>"""
 
 # ==================== WEB APP БЭКЕНД ====================
+
 async def get_loads_api(request):
     country = request.query.get('country')
     raw_uid = request.query.get('user_id')
@@ -3884,14 +3921,15 @@ async def submit_docs_prompt_api(request):
         )
 
         prompt_text = (
-            f"📄 **Подача документов по грузу #{clean_deal_id}:**\n"
             f"📍 {route_str} ({date_str})\n"
             f"💰 Ставка: {price_str}\n\n"
-            f"📸 Пожалуйста, отправьте в этот чат:\n"
-            f"1️⃣ Фото техпаспортов на тягач и прицеп\n"
-            f"2️⃣ Фото паспорта и водительского удостоверения водителя\n"
-            f"3️⃣ Номер телефона водителя (текстом)\n\n"
-            f"Вы можете прислать всё несколькими сообщениями. Когда закончите, нажмите кнопку **«✅ Отправить данные логисту»** ниже."
+            f"Пожалуйста, отправьте в этот чат:\n"
+            f"1) Техпаспорт тягача (с 2х сторон)\n"
+            f"2) Техпаспорт прицепа (с 2х сторон)\n"
+            f"3) Паспорт водителя\n"
+            f"4) Водительское удостоверение (с 2х сторон)\n"
+            f"5) Номера телефонов водителя (российский обязательно)\n\n"
+            f"Вы можете прислать фото или PDF-файлы. Когда закончите, нажмите кнопку **«✅ Отправить данные логисту»**."
         )
 
         builder = ReplyKeyboardBuilder()
@@ -3971,7 +4009,6 @@ async def book_load_api(request):
 
     carrier_text = format_carrier_info(user_id, username, first_name)
 
-    # Забор по фиксированной ставке логиста
     if action == 'confirm':
         if requested_cars > current_cars:
             requested_cars = current_cars
@@ -4013,7 +4050,6 @@ async def book_load_api(request):
 
         return web.json_response({"status": "success"})
 
-    # Предложение своей ставки логисту
     elif action == 'bid':
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
@@ -4165,6 +4201,40 @@ async def admin_delete_load_api(request):
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+        conn.commit()
+        conn.close()
+
+        await update_cargo_messages_for_all_users(load_id)
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_toggle_load_active_api(request):
+    try:
+        data = await request.json()
+        load_id = int(data.get('id'))
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM loads WHERE load_id = ?", (load_id,))
+        row = cursor.fetchone()
+        new_status = 'CLOSED' if row and row[0] == 'ACTIVE' else 'ACTIVE'
+        cursor.execute("UPDATE loads SET status = ? WHERE load_id = ?", (new_status, load_id))
+        conn.commit()
+        conn.close()
+
+        await update_cargo_messages_for_all_users(load_id)
+        return web.json_response({"status": "success", "new_status": new_status})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_hard_delete_load_api(request):
+    try:
+        data = await request.json()
+        load_id = int(data.get('id'))
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM loads WHERE load_id = ?", (load_id,))
+        cursor.execute("DELETE FROM confirmed_deals WHERE load_id = ?", (load_id,))
         conn.commit()
         conn.close()
 
@@ -4388,6 +4458,8 @@ async def web_server():
     app.router.add_get("/api/admin/loads", admin_get_loads_api)
     app.router.add_post("/api/admin/edit_load", admin_edit_load_api)
     app.router.add_post("/api/admin/delete_load", admin_delete_load_api)
+    app.router.add_post("/api/admin/toggle_load_active", admin_toggle_load_active_api)
+    app.router.add_post("/api/admin/hard_delete_load", admin_hard_delete_load_api)
     app.router.add_get("/api/admin/confirmed_deals", admin_get_confirmed_deals_api)
     app.router.add_post("/api/admin/edit_deal", admin_edit_deal_api)
     app.router.add_post("/api/admin/cancel_deal", admin_cancel_deal_api)
