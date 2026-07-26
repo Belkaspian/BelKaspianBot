@@ -1243,23 +1243,23 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
 
-# Распаковываем текст И отсортированный список файлов
-ai_formatted_data, sorted_files = await process_docs_with_ai(photos, documents, notes)
-carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
+    # Распаковываем текст И отсортированный список файлов
+    ai_formatted_data, sorted_files = await process_docs_with_ai(photos, documents, notes)
+    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
-admin_msg = (
-    f"📅 {date_str} | 📍 {route_str}\n"
-    f"💰 {price_str}\n\n"
-    f"{carrier_text}\n\n"
-    f"{ai_formatted_data}"
-)
+    admin_msg = (
+        f"📅 {date_str} | 📍 {route_str}\n"
+        f"💰 {price_str}\n\n"
+        f"{carrier_text}\n\n"
+        f"{ai_formatted_data}"
+    )
 
-try:
-    await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+    try:
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-    # Передаем отсортированный список страниц в PDF
-    pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
-            pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
+        # Передаем отсортированный список страниц в PDF
+        pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
+        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
         
         await bot.send_document(
             chat_id=ADMIN_CHANNEL_ID, 
