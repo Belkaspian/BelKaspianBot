@@ -130,6 +130,13 @@ def init_db():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_counters (
+            admin_chat_id INTEGER PRIMARY KEY,
+            bid_id INTEGER
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -188,14 +195,19 @@ class AdminCounterStates(StatesGroup):
     waiting_for_counter_rate = State()
 
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ДАТЫ ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И КЛАВИАТУРЫ ====================
+
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🌍 Выбор направлений"))
-    builder.add(types.KeyboardButton(text="👤 Личный кабинет"))
-    builder.add(types.KeyboardButton(text="📦 Актуальные грузы"))
-    builder.adjust(2, 1)
+    builder.add(types.KeyboardButton(text="📱 Вызвать меню"))
     return builder.as_markup(resize_keyboard=True)
+
+def get_chat_menu_inline_markup():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🌍 Выбор направлений", callback_data="menu_directions"))
+    builder.row(types.InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile"))
+    builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="menu_active"))
+    return builder.as_markup()
 
 def is_auction_price(price_str: str) -> bool:
     if not price_str:
@@ -247,7 +259,6 @@ def extract_price(text: str) -> str:
     return "Торги"
 
 def extract_time_limit(text: str):
-    """Ищет время 'до 17:00' или 'до 17' и возвращает время и дату окончания по МСК (UTC+3)."""
     match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
     if match:
         raw_time = match.group(1).replace('.', ':')
@@ -259,10 +270,8 @@ def extract_time_limit(text: str):
             hours, minutes = int(parts[0]), int(parts[1])
             
         time_formatted = f"{hours:02d}:{minutes:02d}"
-        
         msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
         expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
-        
         expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         return time_formatted, expire_str
         
@@ -529,7 +538,6 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ДАТЕ И ВРЕМЕНИ (МСК) ====================
 async def auto_clean_expired_cargos():
-    """Удаляет/закрывает грузы при наступлении указанного времени по МСК или прошедшей даты."""
     while True:
         try:
             conn = sqlite3.connect("cargo_bot.db")
@@ -581,11 +589,11 @@ async def auto_clean_expired_cargos():
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 @dp.message(Command("start"))
+@dp.message(F.text == "📱 Вызвать меню")
 @dp.message(F.state == None)
 async def cmd_start_or_menu(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    text = message.text or ""
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -604,35 +612,46 @@ async def cmd_start_or_menu(message: types.Message, state: FSMContext):
         return
         
     conn.close()
-
-    if text == "🌍 Выбор направлений":
-        await show_directions_menu(message)
-        return
-    elif text == "👤 Личный кабинет":
-        await show_profile_menu(message)
-        return
-    elif text == "📦 Актуальные грузы":
-        web_app_url = f"{RENDER_URL}/webapp"
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
-        await message.answer("Посмотреть актуальные грузы можно в Web App каталоге:", reply_markup=builder.as_markup())
-        return
-
     await send_welcome_message(message)
 
 async def send_welcome_message(message: types.Message):
     web_app_url = f"{RENDER_URL}/webapp"
-    inline_builder = InlineKeyboardBuilder()
-    inline_builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
+    inline_builder1 = InlineKeyboardBuilder()
+    inline_builder1.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
 
-    welcome_text = (
-        "Приветствую!\n"
-        "Для удобства использования нашего бота есть Web-App 👇\n\n"
-        "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:"
+    # Сообщение 1
+    await message.answer(
+        "Приветствую!\nДля удобства использования нашего бота есть Web-App 👇",
+        reply_markup=inline_builder1.as_markup()
     )
-    
-    await message.answer(welcome_text, reply_markup=inline_builder.as_markup())
-    await message.answer("Выберите нужное действие в меню ниже:", reply_markup=get_main_reply_markup())
+
+    # Сообщение 2
+    await message.answer(
+        "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
+        reply_markup=get_chat_menu_inline_markup()
+    )
+
+    # Внизу одна постоянная кнопка вызвать меню
+    await message.answer("Для вызова меню в любой момент используйте кнопку ниже:", reply_markup=get_main_reply_markup())
+
+@dp.callback_query(F.data == "menu_directions")
+async def callback_menu_directions(callback: types.CallbackQuery):
+    await show_directions_menu(callback)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_profile")
+async def callback_menu_profile(callback: types.CallbackQuery):
+    await show_profile_menu(callback)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_active")
+async def callback_menu_active(callback: types.CallbackQuery):
+    web_app_url = f"{RENDER_URL}/webapp"
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
+    await callback.message.edit_text("Посмотреть актуальные грузы можно в нашем Web App каталоге:", reply_markup=builder.as_markup())
+    await callback.answer()
 
 async def show_directions_menu(event):
     user_id = event.from_user.id
@@ -735,8 +754,10 @@ async def show_profile_menu(event):
 
 @dp.callback_query(F.data == "back_to_main_menu")
 async def callback_back_to_main(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await send_welcome_message(callback.message)
+    await callback.message.edit_text(
+        "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
+        reply_markup=get_chat_menu_inline_markup()
+    )
     await callback.answer()
 
 @dp.callback_query(F.data == "prof_edit_company")
@@ -1126,7 +1147,6 @@ async def admin_accept_bid(callback: types.CallbackQuery):
         conn.commit()
         conn.close()
 
-        # Отправка уведомления в колокольчик 🔔
         add_notification(
             carrier_id, 
             "✅ Ставка подтверждена", 
@@ -1272,24 +1292,41 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("counter_bid_"))
 async def admin_start_counter_bid(callback: types.CallbackQuery, state: FSMContext):
     bid_id = int(callback.data.replace("counter_bid_", ""))
+    chat_id = callback.message.chat.id
     user_id = callback.from_user.id
     
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id) VALUES (?, ?)", (chat_id, bid_id))
+    conn.commit()
+    conn.close()
+
     PENDING_COUNTER_OFFERS[user_id] = bid_id
+    PENDING_COUNTER_OFFERS[chat_id] = bid_id
+
     await state.update_data(counter_bid_id=bid_id)
     await state.set_state(AdminCounterStates.waiting_for_counter_rate)
     
-    await callback.message.reply(
-        f"💡 **Встречная ставка по заявке #{bid_id}:**\n\n"
-        f"Введите вашу встречную ставку текстом в ответ на это сообщение (например: `2600 USD`), "
-        f"либо отправьте команду:\n`/counter_{bid_id} 2600 USD`",
-        parse_mode="Markdown"
-    )
+    try:
+        await callback.message.reply(
+            f"💡 **Встречная ставка по заявке #{bid_id}:**\n\n"
+            f"Напишите желаемую цену сообщением в этот чат (например: `2600 USD`).\n"
+            f"Также можно использовать команду:\n`/counter_{bid_id} 2600 USD`",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
     await callback.answer()
 
 @dp.message(Command(re.compile(r"counter_\d+")))
 @dp.message(AdminCounterStates.waiting_for_counter_rate)
-async def admin_send_counter_bid(message: types.Message, state: FSMContext):
-    text = message.text.strip()
+@dp.message(F.chat.id == ADMIN_CHANNEL_ID)
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
+async def admin_send_counter_bid(event: types.Message, state: FSMContext = None):
+    text = (event.text or event.caption or "").strip()
+    if not text or text.startswith("!") or text.lower() in ("/меню", "меню"):
+        return
+
     bid_id = None
     new_rate = ""
 
@@ -1298,8 +1335,20 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
         bid_id = int(cmd_match.group(1))
         new_rate = cmd_match.group(2).strip()
     else:
-        data = await state.get_data()
-        bid_id = data.get("counter_bid_id") or PENDING_COUNTER_OFFERS.get(message.from_user.id)
+        chat_id = event.chat.id
+        user_id = event.from_user.id if event.from_user else 0
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT bid_id FROM pending_counters WHERE admin_chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            bid_id = row[0]
+        else:
+            bid_id = PENDING_COUNTER_OFFERS.get(chat_id) or PENDING_COUNTER_OFFERS.get(user_id)
+
         new_rate = text
 
     if not bid_id or not new_rate:
@@ -1312,13 +1361,15 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
     
     if not bid:
         conn.close()
-        await message.answer("❌ Ставка не найдена или устарела.")
-        await state.clear()
-        PENDING_COUNTER_OFFERS.pop(message.from_user.id, None)
+        try:
+            await event.answer("❌ Ставка не найдена или уже была обработана.")
+        except Exception:
+            pass
         return
         
     cargo_id, carrier_id, cars_count = bid
     cursor.execute("UPDATE bids SET counter_rate = ?, status = 'COUNTER_OFFER' WHERE bid_id = ?", (new_rate, bid_id))
+    cursor.execute("DELETE FROM pending_counters WHERE admin_chat_id = ?", (event.chat.id,))
     cursor.execute("SELECT route FROM loads WHERE load_id = ?", (cargo_id,))
     load_row = cursor.fetchone()
     conn.commit()
@@ -1351,12 +1402,18 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
             reply_markup=builder.as_markup(),
             parse_mode="Markdown"
         )
-        await message.answer(f"✅ Встречное предложение ({new_rate}) отправлено перевозчику!")
+        await event.answer(f"✅ Встречное предложение ({new_rate}) отправлено перевозчику!")
     except Exception as e:
-        await message.answer(f"❌ Не удалось отправить сообщение перевозчику: {e}")
+        try:
+            await event.answer(f"❌ Не удалось отправить сообщение перевозчику: {e}")
+        except Exception:
+            pass
 
-    await state.clear()
-    PENDING_COUNTER_OFFERS.pop(message.from_user.id, None)
+    if state:
+        await state.clear()
+    PENDING_COUNTER_OFFERS.pop(event.chat.id, None)
+    if event.from_user:
+        PENDING_COUNTER_OFFERS.pop(event.from_user.id, None)
 
 @dp.callback_query(F.data.startswith("carr_acc_count_"))
 async def carrier_accept_counter(callback: types.CallbackQuery):
@@ -1427,7 +1484,6 @@ async def admin_decline_bid(callback: types.CallbackQuery):
 
     route_name = row[0] if row else "Груз"
 
-    # Уведомление в колокольчик 🔔
     add_notification(
         carrier_id, 
         "❌ Ставка отклонена", 
@@ -1492,43 +1548,6 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Груз обновлен!", reply_markup=get_main_reply_markup())
     await update_cargo_messages_for_all_users(cargo_id)
-
-@dp.message(F.chat.id == ADMIN_CHANNEL_ID)
-@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID)
-async def handle_admin_messages_and_posts(event: types.Message):
-    text = event.text or event.caption
-    if not text:
-        return
-        
-    cleaned_text = text.strip()
-    if cleaned_text.lower() in ("/меню", "меню", "!меню"):
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
-        builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
-        builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
-        await event.answer("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
-        return
-
-    if cleaned_text.startswith("!"):
-        broadcast_text = cleaned_text[1:].lstrip()
-        if not broadcast_text:
-            return
-
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        all_users = cursor.fetchall()
-        conn.close()
-        
-        success_count = 0
-        for (u_id,) in all_users:
-            try:
-                await bot.send_message(chat_id=u_id, text=broadcast_text)
-                success_count += 1
-                await asyncio.sleep(0.05)
-            except Exception:
-                pass
-        await event.answer(f"✅ Рассылка завершена ({success_count} польз.).")
 
 @dp.callback_query(F.data == "adm_menu_back")
 async def admin_menu_back(callback: types.CallbackQuery):
@@ -1815,7 +1834,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML (ВСТРОЕННЫЙС КОЛОКОЛЬЧИКОМ УВЕДОМЛЕНИЙ) ====================
+# ==================== WEB APP HTML ====================
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -2214,21 +2233,21 @@ INDEX_HTML = """<!DOCTYPE html>
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
-    <!-- Блок личного кабинета -->
+    <!-- Блок личного кабинета (АВТОСОХРАНЕНИЕ) -->
     <div id="profile-container" style="display: none;">
         <div class="profile-card">
-            <div class="profile-title">👤 Данные компании</div>
+            <div class="profile-title">👤 Данные компании (Автосохранение)</div>
             <div class="form-group">
                 <label>Компания:</label>
-                <input type="text" id="profCompany" placeholder="Название вашей компании..." />
+                <input type="text" id="profCompany" placeholder="Название вашей компании..." oninput="autoSaveProfile()" />
             </div>
             <div class="form-group">
                 <label>Имя контактного лица:</label>
-                <input type="text" id="profName" placeholder="Ваше имя..." />
+                <input type="text" id="profName" placeholder="Ваше имя..." oninput="autoSaveProfile()" />
             </div>
             <div class="form-group">
                 <label>Телефон:</label>
-                <input type="text" id="profPhone" placeholder="+375 / +7..." />
+                <input type="text" id="profPhone" placeholder="+375 / +7..." oninput="autoSaveProfile()" />
             </div>
         </div>
 
@@ -2243,8 +2262,6 @@ INDEX_HTML = """<!DOCTYPE html>
                 <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">🇦🇲 Армения</div>
             </div>
         </div>
-
-        <button class="btn-confirm" style="width: 100%; padding: 12px; font-size: 13px;" onclick="saveProfile()">💾 Сохранить данные профиля</button>
     </div>
 
     <!-- Модальное окно "Своя ставка" -->
@@ -2278,6 +2295,7 @@ INDEX_HTML = """<!DOCTYPE html>
         let currentCountry = 'ALL';
         let activeOfferLoadId = null;
         let currentDataHash = '';
+        let saveProfileTimer = null;
 
         function getUserId() {
             let uid = tg.initDataUnsafe?.user?.id;
@@ -2313,6 +2331,14 @@ INDEX_HTML = """<!DOCTYPE html>
         function toggleSubChip(el) {
             if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             el.classList.toggle('active');
+            autoSaveProfile();
+        }
+
+        function autoSaveProfile() {
+            if (saveProfileTimer) clearTimeout(saveProfileTimer);
+            saveProfileTimer = setTimeout(() => {
+                saveProfile();
+            }, 400);
         }
 
         function switchTab(tab) {
@@ -2383,7 +2409,6 @@ INDEX_HTML = """<!DOCTYPE html>
                     `).join('');
                 }
 
-                // Отмечаем прочитанными
                 await fetch('/api/notifications/read', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -2448,11 +2473,11 @@ INDEX_HTML = """<!DOCTYPE html>
 
                         let actionButtons = '';
                         if (isAuction) {
-                            actionButtons = `<button class="btn-offer" style="width:100%;" onclick="openOfferModal('${l.id}', event)">💰 Предложить авто по цене</button>`;
+                            actionButtons = `<button class="btn-offer" style="width:100%;" onclick="openOfferModal(${l.id}, event)">💰 Предложить авто по цене</button>`;
                         } else {
                             actionButtons = `
-                                <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">✅ Подтвердить</button>
-                                <button class="btn-offer" onclick="openOfferModal('${l.id}', event)">💰 Своя цена</button>
+                                <button class="btn-confirm" onclick="sendAction(${l.id}, 'confirm', event)">✅ Подтвердить</button>
+                                <button class="btn-offer" onclick="openOfferModal(${l.id}, event)">💰 Своя цена</button>
                             `;
                         }
 
@@ -2568,8 +2593,8 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         async function saveProfile() {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
             let userId = getUserId();
+            if (!userId) return;
 
             let company = document.getElementById('profCompany').value.trim();
             let name = document.getElementById('profName').value.trim();
@@ -2579,7 +2604,7 @@ INDEX_HTML = """<!DOCTYPE html>
             document.querySelectorAll('.sub-chip.active').forEach(chip => selectedSubs.push(chip.dataset.val));
 
             try {
-                let res = await fetch('/api/profile', {
+                await fetch('/api/profile', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2590,16 +2615,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         subscriptions: selectedSubs.join(',')
                     })
                 });
-
-                if (res.ok) {
-                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-                    notify('✅ Данные профиля и подписки успешно сохранены!');
-                } else {
-                    notify('❌ Ошибка сохранения данных.');
-                }
-            } catch(e) {
-                notify('⚠️ Ошибка соединения с сервером.');
-            }
+            } catch(e) {}
         }
 
         function toggleRow(id) {
@@ -2620,7 +2636,7 @@ INDEX_HTML = """<!DOCTYPE html>
         function openOfferModal(id, event) {
             event.stopPropagation();
             if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-            activeOfferLoadId = id;
+            activeOfferLoadId = parseInt(id);
             document.getElementById('modalPrice').value = '';
             const commEl = document.getElementById(`comment-${id}`);
             document.getElementById('modalComment').value = commEl ? commEl.value : '';
@@ -2667,9 +2683,10 @@ INDEX_HTML = """<!DOCTYPE html>
         async function performBooking(id, actionType, customPrice, comment, qty) {
             let user = tg.initDataUnsafe?.user || {};
             let userId = getUserId();
+            let cleanId = parseInt(id);
 
             try {
-                let res = await fetch(`/api/book/${id}`, { 
+                let res = await fetch(`/api/book/${cleanId}`, { 
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2949,10 +2966,11 @@ async def profile_post_api(request):
     return web.json_response({"status": "success"})
 
 async def book_load_api(request):
-    try:
-        load_id = int(request.match_info.get('id'))
-    except (ValueError, TypeError):
+    raw_id = request.match_info.get('id', '')
+    digits = re.findall(r'\d+', str(raw_id))
+    if not digits:
         return web.json_response({"error": "Неверный ID груза"}, status=400)
+    load_id = int(digits[0])
 
     try:
         data = await request.json()
