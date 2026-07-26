@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
+    logging.critical("❌ ОШИБКА: Не задана переменная окружения BOT_TOKEN на Render!")
     raise ValueError("Не задан токен бота в переменных окружения BOT_TOKEN!")
 
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
@@ -377,12 +378,12 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Очистка маршрута от цен
+    # Очистка названия маршрута от цен и лишних запятых
     route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
-    # Анализ остальных элементов по запятым (Тип ТС, Груз, Вес, Доп условия)
+    # Разбор типа ТС, Груза, Веса и условий
     car_type = "Тент/реф"
     cargo_type = "ТНП"
     weight = "до 22т"
@@ -670,11 +671,13 @@ async def send_welcome_message(message: types.Message):
         reply_markup=inline_builder1.as_markup()
     )
 
-    # Сообщение 2 (включает клавиатуру постоянной кнопки)
+    # Сообщение 2 + постоянная кнопка внизу
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
         reply_markup=get_chat_menu_inline_markup()
     )
+
+    await message.answer("📍", reply_markup=get_main_reply_markup())
 
 @dp.message(F.text == "📱 Вызвать меню")
 @dp.message(F.state == None)
@@ -1036,7 +1039,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
 
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
-    # Ставка из чата
+    # Ставка из чата (без запроса комментария)
     if action_type == "bid":
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
@@ -1896,7 +1899,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML ====================
+# ==================== WEB APP HTML (СЫРАЯ СТРОКА С ЗАЩИТОЙ ЭКРАНИРОВАНИЯ) ====================
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -3147,3 +3150,669 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </script>
 </body>
 </html>"""
+
+# ==================== WEB APP БЭКЕНД ====================
+async def get_loads_api(request):
+    country = request.query.get('country')
+    raw_uid = request.query.get('user_id')
+    user_id = int(raw_uid) if raw_uid and raw_uid.isdigit() else 0
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    
+    user_subs = []
+    if user_id:
+        cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
+        u_row = cursor.fetchone()
+        if u_row and u_row[0]:
+            user_subs = [s.strip() for s in u_row[0].split(',') if s.strip()]
+
+    query = """
+        SELECT load_id, route, date, cars_count, price, text, 
+               COALESCE(cargo_type, 'ТНП'), 
+               COALESCE(weight, 'до 22т'), 
+               COALESCE(car_type, 'Тент/реф'),
+               COALESCE(admin_comment, ''),
+               COALESCE(destination_country, 'Все')
+        FROM loads 
+        WHERE status = 'ACTIVE'
+    """
+    params = []
+
+    if country and country != 'ALL':
+        query += " AND (destination_country LIKE ? OR route LIKE ?)"
+        params.extend([f"%{country}%", f"%{country}%"])
+    elif user_subs:
+        sub_conditions = []
+        for sub in user_subs:
+            clean_sub = sub.split(' ')[0]
+            sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
+            params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
+        query += " AND (" + " OR ".join(sub_conditions) + ")"
+    elif user_id:
+        conn.close()
+        return web.json_response({"loads": []})
+        
+    query += " ORDER BY load_id DESC"
+    
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    except Exception as e:
+        logging.error(f"Error reading loads: {e}")
+        rows = []
+    conn.close()
+    
+    loads = [{
+        "id": r[0],
+        "route": r[1] if r[1] else "Не указан",
+        "date": r[2] if r[2] else "Срочно",
+        "cars": r[3] if r[3] else "1",
+        "price": r[4] if r[4] else "Торги",
+        "raw_text": r[5],
+        "cargo_type": r[6],
+        "weight": r[7],
+        "car_type": r[8],
+        "admin_comment": r[9],
+        "country": r[10]
+    } for r in rows]
+    return web.json_response({"loads": loads})
+
+async def my_loads_api(request):
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"deals": []})
+        
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"deals": []})
+        
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, 
+               COALESCE(cd.details, ''), 'CONFIRMED' as status,
+               COALESCE(l.car_type, 'Тент/реф'),
+               COALESCE(l.cargo_type, 'ТНП'),
+               COALESCE(l.weight, 'до 22т')
+        FROM confirmed_deals cd
+        LEFT JOIN loads l ON cd.load_id = l.load_id
+        WHERE cd.user_id = ?
+        ORDER BY cd.id DESC
+    """, (user_id,))
+    confirmed_rows = cursor.fetchall()
+    
+    cursor.execute("""
+        SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, b.rate as price,
+               COALESCE(l.details, ''), 'PENDING' as status,
+               COALESCE(l.car_type, 'Тент/реф'),
+               COALESCE(l.cargo_type, 'ТНП'),
+               COALESCE(l.weight, 'до 22т')
+        FROM bids b
+        JOIN loads l ON b.load_id = l.load_id
+        WHERE b.user_id = ? AND b.status = 'PENDING'
+        ORDER BY b.bid_id DESC
+    """, (user_id,))
+    pending_rows = cursor.fetchall()
+    
+    conn.close()
+    
+    msk_today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    deals = []
+    
+    for r in pending_rows:
+        bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
+        try:
+            qty = int(re.search(r'\d+', str(cars_count)).group(0))
+        except Exception:
+            qty = 1
+            
+        c_date = parse_cargo_date(date_str)
+        is_today = (c_date and c_date == msk_today)
+        is_archived = (c_date and msk_today > c_date)
+
+        for i in range(qty):
+            deals.append({
+                "id": f"bid_{bid_id}_{i}",
+                "load_id": load_id,
+                "date": date_str,
+                "route": route_str,
+                "price": price_str,
+                "status": "PENDING",
+                "status_text": "⏳ (на согласовании)",
+                "details": details_str,
+                "car_type": car_type,
+                "cargo_type": cargo_type,
+                "weight": weight,
+                "is_today": is_today,
+                "is_archived": is_archived
+            })
+
+    for r in confirmed_rows:
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
+        try:
+            qty = int(re.search(r'\d+', str(cars_count)).group(0))
+        except Exception:
+            qty = 1
+
+        c_date = parse_cargo_date(date_str)
+        is_today = (c_date and c_date == msk_today)
+        is_archived = (c_date and msk_today > c_date)
+
+        for i in range(qty):
+            deals.append({
+                "id": f"deal_{deal_id}_{i}",
+                "load_id": load_id,
+                "date": date_str,
+                "route": route_str,
+                "price": price_str,
+                "status": "CONFIRMED",
+                "status_text": "✅ Подтвержден",
+                "details": details_str,
+                "car_type": car_type,
+                "cargo_type": cargo_type,
+                "weight": weight,
+                "is_today": is_today,
+                "is_archived": is_archived
+            })
+            
+    return web.json_response({"deals": deals})
+
+async def notifications_get_api(request):
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"notifications": [], "unread_count": 0})
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"notifications": [], "unread_count": 0})
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, text, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 30", (user_id,))
+    rows = cursor.fetchall()
+    
+    cursor.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", (user_id,))
+    unread_count = cursor.fetchone()[0]
+    conn.close()
+
+    notifs = [{
+        "id": r[0],
+        "title": r[1],
+        "text": r[2],
+        "is_read": r[3],
+        "created_at": r[4]
+    } for r in rows]
+
+    return web.json_response({"notifications": notifs, "unread_count": unread_count})
+
+async def notifications_read_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get('user_id', 0))
+        if user_id:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+    return web.json_response({"status": "success"})
+
+async def profile_get_api(request):
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"profile": None})
+
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"profile": None})
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT company, name, phone, subscriptions FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return web.json_response({
+            "profile": {
+                "company": row[0] or "",
+                "name": row[1] or "",
+                "phone": row[2] or "",
+                "subscriptions": row[3] or ""
+            }
+        })
+    return web.json_response({"profile": None})
+
+async def profile_post_api(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Bad JSON"}, status=400)
+
+    raw_uid = data.get('user_id')
+    if not raw_uid:
+        return web.json_response({"error": "No user_id"}, status=400)
+
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Invalid user_id"}, status=400)
+
+    company = data.get('company', '')
+    name = data.get('name', '')
+    phone = data.get('phone', '')
+    subscriptions = data.get('subscriptions', '')
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO users (user_id, company, name, phone, subscriptions, status)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+        ON CONFLICT(user_id) DO UPDATE SET
+            company = excluded.company,
+            name = excluded.name,
+            phone = excluded.phone,
+            subscriptions = excluded.subscriptions
+    """, (user_id, company, name, phone, subscriptions))
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success"})
+
+async def book_load_api(request):
+    raw_id = request.match_info.get('id', '')
+    digits = re.findall(r'\d+', str(raw_id))
+    if not digits:
+        return web.json_response({"error": "Неверный ID груза"}, status=400)
+    load_id = int(digits[0])
+
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Неверный формат данных"}, status=400)
+
+    raw_uid = data.get('user_id')
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        user_id = 0
+
+    if not user_id:
+        return web.json_response({"error": "Пользователь не определён. Переоткройте Web App из бота."}, status=400)
+
+    first_name = data.get('first_name', '')
+    username = data.get('username', '')
+    action = data.get('action') 
+    proposed_price_raw = data.get('proposed_price', '')
+    proposed_price = format_custom_rate(proposed_price_raw)
+    carrier_comment = data.get('comment', '')
+    
+    try:
+        requested_cars = int(data.get('cars', 1))
+    except (ValueError, TypeError):
+        requested_cars = 1
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT status, company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    user_row = cursor.fetchone()
+    if not user_row:
+        cursor.execute("""
+            INSERT INTO users (user_id, company, name, phone, subscriptions, status)
+            VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE')
+        """, (user_id, first_name or username or f"User_{user_id}"))
+        conn.commit()
+    else:
+        u_status = user_row[0]
+        if u_status == 'BLOCKED':
+            conn.close()
+            return web.json_response({"error": "Ваш аккаунт заблокирован"}, status=403)
+
+    cursor.execute("SELECT status, route, date, price, cars_count, details, text FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+    
+    if not load or load[0] != 'ACTIVE':
+        conn.close()
+        return web.json_response({"error": "Груз недоступен или уже закрыт"}, status=400)
+        
+    status, route_str, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
+    current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if cars_count_str and re.search(r'\d+', str(cars_count_str)) else 1
+
+    if current_cars <= 0:
+        conn.close()
+        return web.json_response({"error": "Все авто по этому грузу уже забронированы"}, status=400)
+
+    carrier_text = format_carrier_info(user_id, username, first_name)
+
+    # Забор по фиксированной ставке логиста
+    if action == 'confirm':
+        if requested_cars > current_cars:
+            requested_cars = current_cars
+
+        if current_cars > requested_cars:
+            left_cars = current_cars - requested_cars
+            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), load_id))
+        else:
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+        cursor.execute("""
+            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (load_id, user_id, date_str, route_str, requested_cars, price_str, details_text))
+
+        conn.commit()
+        conn.close()
+
+        add_notification(
+            user_id, 
+            "✅ Груз забронирован", 
+            f"Вы забронировали {requested_cars} авто по маршруту {route_str} ({price_str})."
+        )
+
+        await update_cargo_messages_for_all_users(load_id)
+
+        admin_notification = (
+            f"🎯 **Груз забран перевозчиком из Web App!**\n\n"
+            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
+            f"📅 Дата: {date_str}\n"
+            f"💰 Ставка: {price_str} | 🚛 Забрано авто: {requested_cars}\n"
+            f"💬 Комментарий: {carrier_comment or 'Нет'}\n\n"
+            f"{carrier_text}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Error sending admin notification: {e}")
+
+        return web.json_response({"status": "success"})
+
+    # Предложение своей ставки логисту
+    elif action == 'bid':
+        cursor.execute("""
+            INSERT INTO bids (load_id, user_id, cars, rate, comment)
+            VALUES (?, ?, ?, ?, ?)
+        """, (load_id, user_id, requested_cars, proposed_price, carrier_comment or 'Своя ставка'))
+        bid_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        add_notification(
+            user_id, 
+            "⏳ Ставка отправлена", 
+            f"Ваша ставка {proposed_price} на {requested_cars} авто по грузу {route_str} отправлена логисту."
+        )
+
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+        )
+        admin_builder.row(
+            types.InlineKeyboardButton(text="💡 Встречная ставка", callback_data=f"counter_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
+        )
+
+        admin_notification = (
+            f"💰 **Новая ставка из Web App!**\n\n"
+            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
+            f"📅 Дата: {date_str}\n"
+            f"💵 Предложенная ставка: {proposed_price} | 🚛 Авто: {requested_cars}\n"
+            f"💬 Комментарий: {carrier_comment or 'Нет'}\n\n"
+            f"{carrier_text}"
+        )
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_CHANNEL_ID, 
+                text=admin_notification, 
+                reply_markup=admin_builder.as_markup(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Error sending bid notification: {e}")
+
+        return web.json_response({"status": "success"})
+
+    conn.close()
+    return web.json_response({"error": "Неизвестное действие"}, status=400)
+
+async def admin_verify_pass_api(request):
+    try:
+        data = await request.json()
+        password = data.get('password', '')
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = 'admin_password'")
+        row = cursor.fetchone()
+        conn.close()
+        db_pass = row[0] if row else '123456'
+        if password == db_pass:
+            return web.json_response({"status": "success"})
+        return web.json_response({"error": "Неверный пароль"}, status=403)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_get_carriers_api(request):
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, company, name, phone, status, subscriptions FROM users ORDER BY user_id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    carriers = [{
+        "user_id": r[0], "company": r[1] or "Не указана", "name": r[2] or "Не указано",
+        "phone": r[3] or "Не указан", "status": r[4] or "ACTIVE", "subscriptions": r[5] or ""
+    } for r in rows]
+    return web.json_response({"carriers": carriers})
+
+async def admin_toggle_carrier_status_api(request):
+    try:
+        data = await request.json()
+        u_id = int(data.get('user_id'))
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM users WHERE user_id = ?", (u_id,))
+        row = cursor.fetchone()
+        new_status = 'BLOCKED' if row and row[0] == 'ACTIVE' else 'ACTIVE'
+        cursor.execute("UPDATE users SET status = ? WHERE user_id = ?", (new_status, u_id))
+        conn.commit()
+        conn.close()
+        return web.json_response({"status": "success", "new_status": new_status})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_get_loads_api(request):
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    query = """
+        SELECT l.load_id, l.route, l.date, l.cars_count, l.price, l.status,
+               COALESCE(l.car_type, 'Тент/реф'), COALESCE(l.cargo_type, 'ТНП'),
+               COALESCE(l.weight, 'до 22т'), COALESCE(l.admin_comment, ''),
+               GROUP_CONCAT(u.company || ' (' || u.name || ')', '; ') as carriers
+        FROM loads l
+        LEFT JOIN confirmed_deals cd ON l.load_id = cd.load_id
+        LEFT JOIN users u ON cd.user_id = u.user_id
+        GROUP BY l.load_id
+        ORDER BY l.load_id DESC
+    """
+    cursor.execute(query)
+    rows = cursor.fetchall()
+    conn.close()
+    loads = [{
+        "id": r[0], "route": r[1], "date": r[2], "cars": r[3], "price": r[4],
+        "status": r[5], "car_type": r[6], "cargo_type": r[7], "weight": r[8],
+        "admin_comment": r[9], "carrier_info": r[10] or "Не забран"
+    } for r in rows]
+    return web.json_response({"loads": loads})
+
+async def admin_edit_load_api(request):
+    try:
+        data = await request.json()
+        load_id = int(data.get('id'))
+        route = data.get('route', '')
+        date_str = data.get('date', '')
+        price = data.get('price', '')
+        cars = data.get('cars', '1')
+        car_type = data.get('car_type', 'Тент/реф')
+        cargo_type = data.get('cargo_type', 'ТНП')
+        weight = data.get('weight', 'до 22т')
+        admin_comment = data.get('admin_comment', '')
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE loads 
+            SET route = ?, date = ?, price = ?, cars_count = ?, car_type = ?, cargo_type = ?, weight = ?, admin_comment = ?
+            WHERE load_id = ?
+        """, (route, date_str, price, cars, car_type, cargo_type, weight, admin_comment, load_id))
+        conn.commit()
+        conn.close()
+
+        await update_cargo_messages_for_all_users(load_id)
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_delete_load_api(request):
+    try:
+        data = await request.json()
+        load_id = int(data.get('id'))
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+        conn.commit()
+        conn.close()
+
+        await update_cargo_messages_for_all_users(load_id)
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def serve_index(request):
+    return web.Response(text=INDEX_HTML, content_type='text/html')
+
+DIRECTIONS_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Выбор направлений</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 15px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
+        h3 { margin-top: 0; font-size: 17px; text-align: center; }
+        .item { font-size: 16px; margin: 12px 0; display: flex; align-items: center; gap: 10px; background: var(--tg-theme-secondary-bg-color, #f5f5f7); padding: 10px 14px; border-radius: 8px; }
+        .item input { width: 18px; height: 18px; }
+        button { width: 100%; padding: 12px; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); border: none; border-radius: 8px; font-size: 15px; font-weight: bold; margin-top: 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h3>🌍 Выберите интересующие направления:</h3>
+    <div class="item"><label><input type="checkbox" value="Казахстан 🇰🇿"> 🇰🇿 Казахстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</label></div>
+    <div class="item"><label><input type="checkbox" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</label></div>
+    <div class="item"><label><input type="checkbox" value="Грузия 🇬🇪"> 🇬🇪 Грузия</label></div>
+    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</label></div>
+    <div class="item"><label><input type="checkbox" value="Армения 🇦🇲"> 🇦🇲 Армения</label></div>
+
+    <button onclick="save()">Сохранить подписки</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        function save() {
+            let selected = [];
+            document.querySelectorAll('input:checked').forEach(cb => selected.push(cb.value));
+            tg.sendData(JSON.stringify(selected));
+            tg.close();
+        }
+    </script>
+</body>
+</html>"""
+
+async def serve_directions(request):
+    return web.Response(text=DIRECTIONS_HTML, content_type='text/html')
+
+
+# ==================== СЕРВЕР И САМОПИНГ (ЗАЩИТА ОТ СПЯЩЕГО РЕЖИМА) ====================
+async def handle_ping(request):
+    return web.Response(text="Bot is running!", status=200)
+
+async def self_ping():
+    await asyncio.sleep(10)
+    import aiohttp
+    url = RENDER_URL.rstrip('/') if RENDER_URL else None
+    
+    if not url or "your-app-name" in url:
+        logging.warning("⚠️ RENDER_URL не настроен! Задайте переменную RENDER_URL в настройках хостинга.")
+        return
+
+    ping_url = f"{url}/ping"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(ping_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    logging.info(f"Self-ping ({ping_url}) status: {response.status}")
+        except Exception as e:
+            logging.error(f"Self-ping error: {e}")
+            
+        await asyncio.sleep(180)
+
+async def webserver_on_startup(app):
+    asyncio.create_task(self_ping())
+    asyncio.create_task(auto_clean_expired_cargos())
+
+async def run_bot():
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/ping", handle_ping)
+    
+    app.router.add_get("/webapp", serve_index)
+    app.router.add_get("/directions", serve_directions)
+    app.router.add_get("/api/loads", get_loads_api)
+    app.router.add_get("/api/my_loads", my_loads_api)
+    app.router.add_get("/api/notifications", notifications_get_api)
+    app.router.add_post("/api/notifications/read", notifications_read_api)
+    app.router.add_get("/api/profile", profile_get_api)
+    app.router.add_post("/api/profile", profile_post_api)
+    app.router.add_post("/api/book/{id}", book_load_api)
+
+    # Админ бэкенд роуты
+    app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
+    app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
+    app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
+    app.router.add_get("/api/admin/loads", admin_get_loads_api)
+    app.router.add_post("/api/admin/edit_load", admin_edit_load_api)
+    app.router.add_post("/api/admin/delete_load", admin_delete_load_api)
+    
+    app.on_startup.append(webserver_on_startup)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+async def main():
+    await asyncio.gather(
+        run_bot(),
+        web_server()
+    )
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Бот остановлен вручную.")
+    except Exception as e:
+        logging.critical(f"💥 АВАРИЙНЫЙ СБОЙ ПРИ ЗАПУСКЕ: {e}", exc_info=True)
