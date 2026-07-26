@@ -782,8 +782,44 @@ class FullCargoSubmission(BaseModel):
     image_roles: Optional[list[ImageClassification]] = None
 
 
-async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
-    """Распознает документы через Gemini и сортирует фото для PDF."""
+from typing import Optional
+
+# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
+
+class VehicleDetails(BaseModel):
+    brand_model: Optional[str] = Field(description="Марка и модель ТС")
+    plate: Optional[str] = Field(description="Гос. номер ТС")
+    vin: Optional[str] = Field(description="VIN номер")
+    country: Optional[str] = Field(description="Страна регистрации ТС")
+
+class DocumentDetails(BaseModel):
+    number: Optional[str] = Field(description="Номер документа")
+    issue_date: Optional[str] = Field(description="Дата выдачи")
+    authority: Optional[str] = Field(description="Орган выдачи документа в оригинальном написании")
+    country: Optional[str] = Field(description="Страна выдачи документа")
+
+class DriverDetails(BaseModel):
+    full_name: Optional[str] = Field(description="ФИО водителя. ВНИМАНИЕ: НЕ переводи на русский! Используй написание с документа (русский -> латиница -> оригинальный язык)")
+    birth_date: Optional[str] = Field(description="Дата рождения водителя")
+    phones: Optional[str] = Field(description="Номера телефонов (+7... первым, остальные через '/')")
+    passport: Optional[DocumentDetails] = None
+    license: Optional[DocumentDetails] = None
+
+class ImageClassification(BaseModel):
+    image_index: int = Field(description="Порядковый номер изображения или страницы PDF, начиная с 0")
+    category: str = Field(
+        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
+    )
+
+class FullCargoSubmission(BaseModel):
+    truck: Optional[VehicleDetails] = None
+    trailer: Optional[VehicleDetails] = None
+    driver: Optional[DriverDetails] = None
+    image_roles: Optional[list[ImageClassification]] = None
+
+
+async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
+    """Распознает документы через Gemini и возвращает структурированный словарь + отсортированные файлы."""
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -796,7 +832,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
 
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI or not all_files:
-        return fallback_text, all_files
+        return fallback_text, all_files, {}
 
     contents = []
 
@@ -823,17 +859,18 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             logging.error(f"Error downloading document for AI: {e}")
 
     if not contents:
-        return fallback_text, all_files
+        return fallback_text, all_files, {}
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
         "1. Распознай данные с фото/документов.\n"
-        "2. Для КАЖДОГО фото укажи его image_index (0, 1, 2...) и определи категорию (category): "
+        "2. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и определи категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', "
         "'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "3. ПРИОРИТЕТ ЯЗЫКА: Все данные пиши на РУССКОМ ЯЗЫКЕ (кириллица).\n"
-        "4. ОРГАНЫ ВЫДАЧИ: РБ паспорт — точный текст ('СТАРОДОРОЖСКИЙ РОВД...'), РБ ID-карта — 'Код органа выдачи: XXX', "
-        "Казахстан — 'МВД РК', Узбекистан — 'MIA 123456', Кыргызстан — 'MIA'/'PSC', Азербайджан — 'MINISTRY OF INTERNAL AFFAIRS'.\n"
+        "3. ПРИОРИТЕТ ЯЗЫКА: НЕ переводи на русский! Пиши текст так, как на документе: "
+        "если есть русские буквы — на русском, если нет — на латинице/английском, если нет латиницы — на языке оригинала.\n"
+        "4. ОРГАНЫ ВЫДАЧИ: Пиши строго как в документе (РБ паспорт — 'СТАРОДОРОЖСКИЙ РОВД...', РБ ID — 'Код органа выдачи: XXX', "
+        "Казахстан — 'МВД РК', Узбекистан — 'MIA 123456', Кыргызстан — 'MIA'/'PSC', Азербайджан — 'MINISTRY OF INTERNAL AFFAIRS').\n"
         "5. ТЕЛЕФОНЫ: Российский номер (+7...) всегда первым."
     )
 
@@ -868,10 +905,10 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
                     config=config
                 )
             if response and response.text:
-                logging.info(f"✅ Gemini успешно ответил на модели: {model_name}")
+                logging.info(f"✅ Gemini ответил на модели {model_name}")
                 break
         except Exception as e:
-            logging.warning(f"⚠️ Модель {model_name} недоступна: {e}. Пробуем следующую...")
+            logging.warning(f"⚠️ Модель {model_name} недоступна: {e}")
 
     if response and response.text:
         try:
@@ -884,23 +921,34 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             p = d.get("passport") or {}
             l = d.get("license") or {}
 
-            truck_str = f"{t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
-            trailer_str = f"{tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
-            driver_str = f"{d.get('full_name') or 'Не распознан'}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
-            phones_str = d.get("phones") or text_notes or "Не указан"
-            passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}, {p.get('country') or 'Не распознана'}"
-            license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('authority') or 'Не распознан'}, {l.get('country') or 'Не распознана'}"
+            # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
+            if is_polyethylene:
+                formatted_output = (
+                    f"ТС (марка, г/н, страна регистрации): {t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, {t.get('country') or 'Не распознана'}\n"
+                    f"Прицеп (марка, г/н, страна регистрации): {tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}\n"
+                    f"ФИО водителя: {d.get('full_name') or 'Не распознан'}\n"
+                    f"Тел (росс): {d.get('phones') or text_notes or 'Не указан'}\n"
+                    f"Водительское удостоверение (№, когда и кем выдано): № {l.get('number') or 'Не распознан'} от {l.get('issue_date') or 'Не распознана'}г. {l.get('authority') or ''} {l.get('country') or ''}\n"
+                    f"Паспорт (серия, №, когда и кем выдан): № {p.get('number') or 'Не распознан'} выдан {p.get('issue_date') or 'Не распознана'}г. {p.get('authority') or ''} {p.get('country') or ''}"
+                )
+            else:
+                truck_str = f"{t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
+                trailer_str = f"{tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
+                driver_str = f"{d.get('full_name') or 'Не распознан'}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
+                phones_str = d.get("phones") or text_notes or "Не указан"
+                passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}, {p.get('country') or 'Не распознана'}"
+                license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('authority') or 'Не распознан'}, {l.get('country') or 'Не распознана'}"
 
-            formatted_output = (
-                f"Тягач: {truck_str}\n"
-                f"Прицеп: {trailer_str}\n"
-                f"Водитель: {driver_str}\n"
-                f"Номера телефонов: {phones_str}\n"
-                f"Паспорт: {passport_str}\n"
-                f"Водительское: {license_str}"
-            )
+                formatted_output = (
+                    f"Тягач: {truck_str}\n"
+                    f"Прицеп: {trailer_str}\n"
+                    f"Водитель: {driver_str}\n"
+                    f"Номера телефонов: {phones_str}\n"
+                    f"Паспорт: {passport_str}\n"
+                    f"Водительское: {license_str}"
+                )
 
-            # ----- СОРТИРОВКА ФОТО ДЛЯ PDF В СТРОГОМ ПОРЯДКЕ -----
+            # ----- СОРТИРОВКА ФОТО/СТРАНИЦ ПО ВАШЕМУ ПОРЯДКУ -----
             priority_map = {
                 "passport_front": 1,
                 "passport_back": 2,
@@ -922,14 +970,57 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
 
             sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 99))
 
-            return formatted_output, sorted_files
+            return formatted_output, sorted_files, raw_json
         except Exception as e:
             logging.error(f"Error parsing Gemini response JSON: {e}")
 
-    return fallback_text, all_files
-    
+    return fallback_text, all_files, {}
+
+
+async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
+    """Сортирует страницы внутри исходного PDF по правильному порядку."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+        file_info = await bot.get_file(doc_file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        buf.seek(0)
+
+        reader = PdfReader(buf)
+        total_pages = len(reader.pages)
+
+        priority_map = {
+            "passport_front": 1, "passport_back": 2,
+            "license_front": 3, "license_back": 4,
+            "truck_front": 5, "trailer_front": 6,
+            "truck_back": 7, "trailer_back": 8,
+            "other": 99
+        }
+
+        page_priorities = {}
+        for role in (raw_json.get("image_roles") or []):
+            idx = role.get("image_index")
+            cat = role.get("category", "other")
+            if idx is not None and 0 <= idx < total_pages:
+                page_priorities[idx] = priority_map.get(cat, 99)
+
+        sorted_indices = sorted(range(total_pages), key=lambda i: page_priorities.get(i, 99))
+
+        writer = PdfWriter()
+        for idx in sorted_indices:
+            writer.add_page(reader.pages[idx])
+
+        out_buf = io.BytesIO()
+        writer.write(out_buf)
+        out_buf.seek(0)
+        return out_buf
+    except Exception as e:
+        logging.error(f"Error sorting PDF pages: {e}")
+        return None
+
+
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Создает PDF только из изображений документов с правильным поворотом."""
+    """Создает PDF только из изображений с правильным поворотом."""
     buffer = io.BytesIO()
     images = []
 
@@ -1311,15 +1402,32 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не прислали ни одного фото/файла или телефона.")
         return
 
+    # Фиксируем отправку документов строго для текущей сделки пользователя
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("UPDATE confirmed_deals SET docs_submitted = 1 WHERE id = ? OR load_id = ?", (deal_id, deal_id))
+        cursor.execute("UPDATE confirmed_deals SET docs_submitted = 1 WHERE id = ? AND user_id = ?", (deal_id, user_id))
+        
+        # Проверяем, не полиэтилен ли это
+        is_polyethylene = False
+        cursor.execute("""
+            SELECT l.cargo_type, l.details, l.text 
+            FROM confirmed_deals cd 
+            LEFT JOIN loads l ON cd.load_id = l.load_id 
+            WHERE cd.id = ?
+        """, (deal_id,))
+        row = cursor.fetchone()
+        if row:
+            cargo_info = f"{row[0] or ''} {row[1] or ''} {row[2] or ''}".lower()
+            if "полиэтилен" in cargo_info or "polyethylene" in cargo_info:
+                is_polyethylene = True
         conn.commit()
         conn.close()
+    else:
+        is_polyethylene = False
 
-    # Распознавание и авто-сортировка через Gemini
-    ai_formatted_data, sorted_files = await process_docs_with_ai(photos, documents, notes)
+    # Gemini распознает и сортирует данные
+    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
     admin_msg = (
@@ -1329,63 +1437,46 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         f"{ai_formatted_data}"
     )
 
+    # Генерация наименования файла: (Фамилия Имя водителя - ГосТягач/ГосПрицеп.pdf)
+    d_data = raw_json.get("driver") or {}
+    t_data = raw_json.get("truck") or {}
+    tr_data = raw_json.get("trailer") or {}
+
+    driver_name = (d_data.get("full_name") or "Водитель").strip().upper()
+    truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
+    trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
+
+    clean_name = re.sub(r'[^\w\s-]', '', driver_name)
+    clean_truck = re.sub(r'[^\w]', '', truck_plate)
+    clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
+
+    pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
+    file_caption = f"📅 Дата загрузки: {date_str} | 📍 Направление: {route_str}"
+
     try:
-        # 1. Отправляем текстовое сообщение в канал логиста
+        # 1. Отправляем текстовый отчет логисту
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        # 2. Если перевозчик выслал готовые PDF-документы
+        # 2. Если исходно выслали PDF
         if documents:
-            if len(documents) == 1:
-                await bot.send_document(
-                    chat_id=ADMIN_CHANNEL_ID,
-                    document=documents[0],
-                    caption=f"📄 **Документ от перевозчика (PDF)** ({route_str})"
-                )
+            sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
+            if sorted_pdf_buf:
+                pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
+                await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=pdf_file, caption=file_caption)
             else:
-                # Склеиваем несколько PDF в 1 общий файл
-                try:
-                    from pypdf import PdfWriter
-                    writer = PdfWriter()
-                    
-                    for doc_id in documents:
-                        file_info = await bot.get_file(doc_id)
-                        buf = io.BytesIO()
-                        await bot.download_file(file_info.file_path, destination=buf)
-                        buf.seek(0)
-                        writer.append(buf)
+                for doc_id in documents:
+                    await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=doc_id, caption=file_caption)
 
-                    merged_buf = io.BytesIO()
-                    writer.write(merged_buf)
-                    merged_buf.seek(0)
-
-                    clean_date = date_str.replace('/', '_').replace('.', '_')
-                    pdf_file = types.BufferedInputFile(merged_buf.getvalue(), filename=f"Docs_merged_{clean_date}.pdf")
-                    
-                    await bot.send_document(
-                        chat_id=ADMIN_CHANNEL_ID,
-                        document=pdf_file,
-                        caption=f"📄 **Объединённый PDF ({len(documents)} файла)** ({route_str})"
-                    )
-                except Exception as e:
-                    logging.error(f"Error merging PDFs: {e}")
-                    for doc_id in documents:
-                        await bot.send_document(
-                            chat_id=ADMIN_CHANNEL_ID,
-                            document=doc_id,
-                            caption=f"📄 **Документ от перевозчика (PDF)** ({route_str})"
-                        )
-
-        # 3. Если перевозчик выслал отдельные фотографии — сопоставляем, сортируем и собираем 1 PDF
+        # 3. Если выслали фото — собираем отсортированный PDF
         elif photos:
             pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
             pdf_bytes = pdf_buf.getvalue()
             if pdf_bytes:
-                clean_date = date_str.replace('/', '_').replace('.', '_')
-                pdf_file = types.BufferedInputFile(pdf_bytes, filename=f"Docs_{clean_date}.pdf")
+                pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(
                     chat_id=ADMIN_CHANNEL_ID, 
                     document=pdf_file, 
-                    caption=f"📄 **PDF-отчет по грузу (из фото)** ({route_str})"
+                    caption=file_caption
                 )
 
     except Exception as e:
@@ -4164,7 +4255,7 @@ async def submit_docs_prompt_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT date, route, price FROM confirmed_deals WHERE id = ? OR load_id = ?", (clean_deal_id, clean_deal_id))
+        cursor.execute("SELECT date, route, price FROM confirmed_deals WHERE id = ? AND user_id = ?", (clean_deal_id, user_id))
         deal = cursor.fetchone()
         conn.close()
 
@@ -4180,19 +4271,15 @@ async def submit_docs_prompt_api(request):
             upload_date=date_str,
             upload_price=price_str,
             photos=[],
+            documents=[],
             text_notes=""
         )
 
         prompt_text = (
             f"📍 {route_str} ({date_str})\n"
             f"💰 Ставка: {price_str}\n\n"
-            f"Пожалуйста, отправьте в этот чат:\n"
-            f"1) Техпаспорт тягача (с 2х сторон)\n"
-            f"2) Техпаспорт прицепа (с 2х сторон)\n"
-            f"3) Паспорт водителя\n"
-            f"4) Водительское удостоверение (с 2х сторон)\n"
-            f"5) Номера телефонов водителя (российский обязательно)\n\n"
-            f"Вы можете прислать фото или PDF-файлы. Когда закончите, нажмите кнопку **«✅ Отправить данные логисту»**."
+            f"Пожалуйста, отправьте в этот чат фото или PDF-файлы документов.\n"
+            f"Когда закончите, нажмите кнопку **«✅ Отправить данные логисту»**."
         )
 
         builder = ReplyKeyboardBuilder()
