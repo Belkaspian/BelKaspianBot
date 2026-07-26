@@ -845,9 +845,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
     )
 
     response = None
-    # Автоматический выбор доступной модели Gemini
-response = None
-    # Полный перебор от самой новейшей (3.6) до базовых моделей
     models_to_try = [
         "gemini-3.6-flash",
         "gemini-2.5-flash",
@@ -871,7 +868,7 @@ response = None
                     config=config
                 )
             if response and response.text:
-                logging.info(f"🚀 Успешно распознано на модели: {model_name}")
+                logging.info(f"✅ Gemini успешно ответил на модели: {model_name}")
                 break
         except Exception as e:
             logging.warning(f"⚠️ Модель {model_name} недоступна: {e}. Пробуем следующую...")
@@ -930,8 +927,7 @@ response = None
             logging.error(f"Error parsing Gemini response JSON: {e}")
 
     return fallback_text, all_files
-
-
+    
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
     """Создает PDF только из изображений документов с правильным поворотом."""
     buffer = io.BytesIO()
