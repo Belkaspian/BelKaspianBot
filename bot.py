@@ -43,7 +43,6 @@ CHANNELS = {
 
 CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
 
-# Глобальное хранилище ожидающих встречных ставок логистов
 PENDING_COUNTER_OFFERS = {}
 
 
@@ -186,7 +185,6 @@ class ProfileEditStates(StatesGroup):
 class DealStates(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_custom_rate = State()
-    waiting_for_comment = State()
 
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
@@ -207,7 +205,7 @@ def get_chat_menu_inline_markup():
     builder.row(types.InlineKeyboardButton(text="🌍 Выбор направлений", callback_data="menu_directions"))
     builder.row(types.InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile"))
     builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="menu_active"))
-    builder.row(types.InlineKeyboardButton(text="📦 Забранные грузы", callback_data="menu_my_deals"))
+    builder.row(types.InlineKeyboardButton(text="🚚 Забранные грузы", callback_data="menu_my_deals"))
     return builder.as_markup()
 
 def normalize_currency(curr_str: str) -> str:
@@ -357,7 +355,7 @@ def parse_cargo_raw(raw_text: str):
             clean_route = date_pattern.sub('', line)
             clean_route = cars_pattern.sub('', clean_route)
             clean_route = re.sub(
-                r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|сум|руб|долл|доллар|\$|€|тг)', 
+                r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|сумм|руб|долл|доллар|\$|€|тг)', 
                 '', 
                 clean_route, 
                 flags=re.IGNORECASE
@@ -375,16 +373,28 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
+    # Очистка названия маршрута от цен и лишних запятых
+    route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
-    route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str)
+    route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
     text_lower = raw_text.lower()
     
-    # Полное извлечение типа ТС
+    # Полное извлечение типа ТС без срезания слов
     car_type = "Тент/реф"
-    vehicle_match = re.search(r'\b(тент[^\n,]*|реф[^\n,]*|мега[^\n,]*|сцепка[^\n,]*|тандем[^\n,]*|изотерм[^\n,]*|площадка[^\n,]*|контейнер[^\n,]*)\b', text_lower, re.IGNORECASE)
-    if vehicle_match:
-        car_type = vehicle_match.group(1).strip().capitalize()
+    vehicle_keywords = ['тент', 'реф', 'мега', 'сцепка', 'тандем', 'изотерм', 'площадка', 'контейнер', 'автовоз', 'цистерна']
+    
+    for line in clean_lines:
+        line_lower = line.lower()
+        if any(vk in line_lower for vk in vehicle_keywords):
+            clean_v = date_pattern.sub('', line)
+            clean_v = cars_pattern.sub('', clean_v)
+            clean_v = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг)', '', clean_v, flags=re.IGNORECASE)
+            clean_v = re.sub(r'до\s*\d{1,2}\s*т|\d{1,2}\s*т', '', clean_v, flags=re.IGNORECASE)
+            clean_v = clean_v.strip(' ,.-')
+            if clean_v:
+                car_type = clean_v.capitalize()
+                break
 
     cargo_type = "ТНП"
     cargo_match = re.search(r'груз\s*[\:\-]?\s*([^\n,]+)', raw_text, re.IGNORECASE)
@@ -560,41 +570,26 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         pass
 
 
-# ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ДАТЕ И ВРЕМЕНИ (МСК) ====================
+# ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
 async def auto_clean_expired_cargos():
+    """Закрывает грузы ТОЛЬКО при наступлении указанного времени 'до HH:MM по МСК'."""
     while True:
         try:
             conn = sqlite3.connect("cargo_bot.db")
             cursor = conn.cursor()
-            cursor.execute("SELECT load_id, date, created_at, expires_at FROM loads WHERE status = 'ACTIVE'")
+            cursor.execute("SELECT load_id, expires_at FROM loads WHERE status = 'ACTIVE' AND expires_at IS NOT NULL AND expires_at != ''")
             rows = cursor.fetchall()
             
             msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
-            today = msk_now.date()
             expired_ids = []
             
-            for load_id, date_str, created_at, expires_at in rows:
-                if expires_at:
-                    try:
-                        exp_dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                        if msk_now >= exp_dt:
-                            expired_ids.append(load_id)
-                            continue
-                    except Exception:
-                        pass
-
-                cargo_d = parse_cargo_date(date_str)
-                if cargo_d:
-                    if today > cargo_d:
+            for load_id, expires_at in rows:
+                try:
+                    exp_dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    if msk_now >= exp_dt:
                         expired_ids.append(load_id)
-                else:
-                    if created_at:
-                        try:
-                            c_time = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-                            if msk_now.replace(tzinfo=None) - c_time > timedelta(days=7):
-                                expired_ids.append(load_id)
-                        except Exception:
-                            pass
+                except Exception:
+                    pass
 
             for eid in expired_ids:
                 cursor.execute("UPDATE loads SET status = 'EXPIRED' WHERE load_id = ?", (eid,))
@@ -607,7 +602,7 @@ async def auto_clean_expired_cargos():
         except Exception as e:
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
@@ -645,14 +640,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
         reply_markup=inline_builder1.as_markup()
     )
 
-    # Сообщение 2
+    # Сообщение 2 + постоянная кнопка вызова меню
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
         reply_markup=get_chat_menu_inline_markup()
     )
 
-    # Постоянная кнопка внизу
-    await message.answer("Используйте меню ниже:", reply_markup=get_main_reply_markup())
+    await message.answer("📍", reply_markup=get_main_reply_markup())
 
 @dp.message(F.text == "📱 Вызвать меню")
 @dp.message(F.state == None)
@@ -683,7 +677,7 @@ async def callback_menu_active(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    await callback.message.answer("📦 **Список всех актуальных грузов:**", parse_mode="Markdown")
+    await callback.message.answer("📦 **Список актуальных грузов:**", parse_mode="Markdown")
     for load_id, date_str, route_str, price_str, cars_str, details_str in rows:
         card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str)
         builder = InlineKeyboardBuilder()
@@ -709,10 +703,10 @@ async def callback_menu_my_deals(callback: types.CallbackQuery):
     conn.close()
     
     if not confirmed_loads:
-        await callback.answer("У вас пока нет подтвержденных грузов.", show_alert=True)
+        await callback.answer("У вас пока нет забранных грузов.", show_alert=True)
         return
         
-    await callback.message.answer("📦 **Ваши подтвержденные грузы:**", parse_mode="Markdown")
+    await callback.message.answer("📦 **Ваши забранные грузы:**", parse_mode="Markdown")
     for date_str, route_str, cars_count, price_str, details_text in confirmed_loads:
         card_text = (
             f"📍 {date_str} | {route_str}\n"
@@ -980,14 +974,8 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     qty_input = message.text.strip()
     data = await state.get_data()
     action_type = data.get("action_type", "confirm")
-    
-    if action_type == "bid":
-        await state.update_data(requested_cars=qty_input)
-        await message.answer("Введите комментарий к ставке (например, сроки подачи машины, особенности оплаты).\n\nОтправьте `-` для пропуска:")
-        await state.set_state(DealStates.waiting_for_comment)
-        return
-
     cargo_id = data.get("cargo_id")
+    rate = data.get("custom_rate")
     user_obj = message.from_user
 
     conn = sqlite3.connect("cargo_bot.db")
@@ -1016,8 +1004,46 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     warning_text = ""
     if requested_cars > current_cars:
         requested_cars = current_cars
-        warning_text = f"⚠️ Столько грузов нет, доступно только {current_cars} авто. Берем в работу {current_cars} авто.\n\n"
+        warning_text = f"⚠️ Запрошено больше, чем доступно. Берем {current_cars} авто.\n\n"
 
+    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
+
+    # Ставка из чата (без запроса комментария)
+    if action_type == "bid":
+        cursor.execute("""
+            INSERT INTO bids (load_id, user_id, cars, rate, comment)
+            VALUES (?, ?, ?, ?, '-')
+        """, (cargo_id, user_id, requested_cars, rate))
+        bid_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+        )
+        admin_builder.row(
+            types.InlineKeyboardButton(text="💡 Встречная ставка", callback_data=f"counter_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
+        )
+
+        admin_notification = (
+            f"💰 **Новая ставка от перевозчика через бота!**\n\n"
+            f"🆔 Груз #{cargo_id} | Маршрут: {route_str}\n"
+            f"💵 Ставка: {rate} | 🚛 Авто: {requested_cars}\n\n"
+            f"{carrier_text}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+        except Exception:
+            pass
+
+        await state.clear()
+        await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup())
+        return
+
+    # Прямое подтверждение по ставке логиста
     if current_cars > requested_cars:
         left_cars = current_cars - requested_cars
         cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), cargo_id))
@@ -1034,7 +1060,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
 
     await update_cargo_messages_for_all_users(cargo_id)
 
-    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
     admin_notification = (
         f"🎯 **Груз забран перевозчиком через бота!**\n\n"
         f"🆔 Груз #{cargo_id} | Маршрут: {route_str}\n"
@@ -1049,97 +1074,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     await state.clear()
     await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup())
-
-@dp.message(DealStates.waiting_for_comment)
-async def process_deal_comment(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
-    u_status = cursor.fetchone()
-    if u_status and u_status[0] == 'BLOCKED':
-        conn.close()
-        await message.answer("Ваш аккаунт заблокирован администратором.")
-        await state.clear()
-        return
-    conn.close()
-
-    comment_input = message.text.strip()
-    comment_text = "-" if comment_input == "-" else comment_input
-
-    data = await state.get_data()
-    cargo_id = data.get("cargo_id")
-    rate = data.get("custom_rate")
-    qty_input = data.get("requested_cars", "1")
-    
-    user_obj = message.from_user
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT cars_count, text, status, route FROM loads WHERE load_id = ?", (cargo_id,))
-    load_row = cursor.fetchone()
-    
-    if not load_row:
-        conn.close()
-        await message.answer("Груз не найден.", reply_markup=get_main_reply_markup())
-        await state.clear()
-        return
-        
-    current_cars_str, raw_cargo_text, status, route_str = load_row
-    if status in ['CLOSED', 'EXPIRED']:
-        conn.close()
-        await message.answer("Этот груз уже закрыт или истек.", reply_markup=get_main_reply_markup())
-        await state.clear()
-        return
-
-    current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
-    requested_cars = int(re.search(r'\d+', qty_input).group(0)) if re.search(r'\d+', qty_input) else 1
-    
-    warning_text = ""
-    if requested_cars > current_cars:
-        requested_cars = current_cars
-        warning_text = f"⚠️ Запрошено больше, чем доступно. Передаем ставку на {current_cars} авто.\n\n"
-
-    cursor.execute("""
-        INSERT INTO bids (load_id, user_id, cars, rate, comment)
-        VALUES (?, ?, ?, ?, ?)
-    """, (cargo_id, user_id, requested_cars, rate, comment_text))
-    bid_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    
-    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
-    bid_notification = (
-        f"💰 **Новая ставка от перевозчика!**\n\n"
-        f"🆔 Груз #{cargo_id} | Маршрут: {route_str}\n"
-        f"💵 Ставка: {rate} | 🚛 Авто: {requested_cars}\n"
-        f"💬 Комментарий: {comment_text}\n\n"
-        f"{carrier_text}"
-    )
-    
-    admin_builder = InlineKeyboardBuilder()
-    admin_builder.row(
-        types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
-        types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
-    )
-    admin_builder.row(
-        types.InlineKeyboardButton(text="💡 Встречная ставка", callback_data=f"counter_bid_{bid_id}"),
-        types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
-    )
-
-    try:
-        await bot.send_message(
-            chat_id=ADMIN_CHANNEL_ID, 
-            text=bid_notification, 
-            reply_markup=admin_builder.as_markup(),
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logging.exception(f"Error sending bid notification: {e}")
-            
-    await state.clear()
-    await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение. Ожидайте обратной связи!", reply_markup=get_main_reply_markup())
 
 @dp.callback_query(F.data.startswith("accept_bid_"))
 async def admin_accept_bid(callback: types.CallbackQuery):
@@ -1880,7 +1814,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML (АДАПТИВНЫЙ ДИЗАЙН И АВТОСОХРАНЕНИЕ) ====================
+# ==================== WEB APP HTML (АДАПТИВНЫЙ ДИЗАЙН И АРХИВ ЕДУЩИХ АВТО) ====================
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1981,12 +1915,24 @@ INDEX_HTML = """<!DOCTYPE html>
             box-shadow: 0 2px 6px rgba(0,0,0,0.15);
         }
 
-        /* Адаптивная мультистрочная сетка для ПК и телефонов */
+        /* Адаптивный фильтр: свайп в 1 строку на телефоне, сеткой на ПК */
         .filter-scroll {
             display: flex;
-            flex-wrap: wrap;
             gap: 6px;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
+            overflow-x: auto;
+            white-space: nowrap;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+        }
+        .filter-scroll::-webkit-scrollbar { display: none; }
+
+        @media (min-width: 600px) {
+            .filter-scroll {
+                flex-wrap: wrap;
+                overflow-x: visible;
+                white-space: normal;
+            }
         }
 
         .chip {
@@ -2006,6 +1952,64 @@ INDEX_HTML = """<!DOCTYPE html>
             background: var(--active-tab);
             color: #fff;
             border-color: var(--active-tab);
+        }
+
+        /* Подразделы для Моих заявок */
+        .sub-nav {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .sub-nav-btn {
+            flex: 1;
+            padding: 7px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 11px;
+            border-radius: 10px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--hint);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .sub-nav-btn.active {
+            background: var(--active-tab);
+            color: #fff;
+            border-color: var(--active-tab);
+        }
+
+        .sort-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            background: var(--card);
+            padding: 6px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+        }
+
+        .sort-bar label {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--hint);
+            text-transform: uppercase;
+        }
+
+        .sort-bar select {
+            flex: 1;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            outline: none;
         }
 
         .table-container {
@@ -2073,7 +2077,18 @@ INDEX_HTML = """<!DOCTYPE html>
 
         .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; font-weight: 600; }
         .info-item b { color: var(--text); }
-        
+
+        .today-badge {
+            background: rgba(40, 167, 69, 0.15);
+            color: #28a745;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
         .admin-comment {
             background: rgba(255, 193, 7, 0.15);
             color: var(--text);
@@ -2266,8 +2281,25 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Узбекистан', this)">🇺🇿 Узбекистан</div>
         <div class="chip" onclick="setFilter('Кыргызстан', this)">🇰🇬 Кыргызстан</div>
         <div class="chip" onclick="setFilter('Грузия', this)">🇬🇪 Грузия</div>
-        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦зербайджан</div>
+        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦🇿 Азербайджан</div>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
+    </div>
+
+    <!-- Переключатель подраздела "Мои заявки" -->
+    <div class="sub-nav" id="my-sub-nav" style="display: none;">
+        <div class="sub-nav-btn active" id="subnav-active" onclick="switchMySubTab('active')">📋 Активные</div>
+        <div class="sub-nav-btn" id="subnav-archive" onclick="switchMySubTab('archive')">🚚 Едущие авто (Архив)</div>
+    </div>
+
+    <!-- Блок сортировки -->
+    <div class="sort-bar" id="sort-container">
+        <label>Сортировка:</label>
+        <select id="sortSelect" onchange="loadData(false)">
+            <option value="newest">📅 Сначала новые</option>
+            <option value="date_asc">📅 По дате погрузки</option>
+            <option value="route">📍 По направлению (А-Я)</option>
+            <option value="price_desc">💰 По цене (сначала высокие)</option>
+        </select>
     </div>
 
     <!-- Список грузов / Таблица -->
@@ -2306,7 +2338,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 <div class="sub-chip" data-val="Узбекистан 🇺🇿" onclick="toggleSubChip(this)">🇺🇿 Узбекистан</div>
                 <div class="sub-chip" data-val="Кыргызстан 🇰🇬" onclick="toggleSubChip(this)">🇰🇬 Кыргызстан</div>
                 <div class="sub-chip" data-val="Грузия 🇬🇪" onclick="toggleSubChip(this)">🇬🇪 Грузия</div>
-                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦зербайджан</div>
+                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦🇿 Азербайджан</div>
                 <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">🇦🇲 Армения</div>
             </div>
         </div>
@@ -2340,6 +2372,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
+        let mySubTab = 'active';
         let currentCountry = 'ALL';
         let activeOfferLoadId = null;
         let currentDataHash = '';
@@ -2398,6 +2431,9 @@ INDEX_HTML = """<!DOCTYPE html>
             document.getElementById('tab-profile').classList.toggle('active', tab === 'profile');
 
             document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'flex' : 'none';
+            document.getElementById('sort-container').style.display = (tab === 'catalog') ? 'flex' : 'none';
+            document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
+
             document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
             document.getElementById('profile-container').style.display = (tab === 'profile') ? 'block' : 'none';
 
@@ -2406,6 +2442,15 @@ INDEX_HTML = """<!DOCTYPE html>
             } else {
                 loadData(false);
             }
+        }
+
+        function switchMySubTab(sub) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            mySubTab = sub;
+            currentDataHash = '';
+            document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
+            document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
+            loadData(false);
         }
 
         function setFilter(country, el) {
@@ -2472,6 +2517,24 @@ INDEX_HTML = """<!DOCTYPE html>
             document.getElementById('notifModal').classList.remove('active');
         }
 
+        function sortItems(items) {
+            let sortType = document.getElementById('sortSelect')?.value || 'newest';
+            let list = [...items];
+            
+            if (sortType === 'date_asc') {
+                list.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+            } else if (sortType === 'route') {
+                list.sort((a, b) => (a.route || '').localeCompare(b.route || ''));
+            } else if (sortType === 'price_desc') {
+                list.sort((a, b) => {
+                    let numA = parseInt((a.price || '').replace(/\D/g, '')) || 0;
+                    let numB = parseInt((b.price || '').replace(/\D/g, '')) || 0;
+                    return numB - numA;
+                });
+            }
+            return list;
+        }
+
         async function loadData(isSilent = false) {
             if (!isSilent) tbody.innerHTML = '<div class="loader">Загрузка данных...</div>';
             let userId = getUserId();
@@ -2486,7 +2549,8 @@ INDEX_HTML = """<!DOCTYPE html>
                     let res = await fetch(url);
                     let data = await res.json();
                     
-                    let newHash = JSON.stringify(data.loads);
+                    let sortedLoads = sortItems(data.loads || []);
+                    let newHash = JSON.stringify(sortedLoads);
                     if (isSilent && newHash === currentDataHash) {
                         return;
                     }
@@ -2494,12 +2558,12 @@ INDEX_HTML = """<!DOCTYPE html>
                     let openDetailsId = document.querySelector('.t-details.active')?.id;
                     currentDataHash = newHash;
 
-                    if (!data.loads || data.loads.length === 0) {
+                    if (!sortedLoads || sortedLoads.length === 0) {
                         tbody.innerHTML = '<div class="loader">Активных заявок пока нет</div>';
                         return;
                     }
                     
-                    tbody.innerHTML = data.loads.map(l => {
+                    tbody.innerHTML = sortedLoads.map(l => {
                         let carsNum = parseInt(l.cars) || 1;
                         let carsSelect = '';
                         if (carsNum > 1) {
@@ -2565,7 +2629,12 @@ INDEX_HTML = """<!DOCTYPE html>
                     let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
 
-                    let newHash = JSON.stringify(data.deals);
+                    let filteredDeals = (data.deals || []).filter(d => {
+                        if (mySubTab === 'archive') return d.is_archived;
+                        return !d.is_archived;
+                    });
+
+                    let newHash = JSON.stringify(filteredDeals);
                     if (isSilent && newHash === currentDataHash) {
                         return;
                     }
@@ -2573,22 +2642,24 @@ INDEX_HTML = """<!DOCTYPE html>
                     let openDetailsId = document.querySelector('.t-details.active')?.id;
                     currentDataHash = newHash;
 
-                    if (!data.deals || data.deals.length === 0) {
-                        tbody.innerHTML = '<div class="loader">У вас пока нет заявок</div>';
+                    if (!filteredDeals || filteredDeals.length === 0) {
+                        tbody.innerHTML = `<div class="loader">${mySubTab === 'archive' ? 'В архиве пока нет едущих авто' : 'У вас пока нет активных заявок'}</div>`;
                         return;
                     }
 
-                    tbody.innerHTML = data.deals.map(d => {
+                    tbody.innerHTML = filteredDeals.map(d => {
                         let statusStyle = d.status === 'CONFIRMED' ? 'color:#28a745;' : 'color:#fd7e14;';
+                        let highlightStyle = d.is_today ? 'background: rgba(40, 167, 69, 0.08); border-left: 3px solid #28a745;' : '';
 
                         return `
-                        <div class="t-row" onclick="toggleRow('${d.id}')">
+                        <div class="t-row" style="${highlightStyle}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
                             <div class="col-route" title="${d.route}">${d.route}</div>
                             <div class="col-price">${d.price}</div>
                             <div class="col-arrow" id="arrow-${d.id}">▼</div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
+                            ${d.is_today ? `<div class="today-badge">📌 Погрузка сегодня!</div>` : ''}
                             <div style="font-weight:700; margin-bottom:8px; ${statusStyle}">
                                 Статус: ${d.status_text}
                             </div>
@@ -2862,6 +2933,7 @@ async def my_loads_api(request):
     
     conn.close()
     
+    msk_today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
     deals = []
     
     for r in pending_rows:
@@ -2870,6 +2942,11 @@ async def my_loads_api(request):
             qty = int(re.search(r'\d+', str(cars_count)).group(0))
         except Exception:
             qty = 1
+            
+        c_date = parse_cargo_date(date_str)
+        is_today = (c_date and c_date == msk_today)
+        is_archived = (c_date and msk_today > c_date)
+
         for i in range(qty):
             deals.append({
                 "id": f"bid_{bid_id}_{i}",
@@ -2882,7 +2959,9 @@ async def my_loads_api(request):
                 "details": details_str,
                 "car_type": car_type,
                 "cargo_type": cargo_type,
-                "weight": weight
+                "weight": weight,
+                "is_today": is_today,
+                "is_archived": is_archived
             })
 
     for r in confirmed_rows:
@@ -2891,6 +2970,11 @@ async def my_loads_api(request):
             qty = int(re.search(r'\d+', str(cars_count)).group(0))
         except Exception:
             qty = 1
+
+        c_date = parse_cargo_date(date_str)
+        is_today = (c_date and c_date == msk_today)
+        is_archived = (c_date and msk_today > c_date)
+
         for i in range(qty):
             deals.append({
                 "id": f"deal_{deal_id}_{i}",
@@ -2903,7 +2987,9 @@ async def my_loads_api(request):
                 "details": details_str,
                 "car_type": car_type,
                 "cargo_type": cargo_type,
-                "weight": weight
+                "weight": weight,
+                "is_today": is_today,
+                "is_archived": is_archived
             })
             
     return web.json_response({"deals": deals})
@@ -3194,7 +3280,7 @@ DIRECTIONS_HTML = """<!DOCTYPE html>
     <div class="item"><label><input type="checkbox" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</label></div>
     <div class="item"><label><input type="checkbox" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</label></div>
     <div class="item"><label><input type="checkbox" value="Грузия 🇬🇪"> 🇬🇪 Грузия</label></div>
-    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦зербайджан</label></div>
+    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</label></div>
     <div class="item"><label><input type="checkbox" value="Армения 🇦🇲"> 🇦🇲 Армения</label></div>
 
     <button onclick="save()">Сохранить подписки</button>
