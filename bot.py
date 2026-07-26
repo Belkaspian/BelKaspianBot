@@ -677,8 +677,6 @@ async def send_welcome_message(message: types.Message):
         reply_markup=get_chat_menu_inline_markup()
     )
 
-    await message.answer("📍", reply_markup=get_main_reply_markup())
-
 @dp.message(F.text == "📱 Вызвать меню")
 @dp.message(F.state == None)
 async def cmd_show_menu_button(message: types.Message, state: FSMContext):
