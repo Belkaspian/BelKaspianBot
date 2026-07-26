@@ -746,26 +746,28 @@ class FullCargoSubmission(BaseModel):
     image_roles: list[ImageClassification]
 
 
+from typing import Optional
+
 # ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
 
 class VehicleDetails(BaseModel):
-    brand_model: str = Field(description="Марка и модель ТС (например: DAF XF 105)")
-    plate: str = Field(description="Гос. номер ТС")
-    vin: str = Field(description="VIN номер (17 символов)")
-    country: str = Field(description="Страна регистрации ТС")
+    brand_model: Optional[str] = Field(default="Не распознан", description="Марка и модель ТС")
+    plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
+    vin: Optional[str] = Field(default="Не распознан", description="VIN номер")
+    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации ТС")
 
 class DocumentDetails(BaseModel):
-    number: str = Field(description="Номер документа")
-    issue_date: str = Field(description="Дата выдачи")
-    authority: str = Field(description="Орган выдачи документа (Приоритет - русский язык)")
-    country: str = Field(description="Страна выдачи документа")
+    number: Optional[str] = Field(default="Не распознан", description="Номер документа")
+    issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
+    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа (Приоритет - русский язык)")
+    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи документа")
 
 class DriverDetails(BaseModel):
-    full_name: str = Field(description="ФИО водителя (Приоритет - русский язык)")
-    birth_date: str = Field(description="Дата рождения водителя")
-    phones: str = Field(description="Номера телефонов (+7... первым, остальные через '/')")
-    passport: DocumentDetails
-    license: DocumentDetails
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя (Приоритет - русский язык)")
+    birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения водителя")
+    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов (+7... первым, остальные через '/')")
+    passport: Optional[DocumentDetails] = None
+    license: Optional[DocumentDetails] = None
 
 class ImageClassification(BaseModel):
     image_index: int = Field(description="Порядковый номер изображения, начиная с 0")
@@ -774,10 +776,10 @@ class ImageClassification(BaseModel):
     )
 
 class FullCargoSubmission(BaseModel):
-    truck: VehicleDetails
-    trailer: VehicleDetails
-    driver: DriverDetails
-    image_roles: list[ImageClassification]
+    truck: Optional[VehicleDetails] = None
+    trailer: Optional[VehicleDetails] = None
+    driver: Optional[DriverDetails] = None
+    image_roles: Optional[list[ImageClassification]] = None
 
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
@@ -825,7 +827,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
-        "1. Распознай данные с фото.\n"
+        "1. Распознай данные с фото/документов.\n"
         "2. Для КАЖДОГО фото укажи его image_index (0, 1, 2...) и определи категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', "
         "'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
@@ -842,22 +844,40 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
         temperature=0.1
     )
 
-    try:
-        if hasattr(gemini_client, 'aio'):
-            response = await gemini_client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=contents,
-                config=config
-            )
-        else:
-            response = await asyncio.to_thread(
-                gemini_client.models.generate_content,
-                model="gemini-2.5-flash",
-                contents=contents,
-                config=config
-            )
+    response = None
+    # Автоматический выбор доступной модели Gemini
+response = None
+    # Полный перебор от самой новейшей (3.6) до базовых моделей
+    models_to_try = [
+        "gemini-3.6-flash",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
 
-        if response and response.text:
+    for model_name in models_to_try:
+        try:
+            if hasattr(gemini_client, 'aio'):
+                response = await gemini_client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+            else:
+                response = await asyncio.to_thread(
+                    gemini_client.models.generate_content,
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+            if response and response.text:
+                logging.info(f"🚀 Успешно распознано на модели: {model_name}")
+                break
+        except Exception as e:
+            logging.warning(f"⚠️ Модель {model_name} недоступна: {e}. Пробуем следующую...")
+
+    if response and response.text:
+        try:
             import json
             raw_json = json.loads(response.text)
             
@@ -867,12 +887,12 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             p = d.get("passport") or {}
             l = d.get("license") or {}
 
-            truck_str = f"{t.get('brand_model', 'Не распознан')}, {t.get('plate', 'Не распознан')}, VIN: {t.get('vin', 'Не распознан')}, {t.get('country', 'Не распознана')}"
-            trailer_str = f"{tr.get('brand_model', 'Не распознан')}, {tr.get('plate', 'Не распознан')}, VIN: {tr.get('vin', 'Не распознан')}, {tr.get('country', 'Не распознана')}"
-            driver_str = f"{d.get('full_name', 'Не распознан')}, дата рождения: {d.get('birth_date', 'Не распознана')}"
+            truck_str = f"{t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
+            trailer_str = f"{tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
+            driver_str = f"{d.get('full_name') or 'Не распознан'}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
             phones_str = d.get("phones") or text_notes or "Не указан"
-            passport_str = f"№ {p.get('number', 'Не распознан')}, выдан {p.get('issue_date', 'Не распознана')}, {p.get('authority', 'Не распознан')}, {p.get('country', 'Не распознана')}"
-            license_str = f"№ {l.get('number', 'Не распознан')}, выдано {l.get('issue_date', 'Не распознана')}, {l.get('authority', 'Не распознан')}, {l.get('country', 'Не распознана')}"
+            passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}, {p.get('country') or 'Не распознана'}"
+            license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('authority') or 'Не распознан'}, {l.get('country') or 'Не распознана'}"
 
             formatted_output = (
                 f"Тягач: {truck_str}\n"
@@ -906,9 +926,8 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 99))
 
             return formatted_output, sorted_files
-
-    except Exception as e:
-        logging.error(f"Gemini Processing Exception: {e}", exc_info=True)
+        except Exception as e:
+            logging.error(f"Error parsing Gemini response JSON: {e}")
 
     return fallback_text, all_files
 
