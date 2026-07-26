@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -11,9 +11,11 @@
             --text: var(--tg-theme-text-color, #212529);
             --hint: var(--tg-theme-hint-color, #6c757d);
             --card: var(--tg-theme-secondary-bg-color, #ffffff);
-            --border: #e9ecef;
+            --border: rgba(0,0,0,0.08);
             --btn-green: #28a745;
             --btn-orange: #fd7e14;
+            --btn-blue: #007aff;
+            --active-tab: var(--tg-theme-button-color, #2481cc);
         }
 
         body {
@@ -23,18 +25,76 @@
             margin: 0;
             padding: 8px;
             font-size: 13px;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         .header-title {
             text-align: center;
             font-size: 15px;
             font-weight: 700;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             color: var(--text);
             letter-spacing: 0.3px;
         }
 
-        /* Таблица */
+        .main-nav {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 10px;
+            background: var(--card);
+            padding: 4px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .nav-btn {
+            flex: 1;
+            padding: 8px 4px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 11px;
+            border-radius: 7px;
+            cursor: pointer;
+            color: var(--hint);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .nav-btn.active {
+            background: var(--active-tab);
+            color: #ffffff;
+        }
+
+        .filter-scroll {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+            scrollbar-width: none;
+        }
+        .filter-scroll::-webkit-scrollbar { display: none; }
+
+        .chip {
+            white-space: nowrap;
+            padding: 6px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--hint);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .chip.active {
+            background: var(--active-tab);
+            color: #fff;
+            border-color: var(--active-tab);
+        }
+
         .table-container {
             background: var(--card);
             border-radius: 10px;
@@ -45,8 +105,8 @@
 
         .t-head {
             display: grid;
-            grid-template-columns: 50px 1fr 75px 24px;
-            background: rgba(0,0,0,0.02);
+            grid-template-columns: 45px 1fr 145px 16px;
+            background: rgba(0,0,0,0.03);
             padding: 8px 10px;
             font-size: 11px;
             font-weight: 700;
@@ -57,28 +117,35 @@
 
         .t-row {
             display: grid;
-            grid-template-columns: 50px 1fr 75px 24px;
-            padding: 10px;
+            grid-template-columns: 45px 1fr 145px 16px;
+            padding: 10px 8px;
             border-bottom: 1px solid var(--border);
             align-items: center;
             cursor: pointer;
             transition: background 0.15s;
+            white-space: nowrap;
+            overflow: hidden;
         }
 
         .t-row:active { background: rgba(0,0,0,0.04); }
         .t-row:last-child { border-bottom: none; }
         
-        .col-date { font-weight: 500; color: var(--hint); font-size: 12px; }
-        .col-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
-        .col-price { font-weight: 700; color: var(--btn-green); text-align: right; }
+        .col-date { font-weight: 500; color: var(--hint); font-size: 11px; white-space: nowrap; }
+        .col-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 4px; }
+        .col-price { font-weight: 700; color: var(--btn-green); text-align: right; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .col-arrow { text-align: right; color: var(--hint); font-size: 10px; }
 
-        /* Выпадающий блок деталей */
         .t-details {
             display: none;
             padding: 12px 14px;
             background: var(--bg);
             border-bottom: 1px solid var(--border);
+            animation: fadeIn 0.2s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         .t-details.active { display: block; }
@@ -91,11 +158,12 @@
             font-size: 12px;
         }
 
-        .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; }
+        .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; font-weight: 600; }
+        .info-item b { color: var(--text); }
         
         .admin-comment {
-            background: #fff3cd;
-            color: #856404;
+            background: rgba(255, 193, 7, 0.15);
+            color: var(--text);
             padding: 8px 10px;
             border-radius: 6px;
             margin-bottom: 10px;
@@ -104,8 +172,29 @@
             line-height: 1.4;
         }
 
-        /* Поле для личного комментария перевозчика */
-        textarea {
+        .qty-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            background: var(--card);
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .qty-picker label { font-size: 11px; color: var(--hint); font-weight: 600; flex: 1; }
+        .qty-picker select {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        textarea, input[type="text"] {
             width: 100%;
             box-sizing: border-box;
             background: var(--card);
@@ -116,11 +205,10 @@
             font-size: 12px;
             margin-bottom: 10px;
             font-family: inherit;
-            resize: none;
-            height: 45px;
         }
 
-        /* Кнопки действий */
+        textarea { resize: none; height: 42px; }
+
         .buttons {
             display: flex;
             gap: 8px;
@@ -135,19 +223,119 @@
             font-size: 12px;
             color: #fff;
             cursor: pointer;
+            transition: opacity 0.15s;
         }
+
+        .buttons button:active { opacity: 0.8; }
 
         .btn-confirm { background: var(--btn-green); }
         .btn-offer { background: var(--btn-orange); }
 
         .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
+
+        .profile-card {
+            background: var(--card);
+            border-radius: 10px;
+            padding: 14px;
+            border: 1px solid var(--border);
+            margin-bottom: 12px;
+        }
+
+        .profile-title {
+            font-weight: 700;
+            font-size: 13px;
+            margin-bottom: 10px;
+            color: var(--text);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--hint);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .subs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .sub-chip {
+            background: var(--bg);
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1.5px solid var(--border);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+            user-select: none;
+            color: var(--text);
+        }
+
+        .sub-chip.active {
+            background: var(--active-tab, #2481cc);
+            color: #ffffff;
+            border-color: var(--active-tab, #2481cc);
+            box-shadow: 0 2px 6px rgba(36, 129, 204, 0.3);
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 16px;
+            width: 100%;
+            max-width: 340px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center; }
     </style>
 </head>
 <body>
 
-    <div class="header-title">ЧТУП «Белкаспиан» | Заявки</div>
+    <div class="header-title">ЧТУП «Белкаспиан» | Биржа</div>
 
-    <div class="table-container">
+    <div class="main-nav">
+        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Биржа</div>
+        <div class="nav-btn" id="tab-my" onclick="switchTab('my')">📦 Мои заявки</div>
+        <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
+    </div>
+
+    <!-- Фильтр направлений -->
+    <div class="filter-scroll" id="dir-filters">
+        <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
+        <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
+        <div class="chip" onclick="setFilter('Узбекистан', this)">🇺🇿 Узбекистан</div>
+        <div class="chip" onclick="setFilter('Кыргызстан', this)">🇰🇬 Кыргызстан</div>
+        <div class="chip" onclick="setFilter('Грузия', this)">🇬🇪 Грузия</div>
+        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦🇿 Азербайджан</div>
+        <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
+    </div>
+
+    <!-- Список грузов / Таблица -->
+    <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
             <div>Направление</div>
@@ -157,11 +345,75 @@
         <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
     </div>
 
+    <!-- Блок личного кабинета -->
+    <div id="profile-container" style="display: none;">
+        <div class="profile-card">
+            <div class="profile-title">👤 Данные компании</div>
+            <div class="form-group">
+                <label>Компания:</label>
+                <input type="text" id="profCompany" placeholder="Название вашей компании..." />
+            </div>
+            <div class="form-group">
+                <label>Имя контактного лица:</label>
+                <input type="text" id="profName" placeholder="Ваше имя..." />
+            </div>
+            <div class="form-group">
+                <label>Телефон:</label>
+                <input type="text" id="profPhone" placeholder="+375 / +7..." />
+            </div>
+        </div>
+
+        <div class="profile-card">
+            <div class="profile-title">🔔 Подписки на направления</div>
+            <div class="subs-grid" id="profile-subs-grid">
+                <div class="sub-chip" data-val="Казахстан 🇰🇿" onclick="toggleSubChip(this)">🇰🇿 Казахстан</div>
+                <div class="sub-chip" data-val="Узбекистан 🇺🇿" onclick="toggleSubChip(this)">🇺🇿 Узбекистан</div>
+                <div class="sub-chip" data-val="Кыргызстан 🇰🇬" onclick="toggleSubChip(this)">🇰🇬 Кыргызстан</div>
+                <div class="sub-chip" data-val="Грузия 🇬🇪" onclick="toggleSubChip(this)">🇬🇪 Грузия</div>
+                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦🇿 Азербайджан</div>
+                <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">🇦🇲 Армения</div>
+            </div>
+        </div>
+
+        <button class="btn-confirm" style="width: 100%; padding: 12px; font-size: 13px;" onclick="saveProfile()">💾 Сохранить данные профиля</button>
+    </div>
+
+    <!-- Модальное окно "Своя ставка" -->
+    <div class="modal-overlay" id="bidModal">
+        <div class="modal-card">
+            <div class="modal-title">💰 Предложить свою цену</div>
+            <input type="text" id="modalPrice" placeholder="Желаемая ставка (напр., 2400 USD)" />
+            <textarea id="modalComment" placeholder="Комментарий (условия, дата подачи)..."></textarea>
+            <div class="buttons">
+                <button class="btn-confirm" onclick="submitModalBid()">Отправить</button>
+                <button style="background: var(--hint);" onclick="closeModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const tg = window.Telegram.WebApp;
-        try { tg.expand(); tg.setHeaderColor('secondary_bg_color'); } catch(e) {}
+        try { tg.expand(); tg.ready(); tg.setHeaderColor('secondary_bg_color'); } catch(e) {}
 
         const tbody = document.getElementById('loads-body');
+        let currentTab = 'catalog';
+        let currentCountry = 'ALL';
+        let activeOfferLoadId = null;
+        let currentDataHash = '';
+
+        function getUserId() {
+            let uid = tg.initDataUnsafe?.user?.id;
+            if (!uid) {
+                const params = new URLSearchParams(window.location.search);
+                uid = params.get('user_id');
+            }
+            if (!uid && window.localStorage) {
+                uid = localStorage.getItem('tg_user_id');
+            } else if (uid && window.localStorage) {
+                localStorage.setItem('tg_user_id', uid);
+            }
+            return uid ? parseInt(uid) : 0;
+        }
 
         function notify(text) {
             if (tg && tg.showAlert) tg.showAlert(text);
@@ -169,49 +421,248 @@
         }
 
         function askConfirm(text, callback) {
-            if (tg && tg.showConfirm) {
-                tg.showConfirm(text, callback);
+            try {
+                if (tg && tg.showConfirm) {
+                    tg.showConfirm(text, (confirmed) => {
+                        if (confirmed) callback(true);
+                    });
+                    return;
+                }
+            } catch(e) {}
+            callback(confirm(text));
+        }
+
+        function toggleSubChip(el) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            el.classList.toggle('active');
+        }
+
+        function switchTab(tab) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            currentTab = tab;
+            currentDataHash = '';
+            document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
+            document.getElementById('tab-my').classList.toggle('active', tab === 'my');
+            document.getElementById('tab-profile').classList.toggle('active', tab === 'profile');
+
+            document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'flex' : 'none';
+            document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
+            document.getElementById('profile-container').style.display = (tab === 'profile') ? 'block' : 'none';
+
+            if (tab === 'profile') {
+                loadProfile();
             } else {
-                callback(confirm(text));
+                loadData(false);
             }
         }
 
-        async function loadData() {
+        function setFilter(country, el) {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+            currentCountry = country;
+            currentDataHash = '';
+            document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+            el.classList.add('active');
+            loadData(false);
+        }
+
+        async function loadData(isSilent = false) {
+            if (!isSilent) tbody.innerHTML = '<div class="loader">Загрузка данных...</div>';
+            let userId = getUserId();
+
             try {
-                let res = await fetch('/api/loads?t=' + Date.now());
-                let data = await res.json();
-                
-                if (!data.loads || data.loads.length === 0) {
-                    tbody.innerHTML = '<div class="loader">Активных заявок нет</div>';
-                    return;
+                if (currentTab === 'catalog') {
+                    let url = '/api/loads?t=' + Date.now();
+                    if (currentCountry !== 'ALL') url += '&country=' + encodeURIComponent(currentCountry);
+                    
+                    let res = await fetch(url);
+                    let data = await res.json();
+                    
+                    let newHash = JSON.stringify(data.loads);
+                    if (isSilent && newHash === currentDataHash) {
+                        return;
+                    }
+                    
+                    let openDetailsId = document.querySelector('.t-details.active')?.id;
+                    currentDataHash = newHash;
+
+                    if (!data.loads || data.loads.length === 0) {
+                        tbody.innerHTML = '<div class="loader">Активных заявок пока нет</div>';
+                        return;
+                    }
+                    
+                    tbody.innerHTML = data.loads.map(l => {
+                        let carsNum = parseInt(l.cars) || 1;
+                        let carsSelect = '';
+                        if (carsNum > 1) {
+                            let options = '';
+                            for (let i = 1; i <= carsNum; i++) {
+                                options += `<option value="${i}">${i} авто</option>`;
+                            }
+                            carsSelect = `
+                                <div class="qty-picker">
+                                    <label>Количество авто:</label>
+                                    <select id="qty-${l.id}">${options}</select>
+                                </div>
+                            `;
+                        } else {
+                            carsSelect = `<input type="hidden" id="qty-${l.id}" value="1">`;
+                        }
+
+                        let isAuction = !l.price || /торг/i.test(l.price);
+
+                        let actionButtons = '';
+                        if (isAuction) {
+                            actionButtons = `<button class="btn-offer" style="width:100%;" onclick="openOfferModal('${l.id}', event)">💰 Предложить авто по цене</button>`;
+                        } else {
+                            actionButtons = `
+                                <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">✅ Подтвердить</button>
+                                <button class="btn-offer" onclick="openOfferModal('${l.id}', event)">💰 Своя цена</button>
+                            `;
+                        }
+
+                        return `
+                        <div class="t-row" onclick="toggleRow('${l.id}')">
+                            <div class="col-date">${l.date}</div>
+                            <div class="col-route" title="${l.route}">${l.route}</div>
+                            <div class="col-price">${l.price}</div>
+                            <div class="col-arrow" id="arrow-${l.id}">▼</div>
+                        </div>
+                        <div class="t-details" id="details-${l.id}">
+                            <div class="info-grid">
+                                <div class="info-item"><span>Тип ТС:</span><b>${l.car_type || 'Тент/реф'}</b></div>
+                                <div class="info-item"><span>Тип груза:</span><b>${l.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем:</span><b>${l.weight || 'до 22т'}</b></div>
+                                <div class="info-item"><span>Доступно авто:</span><b>${l.cars} авто</b></div>
+                            </div>
+                            
+                            ${l.admin_comment ? `<div class="admin-comment"><b>💡 От логиста:</b> ${l.admin_comment}</div>` : ''}
+                            
+                            ${carsSelect}
+                            
+                            <textarea id="comment-${l.id}" placeholder="Комментарий / Заметка к заявке..."></textarea>
+                            
+                            <div class="buttons">
+                                ${actionButtons}
+                            </div>
+                        </div>
+                    `}).join('');
+
+                    if (openDetailsId) {
+                        let el = document.getElementById(openDetailsId);
+                        if (el) el.classList.add('active');
+                    }
+
+                } else if (currentTab === 'my') {
+                    let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
+                    let data = await res.json();
+
+                    let newHash = JSON.stringify(data.deals);
+                    if (isSilent && newHash === currentDataHash) {
+                        return;
+                    }
+                    
+                    let openDetailsId = document.querySelector('.t-details.active')?.id;
+                    currentDataHash = newHash;
+
+                    if (!data.deals || data.deals.length === 0) {
+                        tbody.innerHTML = '<div class="loader">У вас пока нет заявок</div>';
+                        return;
+                    }
+
+                    tbody.innerHTML = data.deals.map(d => {
+                        let statusStyle = d.status === 'CONFIRMED' ? 'color:#28a745;' : 'color:#fd7e14;';
+
+                        return `
+                        <div class="t-row" onclick="toggleRow('${d.id}')">
+                            <div class="col-date">${d.date}</div>
+                            <div class="col-route" title="${d.route}">${d.route}</div>
+                            <div class="col-price">${d.price}</div>
+                            <div class="col-arrow" id="arrow-${d.id}">▼</div>
+                        </div>
+                        <div class="t-details" id="details-${d.id}">
+                            <div style="font-weight:700; margin-bottom:8px; ${statusStyle}">
+                                Статус: ${d.status_text}
+                            </div>
+                            <div class="info-grid">
+                                <div class="info-item"><span>Тип ТС:</span><b>${d.car_type || 'Тент/реф'}</b></div>
+                                <div class="info-item"><span>Тип груза:</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем:</span><b>${d.weight || 'до 22т'}</b></div>
+                                <div class="info-item"><span>Маршрут:</span><b>${d.route}</b></div>
+                            </div>
+                            ${d.details ? `<div style="font-size:11px; color:var(--hint); margin-top:4px;"><b>Детали:</b> ${d.details}</div>` : ''}
+                        </div>
+                    `}).join('');
+
+                    if (openDetailsId) {
+                        let el = document.getElementById(openDetailsId);
+                        if (el) el.classList.add('active');
+                    }
                 }
-                
-                tbody.innerHTML = data.loads.map(l => `
-                    <div class="t-row" onclick="toggleRow('${l.id}')">
-                        <div class="col-date">${l.date}</div>
-                        <div class="col-route" title="${l.route}">${l.route}</div>
-                        <div class="col-price">${l.price}</div>
-                        <div class="col-arrow" id="arrow-${l.id}">▼</div>
-                    </div>
-                    <div class="t-details" id="details-${l.id}">
-                        <div class="info-grid">
-                            <div class="info-item"><span>Груз:</span><b>${l.cargo_type}</b></div>
-                            <div class="info-item"><span>Вес:</span><b>${l.weight}</b></div>
-                        </div>
-                        
-                        ${l.admin_comment ? `<div class="admin-comment"><b>💡 От логиста:</b> ${l.admin_comment}</div>` : ''}
-                        
-                        <textarea id="comment-${l.id}" placeholder="Личная заметка для себя (никто другой не видит)..."></textarea>
-                        
-                        <div class="buttons">
-                            <button class="btn-confirm" onclick="sendAction('${l.id}', 'confirm', event)">Подтвердить</button>
-                            <button class="btn-offer" onclick="sendAction('${l.id}', 'offer', event)">Своя цена</button>
-                        </div>
-                    </div>
-                `).join('');
-                
+
             } catch(e) {
-                tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+                if (!isSilent) tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+            }
+        }
+
+        async function loadProfile() {
+            let userId = getUserId();
+            if (!userId) return;
+
+            try {
+                let res = await fetch(`/api/profile?user_id=${userId}&t=` + Date.now());
+                let data = await res.json();
+                if (data.profile) {
+                    document.getElementById('profCompany').value = data.profile.company || '';
+                    document.getElementById('profName').value = data.profile.name || tg.initDataUnsafe?.user?.first_name || '';
+                    document.getElementById('profPhone').value = data.profile.phone || '';
+
+                    let subs = (data.profile.subscriptions || '').split(',');
+                    document.querySelectorAll('.sub-chip').forEach(chip => {
+                        let val = chip.dataset.val;
+                        let cleanCountry = val.split(' ')[0];
+                        let isMatched = subs.some(s => s.trim() && (s.includes(cleanCountry) || val.includes(s.trim())));
+                        if (isMatched) {
+                            chip.classList.add('active');
+                        } else {
+                            chip.classList.remove('active');
+                        }
+                    });
+                }
+            } catch(e) {}
+        }
+
+        async function saveProfile() {
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+            let userId = getUserId();
+
+            let company = document.getElementById('profCompany').value.trim();
+            let name = document.getElementById('profName').value.trim();
+            let phone = document.getElementById('profPhone').value.trim();
+
+            let selectedSubs = [];
+            document.querySelectorAll('.sub-chip.active').forEach(chip => selectedSubs.push(chip.dataset.val));
+
+            try {
+                let res = await fetch('/api/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        company: company,
+                        name: name,
+                        phone: phone,
+                        subscriptions: selectedSubs.join(',')
+                    })
+                });
+
+                if (res.ok) {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                    notify('✅ Данные профиля и подписки успешно сохранены!');
+                } else {
+                    notify('❌ Ошибка сохранения данных.');
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
             }
         }
 
@@ -220,59 +671,105 @@
             const detailsBlock = document.getElementById(`details-${id}`);
             const arrow = document.getElementById(`arrow-${id}`);
             
-            // Закрываем остальные открытые строки для чистоты интерфейса
             document.querySelectorAll('.t-details').forEach(el => {
                 if(el.id !== `details-${id}`) el.classList.remove('active');
             });
             
-            detailsBlock.classList.toggle('active');
-            arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
+            if (detailsBlock) {
+                detailsBlock.classList.toggle('active');
+                if (arrow) arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
+            }
+        }
+
+        function openOfferModal(id, event) {
+            event.stopPropagation();
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+            activeOfferLoadId = id;
+            document.getElementById('modalPrice').value = '';
+            const commEl = document.getElementById(`comment-${id}`);
+            document.getElementById('modalComment').value = commEl ? commEl.value : '';
+            document.getElementById('bidModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('bidModal').classList.remove('active');
+            activeOfferLoadId = null;
+        }
+
+        async function submitModalBid() {
+            let price = document.getElementById('modalPrice').value.trim();
+            let comment = document.getElementById('modalComment').value.trim();
+
+            if (!price) {
+                notify('⚠️ Пожалуйста, укажите вашу ставку!');
+                return;
+            }
+
+            closeModal();
+            let id = activeOfferLoadId;
+            let qty = document.getElementById(`qty-${id}`)?.value || '1';
+            await performBooking(id, 'bid', price, comment, qty);
         }
 
         async function sendAction(id, actionType, event) {
             event.stopPropagation();
-            let userId = tg.initDataUnsafe?.user?.id || 11111111;
-            let carrierComment = document.getElementById(`comment-${id}`).value;
-            let customPrice = '';
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
-            if (actionType === 'offer') {
-                customPrice = prompt('Введите вашу желаемую ставку (например, 2400 USD):');
-                if (!customPrice || !customPrice.trim()) return;
-            }
+            let qty = document.getElementById(`qty-${id}`)?.value || '1';
+            let commEl = document.getElementById(`comment-${id}`);
+            let carrierComment = commEl ? commEl.value : '';
 
-            let confirmMsg = actionType === 'confirm' 
-                ? 'Подтвердить готовность взять этот груз по указанной ставке?' 
-                : `Предложить ставку "${customPrice}"?`;
+            let confirmMsg = `Подтвердить забор груза (${qty} авто) по указанной ставке?`;
 
             askConfirm(confirmMsg, async (confirmed) => {
                 if (confirmed) {
-                    try {
-                        let res = await fetch(`/api/book/${id}`, { 
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                user_id: userId,
-                                action: actionType,
-                                proposed_price: customPrice,
-                                comment: carrierComment
-                            })
-                        });
-                        
-                        if (res.ok) {
-                            notify('✅ Заявка успешно отправлена логисту!');
-                            loadData(); 
-                        } else {
-                            notify('❌ Ошибка. Возможно, груз уже занят.');
-                            loadData();
-                        }
-                    } catch(e) {
-                        notify('⚠️ Ошибка соединения с сервером.');
-                    }
+                    await performBooking(id, 'confirm', '', carrierComment, qty);
                 }
             });
         }
-        
-        loadData();
+
+        async function performBooking(id, actionType, customPrice, comment, qty) {
+            let user = tg.initDataUnsafe?.user || {};
+            let userId = getUserId();
+
+            try {
+                let res = await fetch(`/api/book/${id}`, { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        first_name: user.first_name || '',
+                        username: user.username || '',
+                        action: actionType,
+                        proposed_price: customPrice,
+                        comment: comment,
+                        cars: qty
+                    })
+                });
+                
+                let respData = await res.json();
+
+                if (res.ok && respData.status === 'success') {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                    notify('✅ Заявка отправлена!');
+                    loadData(false); 
+                } else {
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+                    notify('❌ ' + (respData.error || 'Ошибка. Возможно, груз уже занят.'));
+                    loadData(false);
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
+            }
+        }
+
+        loadData(false);
+
+        setInterval(() => {
+            if (currentTab === 'catalog' || currentTab === 'my') {
+                loadData(true);
+            }
+        }, 3000);
     </script>
 </body>
-</html>
+</html>"""
