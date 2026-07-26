@@ -4,6 +4,8 @@ import sqlite3
 import asyncio
 import re
 import json
+import base64
+import io
 from datetime import datetime, date, timedelta, timezone
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -14,6 +16,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types.web_app_info import WebAppInfo
 
+# Импорты для генерации PDF
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -23,6 +31,7 @@ if not TOKEN:
 
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
 ADMIN_ID = os.getenv("ADMIN_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 ADMIN_CHANNEL_ID_RAW = os.getenv("ADMIN_CHANNEL_ID", "-1004271518848")
 try:
@@ -101,7 +110,8 @@ def init_db():
             route TEXT,
             cars INTEGER,
             price TEXT,
-            details TEXT
+            details TEXT,
+            docs_submitted INTEGER DEFAULT 0
         )
     """)
 
@@ -153,7 +163,8 @@ def init_db():
         "ALTER TABLE loads ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE bids ADD COLUMN comment TEXT",
         "ALTER TABLE bids ADD COLUMN counter_rate TEXT",
-        "ALTER TABLE loads ADD COLUMN expires_at TEXT"
+        "ALTER TABLE loads ADD COLUMN expires_at TEXT",
+        "ALTER TABLE confirmed_deals ADD COLUMN docs_submitted INTEGER DEFAULT 0"
     ]
     for migration in migrations:
         try:
@@ -188,6 +199,9 @@ class ProfileEditStates(StatesGroup):
 class DealStates(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_custom_rate = State()
+
+class DocUploadStates(StatesGroup):
+    waiting_for_docs = State()
 
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
@@ -378,25 +392,29 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Очистка названия маршрута от цен и лишних запятых
+    # Очистка названия маршрута от цен
     route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
-    # Разбор типа ТС, Груза, Веса и условий
+    # Разбор доп. полей
     car_type = "Тент/реф"
     cargo_type = "ТНП"
     weight = "до 22т"
     details_list = []
 
-    vehicle_keywords = ['тент', 'реф', 'мега', 'сцепка', 'тандем', 'изотерм', 'площадка', 'контейнер', 'автовоз', 'цистерна']
-    req_keywords = {
-        'адр': 'АДР',
-        'бок': 'Бок погрузка',
-        'верх': 'Верх погрузка',
-        'гидроборт': 'Гидроборт',
-        'пневмо': 'Пневмоход'
-    }
+    vehicle_keywords = ['тент', 'реф', 'мега', 'сцепка', 'тандем', 'изотерм', 'площадка', 'контейнер', 'автовоз', 'цистерна', 'бочка', 'шаланда', 'цельномет', 'штора', 'бортовой']
+    
+    req_patterns = [
+        (r'\b(адр\d?|adr\d?)\b', 'АДР'),
+        (r'\b(бок|боковая|бок\s*погрузка)\b', 'Бок погрузка'),
+        (r'\b(верх|вверх|верхняя|растентовка)\b', 'Верх погрузка'),
+        (r'\b(\d+\s*(?:цмр|cmr|смр))\b', None),
+        (r'\b(\d+\s*мест[ао]?\s*(?:загрузки|выгрузки)?|загрузки|выгрузки)\b', None),
+        (r'\b(гидроборт)\b', 'Гидроборт'),
+        (r'\b(пневмоход|пневмо)\b', 'Пневмоход'),
+        (r'\b(коники)\b', 'Коники'),
+    ]
 
     parts = []
     for line in clean_lines:
@@ -411,38 +429,38 @@ def parse_cargo_raw(raw_text: str):
     found_cargo = False
 
     for part in parts:
-        p_lower = part.lower()
+        part_working = part
 
-        # Поиск Веса
-        w_match = re.search(r'(\d{1,2}\s*т|до\s*\d{1,2}\s*т)', part, re.IGNORECASE)
+        w_match = re.search(r'(\d{1,2}\s*т|до\s*\d{1,2}\s*т|до\s*\d{1,2}\s*тонн)', part_working, re.IGNORECASE)
         if w_match:
             weight = w_match.group(1).strip()
-            part_no_weight = re.sub(r'(\d{1,2}\s*т|до\s*\d{1,2}\s*т)', '', part, flags=re.IGNORECASE).strip(' ,.-')
-            if part_no_weight and not found_cargo:
-                cargo_type = part_no_weight.capitalize()
-                found_cargo = True
+            part_working = re.sub(r'(\d{1,2}\s*т|до\s*\d{1,2}\s*т|до\s*\d{1,2}\s*тонн)', '', part_working, flags=re.IGNORECASE).strip(' ,.-')
+
+        if not part_working:
             continue
 
-        # Поиск Типа ТС
-        if not found_vehicle and any(vk in p_lower for vk in vehicle_keywords):
-            car_type = part.capitalize()
+        p_work_lower = part_working.lower()
+
+        if not found_vehicle and any(vk in p_work_lower for vk in vehicle_keywords):
+            car_type = part_working.capitalize()
             found_vehicle = True
             continue
 
-        # Поиск спец. условий
-        matched_req = False
-        for r_key, r_label in req_keywords.items():
-            if r_key in p_lower:
-                if r_label not in details_list:
-                    details_list.append(r_label)
-                matched_req = True
+        is_req = False
+        for pat, label in req_patterns:
+            m_req = re.search(pat, p_work_lower, re.IGNORECASE)
+            if m_req:
+                req_val = label if label else m_req.group(1).upper()
+                if req_val not in details_list:
+                    details_list.append(req_val)
+                is_req = True
                 break
-        if matched_req:
+
+        if is_req:
             continue
 
-        # В остатке — наименование груза
-        if not found_cargo and len(part) > 1:
-            cargo_type = part.capitalize()
+        if not found_cargo and len(part_working) > 1:
+            cargo_type = part_working.capitalize()
             found_cargo = True
 
     details_text = ", ".join(details_list)
@@ -534,15 +552,8 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                 )
             else:
                 builder = InlineKeyboardBuilder()
-                if not is_auction_price(price_str):
-                    builder.row(types.InlineKeyboardButton(
-                        text=f"✅ Подтвердить за {price_str}",
-                        callback_data=f"confirm_{cargo_id}"
-                    ))
-                builder.row(types.InlineKeyboardButton(
-                    text="💰 Своя ставка",
-                    callback_data=f"bid_{cargo_id}"
-                ))
+                web_app_url = f"{RENDER_URL}/webapp"
+                builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
                 await bot.edit_message_text(
                     chat_id=u_id,
                     message_id=msg_id,
@@ -574,15 +585,8 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
     
     builder = InlineKeyboardBuilder()
     if not is_closed:
-        if not is_auction_price(price_str):
-            builder.row(types.InlineKeyboardButton(
-                text=f"✅ Подтвердить за {price_str}",
-                callback_data=f"confirm_{cargo_id}"
-            ))
-        builder.row(types.InlineKeyboardButton(
-            text="💰 Своя ставка",
-            callback_data=f"bid_{cargo_id}"
-        ))
+        web_app_url = f"{RENDER_URL}/webapp"
+        builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
     
     try:
         msg = await bot.send_message(
@@ -597,6 +601,135 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         conn.close()
     except Exception:
         pass
+
+
+# ==================== РАСПОЗНАВАНИЕ ДОКУМЕНТОВ ИЗ ФОТО ЧЕРЕЗ ИИ GEMINI И PDF ====================
+
+async def process_docs_with_ai(photos_file_ids, text_notes):
+    if not GEMINI_API_KEY:
+        logging.warning("⚠️ Переменная GEMINI_API_KEY не задана в Environment Variables!")
+        return (
+            f"📸 **Загружено документов**: {len(photos_file_ids)} шт.\n"
+            f"📞 **Заметки/телефон**: {text_notes or 'Указаны на фото'}\n\n"
+            f"⚠️ *(Ключ GEMINI_API_KEY не настроен в Environment)*"
+        )
+    
+    parts = []
+    
+    prompt = (
+        "Ты — специализированный ИИ-ассистент логистической компании для распознавания документов водителей и автотранспорта.\n"
+        "Тебе присланы фотографии техпаспортов (СТС) тягача и прицепа, паспорта и/или водительского удостоверения водителя.\n"
+        f"Также перевозчик указал следующий текст/телефон: '{text_notes or 'Нет'}'.\n\n"
+        "Внимательно распознай всю информацию на фото и сформируй структурированный аккуратный отчёт на русском языке:\n"
+        "1. 🚛 **Тягач**: Марка/модель, Гос. номер, Номер СТС/Техпаспорта\n"
+        "2. 🚛 **Прицеп**: Марка/модель, Гос. номер, Номер СТС/Техпаспорта\n"
+        "3. 👤 **Водитель**: ФИО полностью, Серия и номер паспорта, Номер водительского удостоверения\n"
+        "4. 📞 **Телефон водителя**: Номер телефона\n\n"
+        "Пиши строго по существу списком с эмодзи, без приветствий и лишних вводных фраз."
+    )
+    
+    parts.append({"text": prompt})
+
+    for file_id in photos_file_ids:
+        try:
+            file_info = await bot.get_file(file_id)
+            buf = io.BytesIO()
+            await bot.download_file(file_info.file_path, destination=buf)
+            img_bytes = buf.getvalue()
+            b64_str = base64.b64encode(img_bytes).decode('utf-8')
+            
+            parts.append({
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": b64_str
+                }
+            })
+        except Exception as e:
+            logging.error(f"Error downloading photo {file_id} for Gemini: {e}")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": parts}]}
+
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as response:
+                if response.status == 200:
+                    res_json = await response.json()
+                    candidates = res_json.get('candidates', [])
+                    if candidates:
+                        text_response = candidates[0]['content']['parts'][0]['text']
+                        return text_response.strip()
+                else:
+                    err_body = await response.text()
+                    logging.error(f"Gemini API error {response.status}: {err_body}")
+    except Exception as e:
+        logging.error(f"Exception during Gemini API call: {e}")
+
+    return (
+        f"📸 **Загружено документов**: {len(photos_file_ids)} шт.\n"
+        f"📞 **Заметки/телефон**: {text_notes or 'Указаны на фото'}"
+    )
+
+def create_pdf_report(route: str, date_str: str, price: str, carrier_info: str, ai_text: str) -> io.BytesIO:
+    """Генерирует PDF-отчет с данными от ИИ-агента."""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    font_name = "Helvetica"
+    for font_path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "DejaVuSans.ttf"
+    ]:
+        if os.path.exists(font_path):
+            try:
+                pdfmetrics.registerFont(TTFont('CyrillicFont', font_path))
+                font_name = 'CyrillicFont'
+                break
+            except Exception:
+                pass
+
+    c.setFont(font_name, 14)
+    c.drawString(40, height - 50, "ОТЧЕТ ПО ДОКУМЕНТАМ ВОДИТЕЛЯ И ТС")
+
+    c.setFont(font_name, 10)
+    y = height - 85
+    c.drawString(40, y, f"Маршрут: {route}")
+    y -= 18
+    c.drawString(40, y, f"Дата погрузки: {date_str}")
+    y -= 18
+    c.drawString(40, y, f"Ставка: {price}")
+    y -= 18
+    
+    clean_carrier = carrier_info.replace("👤 Перевозчик: ", "").replace("🏢 ", "")
+    c.drawString(40, y, f"Перевозчик: {clean_carrier}")
+    y -= 25
+
+    c.setFont(font_name, 11)
+    c.drawString(40, y, "Данные распознавания (ИИ-Агент):")
+    y -= 20
+
+    c.setFont(font_name, 9)
+    clean_ai_text = ai_text.replace('*', '').replace('#', '')
+    
+    for line in clean_ai_text.split('\n'):
+        line_str = line.strip()
+        if not line_str:
+            y -= 8
+            continue
+        if y < 40:
+            c.showPage()
+            y = height - 50
+            c.setFont(font_name, 9)
+        
+        c.drawString(40, y, line_str[:95])
+        y -= 14
+
+    c.save()
+    buffer.seek(0)
+    return buffer
 
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
@@ -671,7 +804,7 @@ async def send_welcome_message(message: types.Message):
         reply_markup=inline_builder1.as_markup()
     )
 
-    # Сообщение 2 + постоянная кнопка внизу
+    # Сообщение 2 + постоянная кнопка
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
         reply_markup=get_chat_menu_inline_markup()
@@ -710,9 +843,8 @@ async def callback_menu_active(callback: types.CallbackQuery):
     for load_id, date_str, route_str, price_str, cars_str, details_str in rows:
         card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str)
         builder = InlineKeyboardBuilder()
-        if not is_auction_price(price_str):
-            builder.row(types.InlineKeyboardButton(text=f"✅ Подтвердить за {price_str}", callback_data=f"confirm_{load_id}"))
-        builder.row(types.InlineKeyboardButton(text="💰 Своя ставка", callback_data=f"bid_{load_id}"))
+        web_app_url = f"{RENDER_URL}/webapp"
+        builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
         
         try:
             await callback.message.answer(card, reply_markup=builder.as_markup())
@@ -912,6 +1044,90 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     await show_profile_menu(message)
 
 
+# ==================== ХЭНДЛЕРЫ ПОДАЧИ ДОКУМЕНТОВ ДЛЯ ИИ ====================
+
+@dp.message(DocUploadStates.waiting_for_docs, F.photo)
+async def handle_doc_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+    await message.answer(f"📸 Фото принято! (Всего загружено: {len(photos)}). Пришлите еще фото/телефон или нажмите «✅ Отправить данные логисту».")
+
+@dp.message(DocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
+async def handle_doc_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Загрузка документов отменена.", reply_markup=get_main_reply_markup())
+
+@dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
+async def handle_doc_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    user_id = message.from_user.id
+    user_obj = message.from_user
+
+    photos = data.get("photos", [])
+    notes = data.get("text_notes", "")
+    route_str = data.get("upload_route", "Маршрут")
+    date_str = data.get("upload_date", "Дата")
+    price_str = data.get("upload_price", "Ставка")
+    deal_id = data.get("upload_deal_id", "info")
+
+    if not photos and not notes:
+        await message.answer("⚠️ Вы не прислали ни одного фото или номера телефона. Отправьте документы и нажмите кнопку повторно.")
+        return
+
+    if deal_id:
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE confirmed_deals SET docs_submitted = 1 WHERE id = ? OR load_id = ?", (deal_id, deal_id))
+        conn.commit()
+        conn.close()
+
+    await message.answer("🤖 **ИИ-агент распознает документы и формирует PDF-отчет...** Пожалуйста, подождите немного.")
+
+    ai_formatted_data = await process_docs_with_ai(photos, notes)
+    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
+
+    admin_msg = (
+        f"📄 **ПОСТУПИЛИ ДАННЫЕ ПО ГРУЗУ #{deal_id}**\n\n"
+        f"📅 {date_str} | {route_str}\n"
+        f"💰 {price_str}\n\n"
+        f"{carrier_text}\n\n"
+        f"{ai_formatted_data}"
+    )
+
+    try:
+        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+
+        pdf_buf = create_pdf_report(route_str, date_str, price_str, carrier_text, ai_formatted_data)
+        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{deal_id}_{date_str}.pdf")
+        await bot.send_document(
+            chat_id=ADMIN_CHANNEL_ID, 
+            document=pdf_file, 
+            caption=f"📄 **PDF-отчет по грузу #{deal_id}** ({route_str})"
+        )
+
+        for pid in photos:
+            await bot.send_photo(chat_id=ADMIN_CHANNEL_ID, photo=pid)
+            await asyncio.sleep(0.05)
+
+    except Exception as e:
+        logging.error(f"Error forwarding docs and PDF to admin channel: {e}")
+
+    await state.clear()
+    await message.answer("✅ Все данные и PDF-отчет успешно сформированы и переданы логисту!", reply_markup=get_main_reply_markup())
+
+@dp.message(DocUploadStates.waiting_for_docs, F.text)
+async def handle_doc_text_notes(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    old_notes = data.get("text_notes", "")
+    new_notes = (old_notes + "\n" + message.text).strip()
+    await state.update_data(text_notes=new_notes)
+    await message.answer("📝 Текст/телефон записан. Пришлите фото или нажмите «✅ Отправить данные логисту».")
+
+
+# ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК В ЧАТЕ ====================
+
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -984,8 +1200,6 @@ async def process_custom_rate(message: types.Message, state: FSMContext):
     await message.answer(f"Сколько грузов вы можете поставить по этой ставке ({rate})? (доступно машин: {row[0] if row else '?'})")
     await state.set_state(DealStates.waiting_for_quantity)
 
-
-# ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СДЕЛОК ====================
 @dp.message(DealStates.waiting_for_quantity)
 async def process_deal_quantity(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -1037,7 +1251,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
 
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
-    # Ставка из чата (без запроса комментария)
     if action_type == "bid":
         cursor.execute("""
             INSERT INTO bids (load_id, user_id, cars, rate, comment)
@@ -1072,7 +1285,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup())
         return
 
-    # Прямое подтверждение по ставке логиста
     if current_cars > requested_cars:
         left_cars = current_cars - requested_cars
         cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), cargo_id))
@@ -1103,6 +1315,9 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     await state.clear()
     await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup())
+
+
+# ==================== ОБРАБОТКА СТАВОК ЛОГИСТОМ В ТЕЛЕГРАМ ====================
 
 @dp.callback_query(F.data.startswith("accept_bid_"))
 async def admin_accept_bid(callback: types.CallbackQuery):
@@ -1424,7 +1639,21 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         
     cleaned_text = text.strip()
 
-    # 1. Вызов меню админа
+    # 1. Смена пароля через /setpass
+    if cleaned_text.startswith("/setpass"):
+        new_pass = cleaned_text.replace("/setpass", "").strip()
+        if not new_pass:
+            await event.answer("⚠️ Укажите новый пароль после команды, например: `/setpass 777888`", parse_mode="Markdown")
+            return
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)", (new_pass,))
+        conn.commit()
+        conn.close()
+        await event.answer(f"✅ Пароль от Админ-меню Web App успешно изменён на: `{new_pass}`", parse_mode="Markdown")
+        return
+
+    # 2. Вызов меню админа
     if cleaned_text.lower() in ("/меню", "меню", "!меню"):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
@@ -1434,7 +1663,7 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         await event.answer("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
         return
 
-    # 2. Массовая рассылка (!текст)
+    # 3. Массовая рассылка (!текст)
     if cleaned_text.startswith("!"):
         broadcast_text = cleaned_text[1:].lstrip()
         if not broadcast_text:
@@ -1457,7 +1686,7 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         await event.answer(f"✅ Рассылка завершена ({success_count} польз.).")
         return
 
-    # 3. Встречная ставка от логиста
+    # 4. Встречная ставка от логиста
     await process_admin_counter_offer(event, cleaned_text, state)
 
 async def process_admin_counter_offer(event: types.Message, text: str, state: FSMContext = None):
@@ -1547,23 +1776,14 @@ async def process_admin_counter_offer(event: types.Message, text: str, state: FS
 
 @dp.callback_query(F.data == "adm_change_pass")
 async def admin_change_pass_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("🔐 Введите новый пароль для входа в Админ-панель в Web App:")
-    await state.set_state(AdminPassState.waiting_for_new_pass)
+    await callback.message.reply(
+        "🔐 **Смена пароля для Web App:**\n\n"
+        "Отправьте новую команду с паролем в этот чат:\n"
+        "`/setpass ваш_новый_пароль`\n\n"
+        "Например:\n`/setpass 777888`",
+        parse_mode="Markdown"
+    )
     await callback.answer()
-
-@dp.message(AdminPassState.waiting_for_new_pass)
-async def admin_save_new_pass(message: types.Message, state: FSMContext):
-    new_pass = message.text.strip()
-    if not new_pass:
-        await message.answer("Пароль не может быть пустым!")
-        return
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)", (new_pass,))
-    conn.commit()
-    conn.close()
-    await state.clear()
-    await message.answer(f"✅ Пароль для Web App успешно изменён на: `{new_pass}`", parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("adm_start_del_"))
 async def admin_delete_cargo(callback: types.CallbackQuery):
@@ -2163,6 +2383,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
         .info-item b { color: var(--text); }
 
         .today-badge {
+            background: rgba(253, 126, 20, 0.15);
+            color: #fd7e14;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        .doc-badge {
             background: rgba(40, 167, 69, 0.15);
             color: #28a745;
             padding: 4px 8px;
@@ -2441,10 +2672,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модальное окно уведомлений -->
+    <!-- Модальное окно уведомлений с крестиком -->
     <div class="modal-overlay" id="notifModal">
         <div class="modal-card">
-            <div class="modal-title">🔔 Уведомления</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🔔 Уведомления</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint); padding: 4px;" onclick="closeNotifModal()">✕</div>
+            </div>
             <div id="notifList"><div class="loader">Загрузка...</div></div>
             <button class="btn-rounded" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
         </div>
@@ -2453,7 +2687,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <!-- Модалка ввода пароля Админа -->
     <div class="modal-overlay" id="adminPassModal">
         <div class="modal-card">
-            <div class="modal-title">🔐 Вход для администратора</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🔐 Вход для администратора</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPassModal()">✕</div>
+            </div>
             <input type="password" id="adminPassInput" placeholder="Введите пароль..." />
             <div class="buttons">
                 <button class="btn-confirm" onclick="submitAdminPassword()">Войти</button>
@@ -2462,23 +2699,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка Панели Администратора -->
+    <!-- Модалка Админки с 3 разделами -->
     <div class="modal-overlay" id="adminPanelModal">
         <div class="modal-card" style="max-width: 95%; width: 500px;">
-            <div class="modal-title">🎛 Панель Администратора</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🎛 Панель Администратора</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPanelModal()">✕</div>
+            </div>
+            
             <div class="sub-nav" style="margin-bottom:12px;">
                 <div class="sub-nav-btn active" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">👥 Перевозчики</div>
-                <div class="sub-nav-btn" id="admTabLoads" onclick="switchAdminSubTab('loads')">📦 Все грузы</div>
+                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">📋 Биржа</div>
+                <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
             </div>
+
+            <!-- Фильтр по перевозчикам в сделках -->
+            <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
+                <select id="adminCarrierSelect" style="width:100%; padding:8px; border-radius:8px; background:var(--bg); color:var(--text); border:1px solid var(--border);" onchange="renderAdminConfirmedDeals()">
+                    <option value="ALL">Все перевозчики</option>
+                </select>
+            </div>
+
             <div id="adminContentBody"><div class="loader">Загрузка...</div></div>
-            <button class="btn-rounded" style="width:100%; margin-top:12px; background:var(--hint);" onclick="closeAdminPanelModal()">Закрыть Админку</button>
         </div>
     </div>
 
     <!-- Модалка редактирования груза Админом -->
     <div class="modal-overlay" id="adminEditLoadModal">
         <div class="modal-card">
-            <div class="modal-title">✏️ Редактирование груза</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование груза</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditModal()">✕</div>
+            </div>
             <input type="hidden" id="editLoadId" />
             <div class="form-group"><label>Маршрут:</label><input type="text" id="editRoute" /></div>
             <div class="form-group"><label>Дата:</label><input type="text" id="editDate" /></div>
@@ -2491,6 +2743,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <div class="buttons">
                 <button class="btn-confirm" onclick="saveAdminLoadEdit()">💾 Сохранить</button>
                 <button style="background: var(--hint);" onclick="closeAdminEditModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка редактирования сделки Админом -->
+    <div class="modal-overlay" id="adminEditDealModal">
+        <div class="modal-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование сделки</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditDealModal()">✕</div>
+            </div>
+            <input type="hidden" id="editDealId" />
+            <div class="form-group"><label>Маршрут:</label><input type="text" id="editDealRoute" /></div>
+            <div class="form-group"><label>Дата:</label><input type="text" id="editDealDate" /></div>
+            <div class="form-group"><label>Ставка:</label><input type="text" id="editDealPrice" /></div>
+            <div class="form-group"><label>Забрано авто:</label><input type="text" id="editDealCars" /></div>
+            <div class="buttons">
+                <button class="btn-confirm" onclick="saveAdminDealEdit()">💾 Сохранить</button>
+                <button style="background: var(--hint);" onclick="closeAdminEditDealModal()">Отмена</button>
             </div>
         </div>
     </div>
@@ -2511,6 +2782,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'carriers';
+        let allAdminDeals = [];
 
         function handleHeaderClick() {
             headerClicks++;
@@ -2565,12 +2837,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
         function switchAdminSubTab(tab) {
             adminSubTab = tab;
             document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
-            document.getElementById('admTabLoads').classList.toggle('active', tab === 'loads');
+            document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
+            document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
+
+            document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') {
                 loadAdminCarriers();
-            } else {
+            } else if (tab === 'exchange') {
                 loadAdminLoads();
+            } else if (tab === 'confirmed') {
+                loadAdminConfirmedDeals();
             }
         }
 
@@ -2669,6 +2946,104 @@ INDEX_HTML = r"""<!DOCTYPE html>
                     body: JSON.stringify({id: id})
                 });
                 loadAdminLoads();
+                loadData(false);
+            }
+        }
+
+        async function loadAdminConfirmedDeals() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = '<div class="loader">Загрузка сделок...</div>';
+            try {
+                let res = await fetch('/api/admin/confirmed_deals?t=' + Date.now());
+                let data = await res.json();
+                allAdminDeals = data.deals || [];
+
+                let select = document.getElementById('adminCarrierSelect');
+                let carriersMap = {};
+                allAdminDeals.forEach(d => {
+                    carriersMap[d.user_id] = `${d.company} (${d.name})`;
+                });
+                
+                let selectHtml = '<option value="ALL">Все перевозчики</option>';
+                for (let uid in carriersMap) {
+                    selectHtml += `<option value="${uid}">${carriersMap[uid]}</option>`;
+                }
+                select.innerHTML = selectHtml;
+
+                renderAdminConfirmedDeals();
+            } catch(e) {
+                body.innerHTML = 'Ошибка загрузки сделок';
+            }
+        }
+
+        function renderAdminConfirmedDeals() {
+            let body = document.getElementById('adminContentBody');
+            let selectedUser = document.getElementById('adminCarrierSelect')?.value || 'ALL';
+
+            let filtered = allAdminDeals.filter(d => {
+                if (selectedUser !== 'ALL') return String(d.user_id) === String(selectedUser);
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                body.innerHTML = '<div class="loader">Сделок по фильтру не найдено</div>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(d => `
+                <div class="notif-item">
+                    <div class="notif-title">🤝 Сделка #${d.deal_id} | 📍 ${d.route}</div>
+                    <div class="notif-text">📅 Дата: ${d.date} | 💰 Ставка: ${d.price} | 🚛 Авто: ${d.cars}</div>
+                    <div class="notif-text" style="color:#007aff; margin-top:2px;">
+                        👤 <b>${d.company}</b> | ${d.name} (📞 ${d.phone})
+                    </div>
+                    <div class="buttons" style="margin-top:6px;">
+                        <button class="btn-confirm" style="padding:6px;" onclick='openAdminEditDealModal(${JSON.stringify(d).replace(/'/g, "&#39;")})'>✏️ Изменить сделку</button>
+                        <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="cancelAdminDeal(${d.deal_id})">❌ Отменить сделку</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function openAdminEditDealModal(d) {
+            document.getElementById('editDealId').value = d.deal_id;
+            document.getElementById('editDealRoute').value = d.route;
+            document.getElementById('editDealDate').value = d.date;
+            document.getElementById('editDealPrice').value = d.price;
+            document.getElementById('editDealCars').value = d.cars;
+            document.getElementById('adminEditDealModal').classList.add('active');
+        }
+
+        function closeAdminEditDealModal() {
+            document.getElementById('adminEditDealModal').classList.remove('active');
+        }
+
+        async function saveAdminDealEdit() {
+            let data = {
+                deal_id: document.getElementById('editDealId').value,
+                route: document.getElementById('editDealRoute').value,
+                date: document.getElementById('editDealDate').value,
+                price: document.getElementById('editDealPrice').value,
+                cars: document.getElementById('editDealCars').value
+            };
+            await fetch('/api/admin/edit_deal', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            closeAdminEditDealModal();
+            loadAdminConfirmedDeals();
+            loadData(false);
+        }
+
+        async function cancelAdminDeal(dealId) {
+            if (confirm('Отменить эту подтверждённую сделку? Перевозчику придет уведомление.')) {
+                await fetch('/api/admin/cancel_deal', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({deal_id: dealId})
+                });
+                loadAdminConfirmedDeals();
                 loadData(false);
             }
         }
@@ -2946,7 +3321,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
                     tbody.innerHTML = sortedDeals.map(d => {
                         let statusStyle = d.status === 'CONFIRMED' ? 'color:#28a745;' : 'color:#fd7e14;';
-                        let highlightStyle = d.is_today ? 'background: rgba(40, 167, 69, 0.08); border-left: 3px solid #28a745;' : '';
+                        
+                        let highlightStyle = '';
+                        let badgeHtml = '';
+
+                        if (d.docs_submitted) {
+                            highlightStyle = 'background: rgba(40, 167, 69, 0.10); border-left: 3px solid #28a745;';
+                            badgeHtml = '<div class="doc-badge">✅ Данные поданы</div>';
+                        } else if (d.is_today) {
+                            highlightStyle = 'background: rgba(253, 126, 20, 0.10); border-left: 3px solid #fd7e14;';
+                            badgeHtml = '<div class="today-badge">📌 Погрузка сегодня!</div>';
+                        }
+
+                        let docBtnText = d.docs_submitted ? '📄 Данные поданы (обновить)' : '📄 Подать данные (техпаспорт / водитель)';
+
+                        let docButton = '';
+                        if (d.status === 'CONFIRMED') {
+                            docButton = `<button class="btn-confirm" style="background:var(--active-tab); width:100%; margin-top:8px; padding:8px;" onclick="requestDocUpload('${d.load_id || d.id}', event)">${docBtnText}</button>`;
+                        }
 
                         return `
                         <div class="t-row" style="${highlightStyle}" onclick="toggleRow('${d.id}')">
@@ -2956,7 +3348,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                             <div class="col-arrow" id="arrow-${d.id}">▼</div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
-                            ${d.is_today ? `<div class="today-badge">📌 Погрузка сегодня!</div>` : ''}
+                            ${badgeHtml}
                             <div style="font-weight:700; margin-bottom:8px; ${statusStyle}">
                                 Статус: ${d.status_text}
                             </div>
@@ -2967,6 +3359,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                                 <div class="info-item"><span>Маршрут:</span><b>${d.route}</b></div>
                             </div>
                             ${d.details ? `<div style="font-size:11px; color:var(--hint); margin-top:4px;"><b>Детали:</b> ${d.details}</div>` : ''}
+                            ${docButton}
                         </div>
                     `}).join('');
 
@@ -2978,6 +3371,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
             } catch(e) {
                 if (!isSilent) tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+            }
+        }
+
+        async function requestDocUpload(dealId, event) {
+            event.stopPropagation();
+            let userId = getUserId();
+            if (!userId) return;
+
+            try {
+                let res = await fetch('/api/submit_docs_prompt', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId, deal_id: dealId})
+                });
+                if (res.ok) {
+                    notify('✅ Инструкция по отправке документов отправлена вам в чат с ботом!');
+                    if (tg && tg.close) tg.close();
+                } else {
+                    notify('❌ Ошибка инициализации сбора документов.');
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
             }
         }
 
@@ -3148,669 +3563,3 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </script>
 </body>
 </html>"""
-
-# ==================== WEB APP БЭКЕНД ====================
-async def get_loads_api(request):
-    country = request.query.get('country')
-    raw_uid = request.query.get('user_id')
-    user_id = int(raw_uid) if raw_uid and raw_uid.isdigit() else 0
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    
-    user_subs = []
-    if user_id:
-        cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
-        u_row = cursor.fetchone()
-        if u_row and u_row[0]:
-            user_subs = [s.strip() for s in u_row[0].split(',') if s.strip()]
-
-    query = """
-        SELECT load_id, route, date, cars_count, price, text, 
-               COALESCE(cargo_type, 'ТНП'), 
-               COALESCE(weight, 'до 22т'), 
-               COALESCE(car_type, 'Тент/реф'),
-               COALESCE(admin_comment, ''),
-               COALESCE(destination_country, 'Все')
-        FROM loads 
-        WHERE status = 'ACTIVE'
-    """
-    params = []
-
-    if country and country != 'ALL':
-        query += " AND (destination_country LIKE ? OR route LIKE ?)"
-        params.extend([f"%{country}%", f"%{country}%"])
-    elif user_subs:
-        sub_conditions = []
-        for sub in user_subs:
-            clean_sub = sub.split(' ')[0]
-            sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
-            params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
-        query += " AND (" + " OR ".join(sub_conditions) + ")"
-    elif user_id:
-        conn.close()
-        return web.json_response({"loads": []})
-        
-    query += " ORDER BY load_id DESC"
-    
-    try:
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-    except Exception as e:
-        logging.error(f"Error reading loads: {e}")
-        rows = []
-    conn.close()
-    
-    loads = [{
-        "id": r[0],
-        "route": r[1] if r[1] else "Не указан",
-        "date": r[2] if r[2] else "Срочно",
-        "cars": r[3] if r[3] else "1",
-        "price": r[4] if r[4] else "Торги",
-        "raw_text": r[5],
-        "cargo_type": r[6],
-        "weight": r[7],
-        "car_type": r[8],
-        "admin_comment": r[9],
-        "country": r[10]
-    } for r in rows]
-    return web.json_response({"loads": loads})
-
-async def my_loads_api(request):
-    raw_uid = request.query.get('user_id')
-    if not raw_uid:
-        return web.json_response({"deals": []})
-        
-    try:
-        user_id = int(raw_uid)
-    except (ValueError, TypeError):
-        return web.json_response({"deals": []})
-        
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, 
-               COALESCE(cd.details, ''), 'CONFIRMED' as status,
-               COALESCE(l.car_type, 'Тент/реф'),
-               COALESCE(l.cargo_type, 'ТНП'),
-               COALESCE(l.weight, 'до 22т')
-        FROM confirmed_deals cd
-        LEFT JOIN loads l ON cd.load_id = l.load_id
-        WHERE cd.user_id = ?
-        ORDER BY cd.id DESC
-    """, (user_id,))
-    confirmed_rows = cursor.fetchall()
-    
-    cursor.execute("""
-        SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, b.rate as price,
-               COALESCE(l.details, ''), 'PENDING' as status,
-               COALESCE(l.car_type, 'Тент/реф'),
-               COALESCE(l.cargo_type, 'ТНП'),
-               COALESCE(l.weight, 'до 22т')
-        FROM bids b
-        JOIN loads l ON b.load_id = l.load_id
-        WHERE b.user_id = ? AND b.status = 'PENDING'
-        ORDER BY b.bid_id DESC
-    """, (user_id,))
-    pending_rows = cursor.fetchall()
-    
-    conn.close()
-    
-    msk_today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
-    deals = []
-    
-    for r in pending_rows:
-        bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
-        try:
-            qty = int(re.search(r'\d+', str(cars_count)).group(0))
-        except Exception:
-            qty = 1
-            
-        c_date = parse_cargo_date(date_str)
-        is_today = (c_date and c_date == msk_today)
-        is_archived = (c_date and msk_today > c_date)
-
-        for i in range(qty):
-            deals.append({
-                "id": f"bid_{bid_id}_{i}",
-                "load_id": load_id,
-                "date": date_str,
-                "route": route_str,
-                "price": price_str,
-                "status": "PENDING",
-                "status_text": "⏳ (на согласовании)",
-                "details": details_str,
-                "car_type": car_type,
-                "cargo_type": cargo_type,
-                "weight": weight,
-                "is_today": is_today,
-                "is_archived": is_archived
-            })
-
-    for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
-        try:
-            qty = int(re.search(r'\d+', str(cars_count)).group(0))
-        except Exception:
-            qty = 1
-
-        c_date = parse_cargo_date(date_str)
-        is_today = (c_date and c_date == msk_today)
-        is_archived = (c_date and msk_today > c_date)
-
-        for i in range(qty):
-            deals.append({
-                "id": f"deal_{deal_id}_{i}",
-                "load_id": load_id,
-                "date": date_str,
-                "route": route_str,
-                "price": price_str,
-                "status": "CONFIRMED",
-                "status_text": "✅ Подтвержден",
-                "details": details_str,
-                "car_type": car_type,
-                "cargo_type": cargo_type,
-                "weight": weight,
-                "is_today": is_today,
-                "is_archived": is_archived
-            })
-            
-    return web.json_response({"deals": deals})
-
-async def notifications_get_api(request):
-    raw_uid = request.query.get('user_id')
-    if not raw_uid:
-        return web.json_response({"notifications": [], "unread_count": 0})
-    try:
-        user_id = int(raw_uid)
-    except (ValueError, TypeError):
-        return web.json_response({"notifications": [], "unread_count": 0})
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, title, text, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 30", (user_id,))
-    rows = cursor.fetchall()
-    
-    cursor.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", (user_id,))
-    unread_count = cursor.fetchone()[0]
-    conn.close()
-
-    notifs = [{
-        "id": r[0],
-        "title": r[1],
-        "text": r[2],
-        "is_read": r[3],
-        "created_at": r[4]
-    } for r in rows]
-
-    return web.json_response({"notifications": notifs, "unread_count": unread_count})
-
-async def notifications_read_api(request):
-    try:
-        data = await request.json()
-        user_id = int(data.get('user_id', 0))
-        if user_id:
-            conn = sqlite3.connect("cargo_bot.db")
-            cursor = conn.cursor()
-            cursor.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-    except Exception:
-        pass
-    return web.json_response({"status": "success"})
-
-async def profile_get_api(request):
-    raw_uid = request.query.get('user_id')
-    if not raw_uid:
-        return web.json_response({"profile": None})
-
-    try:
-        user_id = int(raw_uid)
-    except (ValueError, TypeError):
-        return web.json_response({"profile": None})
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT company, name, phone, subscriptions FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if row:
-        return web.json_response({
-            "profile": {
-                "company": row[0] or "",
-                "name": row[1] or "",
-                "phone": row[2] or "",
-                "subscriptions": row[3] or ""
-            }
-        })
-    return web.json_response({"profile": None})
-
-async def profile_post_api(request):
-    try:
-        data = await request.json()
-    except Exception:
-        return web.json_response({"error": "Bad JSON"}, status=400)
-
-    raw_uid = data.get('user_id')
-    if not raw_uid:
-        return web.json_response({"error": "No user_id"}, status=400)
-
-    try:
-        user_id = int(raw_uid)
-    except (ValueError, TypeError):
-        return web.json_response({"error": "Invalid user_id"}, status=400)
-
-    company = data.get('company', '')
-    name = data.get('name', '')
-    phone = data.get('phone', '')
-    subscriptions = data.get('subscriptions', '')
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO users (user_id, company, name, phone, subscriptions, status)
-        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
-        ON CONFLICT(user_id) DO UPDATE SET
-            company = excluded.company,
-            name = excluded.name,
-            phone = excluded.phone,
-            subscriptions = excluded.subscriptions
-    """, (user_id, company, name, phone, subscriptions))
-    conn.commit()
-    conn.close()
-
-    return web.json_response({"status": "success"})
-
-async def book_load_api(request):
-    raw_id = request.match_info.get('id', '')
-    digits = re.findall(r'\d+', str(raw_id))
-    if not digits:
-        return web.json_response({"error": "Неверный ID груза"}, status=400)
-    load_id = int(digits[0])
-
-    try:
-        data = await request.json()
-    except Exception:
-        return web.json_response({"error": "Неверный формат данных"}, status=400)
-
-    raw_uid = data.get('user_id')
-    try:
-        user_id = int(raw_uid)
-    except (ValueError, TypeError):
-        user_id = 0
-
-    if not user_id:
-        return web.json_response({"error": "Пользователь не определён. Переоткройте Web App из бота."}, status=400)
-
-    first_name = data.get('first_name', '')
-    username = data.get('username', '')
-    action = data.get('action') 
-    proposed_price_raw = data.get('proposed_price', '')
-    proposed_price = format_custom_rate(proposed_price_raw)
-    carrier_comment = data.get('comment', '')
-    
-    try:
-        requested_cars = int(data.get('cars', 1))
-    except (ValueError, TypeError):
-        requested_cars = 1
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT status, company, name, phone FROM users WHERE user_id = ?", (user_id,))
-    user_row = cursor.fetchone()
-    if not user_row:
-        cursor.execute("""
-            INSERT INTO users (user_id, company, name, phone, subscriptions, status)
-            VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE')
-        """, (user_id, first_name or username or f"User_{user_id}"))
-        conn.commit()
-    else:
-        u_status = user_row[0]
-        if u_status == 'BLOCKED':
-            conn.close()
-            return web.json_response({"error": "Ваш аккаунт заблокирован"}, status=403)
-
-    cursor.execute("SELECT status, route, date, price, cars_count, details, text FROM loads WHERE load_id = ?", (load_id,))
-    load = cursor.fetchone()
-    
-    if not load or load[0] != 'ACTIVE':
-        conn.close()
-        return web.json_response({"error": "Груз недоступен или уже закрыт"}, status=400)
-        
-    status, route_str, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
-    current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if cars_count_str and re.search(r'\d+', str(cars_count_str)) else 1
-
-    if current_cars <= 0:
-        conn.close()
-        return web.json_response({"error": "Все авто по этому грузу уже забронированы"}, status=400)
-
-    carrier_text = format_carrier_info(user_id, username, first_name)
-
-    # Забор по фиксированной ставке логиста
-    if action == 'confirm':
-        if requested_cars > current_cars:
-            requested_cars = current_cars
-
-        if current_cars > requested_cars:
-            left_cars = current_cars - requested_cars
-            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(left_cars), load_id))
-        else:
-            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
-
-        cursor.execute("""
-            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (load_id, user_id, date_str, route_str, requested_cars, price_str, details_text))
-
-        conn.commit()
-        conn.close()
-
-        add_notification(
-            user_id, 
-            "✅ Груз забронирован", 
-            f"Вы забронировали {requested_cars} авто по маршруту {route_str} ({price_str})."
-        )
-
-        await update_cargo_messages_for_all_users(load_id)
-
-        admin_notification = (
-            f"🎯 **Груз забран перевозчиком из Web App!**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"📅 Дата: {date_str}\n"
-            f"💰 Ставка: {price_str} | 🚛 Забрано авто: {requested_cars}\n"
-            f"💬 Комментарий: {carrier_comment or 'Нет'}\n\n"
-            f"{carrier_text}"
-        )
-        try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
-        except Exception as e:
-            logging.error(f"Error sending admin notification: {e}")
-
-        return web.json_response({"status": "success"})
-
-    # Предложение своей ставки логисту
-    elif action == 'bid':
-        cursor.execute("""
-            INSERT INTO bids (load_id, user_id, cars, rate, comment)
-            VALUES (?, ?, ?, ?, ?)
-        """, (load_id, user_id, requested_cars, proposed_price, carrier_comment or 'Своя ставка'))
-        bid_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-
-        add_notification(
-            user_id, 
-            "⏳ Ставка отправлена", 
-            f"Ваша ставка {proposed_price} на {requested_cars} авто по грузу {route_str} отправлена логисту."
-        )
-
-        admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
-        )
-        admin_builder.row(
-            types.InlineKeyboardButton(text="💡 Встречная ставка", callback_data=f"counter_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
-        )
-
-        admin_notification = (
-            f"💰 **Новая ставка из Web App!**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"📅 Дата: {date_str}\n"
-            f"💵 Предложенная ставка: {proposed_price} | 🚛 Авто: {requested_cars}\n"
-            f"💬 Комментарий: {carrier_comment or 'Нет'}\n\n"
-            f"{carrier_text}"
-        )
-        try:
-            await bot.send_message(
-                chat_id=ADMIN_CHANNEL_ID, 
-                text=admin_notification, 
-                reply_markup=admin_builder.as_markup(),
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logging.error(f"Error sending bid notification: {e}")
-
-        return web.json_response({"status": "success"})
-
-    conn.close()
-    return web.json_response({"error": "Неизвестное действие"}, status=400)
-
-async def admin_verify_pass_api(request):
-    try:
-        data = await request.json()
-        password = data.get('password', '')
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'admin_password'")
-        row = cursor.fetchone()
-        conn.close()
-        db_pass = row[0] if row else '123456'
-        if password == db_pass:
-            return web.json_response({"status": "success"})
-        return web.json_response({"error": "Неверный пароль"}, status=403)
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-async def admin_get_carriers_api(request):
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, company, name, phone, status, subscriptions FROM users ORDER BY user_id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    carriers = [{
-        "user_id": r[0], "company": r[1] or "Не указана", "name": r[2] or "Не указано",
-        "phone": r[3] or "Не указан", "status": r[4] or "ACTIVE", "subscriptions": r[5] or ""
-    } for r in rows]
-    return web.json_response({"carriers": carriers})
-
-async def admin_toggle_carrier_status_api(request):
-    try:
-        data = await request.json()
-        u_id = int(data.get('user_id'))
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT status FROM users WHERE user_id = ?", (u_id,))
-        row = cursor.fetchone()
-        new_status = 'BLOCKED' if row and row[0] == 'ACTIVE' else 'ACTIVE'
-        cursor.execute("UPDATE users SET status = ? WHERE user_id = ?", (new_status, u_id))
-        conn.commit()
-        conn.close()
-        return web.json_response({"status": "success", "new_status": new_status})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-async def admin_get_loads_api(request):
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    query = """
-        SELECT l.load_id, l.route, l.date, l.cars_count, l.price, l.status,
-               COALESCE(l.car_type, 'Тент/реф'), COALESCE(l.cargo_type, 'ТНП'),
-               COALESCE(l.weight, 'до 22т'), COALESCE(l.admin_comment, ''),
-               GROUP_CONCAT(u.company || ' (' || u.name || ')', '; ') as carriers
-        FROM loads l
-        LEFT JOIN confirmed_deals cd ON l.load_id = cd.load_id
-        LEFT JOIN users u ON cd.user_id = u.user_id
-        GROUP BY l.load_id
-        ORDER BY l.load_id DESC
-    """
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    conn.close()
-    loads = [{
-        "id": r[0], "route": r[1], "date": r[2], "cars": r[3], "price": r[4],
-        "status": r[5], "car_type": r[6], "cargo_type": r[7], "weight": r[8],
-        "admin_comment": r[9], "carrier_info": r[10] or "Не забран"
-    } for r in rows]
-    return web.json_response({"loads": loads})
-
-async def admin_edit_load_api(request):
-    try:
-        data = await request.json()
-        load_id = int(data.get('id'))
-        route = data.get('route', '')
-        date_str = data.get('date', '')
-        price = data.get('price', '')
-        cars = data.get('cars', '1')
-        car_type = data.get('car_type', 'Тент/реф')
-        cargo_type = data.get('cargo_type', 'ТНП')
-        weight = data.get('weight', 'до 22т')
-        admin_comment = data.get('admin_comment', '')
-
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE loads 
-            SET route = ?, date = ?, price = ?, cars_count = ?, car_type = ?, cargo_type = ?, weight = ?, admin_comment = ?
-            WHERE load_id = ?
-        """, (route, date_str, price, cars, car_type, cargo_type, weight, admin_comment, load_id))
-        conn.commit()
-        conn.close()
-
-        await update_cargo_messages_for_all_users(load_id)
-        return web.json_response({"status": "success"})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-async def admin_delete_load_api(request):
-    try:
-        data = await request.json()
-        load_id = int(data.get('id'))
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
-        conn.commit()
-        conn.close()
-
-        await update_cargo_messages_for_all_users(load_id)
-        return web.json_response({"status": "success"})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-async def serve_index(request):
-    return web.Response(text=INDEX_HTML, content_type='text/html')
-
-DIRECTIONS_HTML = """<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Выбор направлений</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 15px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
-        h3 { margin-top: 0; font-size: 17px; text-align: center; }
-        .item { font-size: 16px; margin: 12px 0; display: flex; align-items: center; gap: 10px; background: var(--tg-theme-secondary-bg-color, #f5f5f7); padding: 10px 14px; border-radius: 8px; }
-        .item input { width: 18px; height: 18px; }
-        button { width: 100%; padding: 12px; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); border: none; border-radius: 8px; font-size: 15px; font-weight: bold; margin-top: 20px; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <h3>🌍 Выберите интересующие направления:</h3>
-    <div class="item"><label><input type="checkbox" value="Казахстан 🇰🇿"> 🇰🇿 Казахстан</label></div>
-    <div class="item"><label><input type="checkbox" value="Узбекистан 🇺🇿"> 🇺🇿 Узбекистан</label></div>
-    <div class="item"><label><input type="checkbox" value="Кыргызстан 🇰🇬"> 🇰🇬 Кыргызстан</label></div>
-    <div class="item"><label><input type="checkbox" value="Грузия 🇬🇪"> 🇬🇪 Грузия</label></div>
-    <div class="item"><label><input type="checkbox" value="Азербайджан 🇦🇿"> 🇦🇿 Азербайджан</label></div>
-    <div class="item"><label><input type="checkbox" value="Армения 🇦🇲"> 🇦🇲 Армения</label></div>
-
-    <button onclick="save()">Сохранить подписки</button>
-
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        function save() {
-            let selected = [];
-            document.querySelectorAll('input:checked').forEach(cb => selected.push(cb.value));
-            tg.sendData(JSON.stringify(selected));
-            tg.close();
-        }
-    </script>
-</body>
-</html>"""
-
-async def serve_directions(request):
-    return web.Response(text=DIRECTIONS_HTML, content_type='text/html')
-
-
-# ==================== СЕРВЕР И САМОПИНГ (ЗАЩИТА ОТ СПЯЩЕГО РЕЖИМА) ====================
-async def handle_ping(request):
-    return web.Response(text="Bot is running!", status=200)
-
-async def self_ping():
-    await asyncio.sleep(10)
-    import aiohttp
-    url = RENDER_URL.rstrip('/') if RENDER_URL else None
-    
-    if not url or "your-app-name" in url:
-        logging.warning("⚠️ RENDER_URL не настроен! Задайте переменную RENDER_URL в настройках хостинга.")
-        return
-
-    ping_url = f"{url}/ping"
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(ping_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    logging.info(f"Self-ping ({ping_url}) status: {response.status}")
-        except Exception as e:
-            logging.error(f"Self-ping error: {e}")
-            
-        await asyncio.sleep(180)
-
-async def webserver_on_startup(app):
-    asyncio.create_task(self_ping())
-    asyncio.create_task(auto_clean_expired_cargos())
-
-async def run_bot():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-async def web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    app.router.add_get("/ping", handle_ping)
-    
-    app.router.add_get("/webapp", serve_index)
-    app.router.add_get("/directions", serve_directions)
-    app.router.add_get("/api/loads", get_loads_api)
-    app.router.add_get("/api/my_loads", my_loads_api)
-    app.router.add_get("/api/notifications", notifications_get_api)
-    app.router.add_post("/api/notifications/read", notifications_read_api)
-    app.router.add_get("/api/profile", profile_get_api)
-    app.router.add_post("/api/profile", profile_post_api)
-    app.router.add_post("/api/book/{id}", book_load_api)
-
-    # Админ бэкенд роуты
-    app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
-    app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
-    app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
-    app.router.add_get("/api/admin/loads", admin_get_loads_api)
-    app.router.add_post("/api/admin/edit_load", admin_edit_load_api)
-    app.router.add_post("/api/admin/delete_load", admin_delete_load_api)
-    
-    app.on_startup.append(webserver_on_startup)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logging.info(f"Web server started on port {port}")
-
-async def main():
-    await asyncio.gather(
-        run_bot(),
-        web_server()
-    )
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Бот остановлен вручную.")
-    except Exception as e:
-        logging.critical(f"💥 АВАРИЙНЫЙ СБОЙ ПРИ ЗАПУСКЕ: {e}", exc_info=True)
