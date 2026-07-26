@@ -9,6 +9,7 @@ import base64
 import io
 import traceback
 from pydantic import BaseModel, Field
+from PIL import Image, ImageOps
 from datetime import datetime, date, timedelta, timezone
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -666,9 +667,53 @@ class FullCargoSubmission(BaseModel):
     trailer: VehicleDetails = Field(default_factory=VehicleDetails)
     driver: DriverDetails = Field(default_factory=DriverDetails)
 
+# ==================== СХЕМЫ, ИИ-АГЕНТ И СОРТИРОВКА ФОТО ====================
+
+class VehicleDetails(BaseModel):
+    brand_model: str = Field(default="Не распознан", description="Марка и модель (например: DAF XF 105)")
+    plate: str = Field(default="Не распознан", description="Гос. номер (например: 1234 AB-7 или 777AAA01)")
+    vin: str = Field(default="Не распознан", description="VIN номер (17 символов)")
+    country: str = Field(default="Не распознана", description="Страна регистрации ТС")
+
+class DocumentDetails(BaseModel):
+    number: str = Field(default="Не распознан", description="Номер документа")
+    issue_date: str = Field(default="Не распознана", description="Дата выдачи")
+    authority: str = Field(default="Не распознан", description="Орган выдачи документа (Приоритет - русский язык)")
+    country: str = Field(default="Не распознана", description="Страна выдачи документа")
+
+class DriverDetails(BaseModel):
+    full_name: str = Field(default="Не распознан", description="ФИО водителя (Приоритет - русский язык)")
+    birth_date: str = Field(default="Не распознана", description="Дата рождения водителя")
+    phones: str = Field(default="Не указан", description="Номера телефонов (+7... первым, остальные через '/')")
+    passport: DocumentDetails = Field(default_factory=DocumentDetails)
+    license: DocumentDetails = Field(default_factory=DocumentDetails)
+
+class ImageClassification(BaseModel):
+    image_index: int = Field(description="Порядковый номер загруженного изображения, начиная с 0")
+    category: str = Field(
+        description=(
+            "Категория и сторона фото: "
+            "'passport_front' (Паспорт/ID лицевая), "
+            "'passport_back' (Паспорт/ID обратная), "
+            "'license_front' (Водительское лицевая), "
+            "'license_back' (Водительское обратная), "
+            "'truck_front' (Техпаспорт тягача лицевая), "
+            "'trailer_front' (Техпаспорт прицепа лицевая), "
+            "'truck_back' (Техпаспорт тягача обратная), "
+            "'trailer_back' (Техпаспорт прицепа обратная), "
+            "'other' (неизвестно/другое)"
+        )
+    )
+
+class FullCargoSubmission(BaseModel):
+    truck: VehicleDetails = Field(default_factory=VehicleDetails)
+    trailer: VehicleDetails = Field(default_factory=VehicleDetails)
+    driver: DriverDetails = Field(default_factory=DriverDetails)
+    image_roles: list[ImageClassification] = Field(default_factory=list, description="Классификация каждого фото")
+
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
-    """Облачный ИИ-агент международной логистики с распознаванием визуального и текстового слоя."""
+    """Распознает документы и автоматически сортирует фото в нужном порядке для PDF."""
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -678,16 +723,16 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
         "Водительское: Не распознано"
     )
 
-    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
-        logging.warning("⚠️ Gemini API недоступен или не задан GEMINI_API_KEY.")
-        return fallback_text
+    all_files = (photos_file_ids or []) + (doc_file_ids or [])
+
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI or not all_files:
+        return fallback_text, all_files
 
     contents = []
 
     if text_notes:
         contents.append(f"Заметки и номера от водителя: {text_notes}")
 
-    all_files = (photos_file_ids or []) + (doc_file_ids or [])
     for file_id in all_files:
         try:
             file_info = await bot.get_file(file_id)
@@ -708,23 +753,18 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
             logging.error(f"Error downloading document for AI: {e}")
 
     if not contents:
-        return fallback_text
+        return fallback_text, all_files
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
-        "Анализируй визуальный и текстовый слой: печать, штампы, структуру, макет, языки.\n\n"
-        "ПРАВИЛА ИЗВЛЕЧЕНИЯ:\n"
-        "1. ПРИОРИТЕТ ЯЗЫКА: Все наименования (ФИО, Орган выдачи, Страны) выписывай на РУССКОМ ЯЗЫКЕ (кириллица).\n"
-        "   Только если на документе нет русского языка, используй латиницу.\n"
-        "2. СПЕЦИФИКА ОРГАНОВ ВЫДАЧИ:\n"
-        "   - Беларусь (BY): Паспорта — exact русский текст (напр. 'СТАРОДОРОЖСКИЙ РОВД МИНСКОЙ ОБЛАСТИ'). ID-карты — 'Код органа выдачи: XXX'.\n"
-        "   - Россия (RU): Точное наименование МВД/ТП.\n"
-        "   - Казахстан (KZ): 'МВД РК' или 'МВД РЕСПУБЛИКИ КАЗАХСТАН'.\n"
-        "   - Узбекистан (UZ): 'MIA' и цифры (напр. 'MIA 123456').\n"
-        "   - Кыргызстан (KG): 'MIA' или 'PSC'.\n"
-        "   - Азербайджан (AZ): 'MINISTRY OF INTERNAL AFFAIRS'.\n"
-        "3. ТЕЛЕФОНЫ: Только цифры с '+'. Российский номер (+7...) ВСЕГДА ПЕРВЫМ. Остальные через '/'.\n"
-        "4. ТЕХПАСПОРТА: Разделяй Тягач (tractor) и Прицеп (trailer). Включай марку, модель, гос. номер, VIN, страну."
+        "1. Распознай данные с фото.\n"
+        "2. Для КАЖДОГО фото укажи его image_index (0, 1, 2...) и определи категорию (category): "
+        "'passport_front', 'passport_back', 'license_front', 'license_back', "
+        "'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
+        "3. ПРИОРИТЕТ ЯЗЫКА: Все данные пиши на РУССКОМ ЯЗЫКЕ (кириллица). Только если его нет - латиница.\n"
+        "4. ОРГАНЫ ВЫДАЧИ: РБ паспорт — точный текст ('СТАРОДОРОЖСКИЙ РОВД...'), РБ ID-карта — 'Код органа выдачи: XXX', "
+        "Казахстан — 'МВД РК', Узбекистан — 'MIA 123456', Кыргызстан — 'MIA'/'PSC', Азербайджан — 'MINISTRY OF INTERNAL AFFAIRS'.\n"
+        "5. ТЕЛЕФОНЫ: Российский номер (+7...) всегда первым."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -774,75 +814,77 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
                 f"Паспорт: {passport_str}\n"
                 f"Водительское: {license_str}"
             )
-            return formatted_output
+
+            # ----- СОРТИРОВКА ФОТО ДЛЯ PDF В СТРОГОМ ПОРЯДКЕ -----
+            priority_map = {
+                "passport_front": 1,
+                "passport_back": 2,
+                "license_front": 3,
+                "license_back": 4,
+                "truck_front": 5,
+                "trailer_front": 6,
+                "truck_back": 7,
+                "trailer_back": 8,
+                "other": 99
+            }
+
+            classified_file_priority = {}
+            for role in raw_json.get("image_roles", []):
+                idx = role.get("image_index")
+                cat = role.get("category", "other")
+                if idx is not None and 0 <= idx < len(all_files):
+                    classified_file_priority[all_files[idx]] = priority_map.get(cat, 99)
+
+            sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 99))
+
+            return formatted_output, sorted_files
 
     except Exception as e:
         logging.error(f"Gemini Processing Error: {e}")
 
-    return fallback_text
+    return fallback_text, all_files
+
 
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Генерирует 1 единый PDF со всеми распознанными данными и вшитыми фото документов."""
+    """Создает 1 чистый PDF-файл, содержащий ТОЛЬКО фотографии документов в правильном порядке."""
     buffer = io.BytesIO()
-    if not HAS_REPORTLAB:
-        buffer.write(f"Маршрут: {route}\nДата: {date_str}\nСтавка: {price}\n\n{ai_text}".encode('utf-8'))
-        buffer.seek(0)
-        return buffer
+    images = []
 
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-
-    font_name = "Helvetica"
-    for font_path in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "DejaVuSans.ttf"]:
-        if os.path.exists(font_path):
-            try:
-                pdfmetrics.registerFont(TTFont('CyrillicFont', font_path))
-                font_name = 'CyrillicFont'
-                break
-            except Exception: pass
-
-    # Страница 1: Данные
-    c.setFont(font_name, 13)
-    c.drawString(40, height - 40, "ОТЧЕТ ПО ДОКУМЕНТАМ ВОДИТЕЛЯ И ТС")
-
-    c.setFont(font_name, 10)
-    y = height - 70
-    c.drawString(40, y, f"Маршрут: {route}")
-    y -= 16
-    c.drawString(40, y, f"Дата: {date_str} | Ставка: {price}")
-    y -= 16
-    clean_carrier = carrier_info.replace("👤 Перевозчик: ", "").replace("🏢 ", "")
-    c.drawString(40, y, f"Перевозчик: {clean_carrier}")
-    y -= 25
-
-    c.setFont(font_name, 9)
-    for line in ai_text.replace('*', '').split('\n'):
-        if not line.strip(): continue
-        if y < 40:
-            c.showPage()
-            y = height - 40
-            c.setFont(font_name, 9)
-        c.drawString(40, y, line.strip()[:95])
-        y -= 14
-
-    # Добавляем изображения документов прямо в PDF
-    from reportlab.lib.utils import ImageReader
     for pid in photo_ids:
         try:
             file_info = await bot.get_file(pid)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
             buf.seek(0)
-            img = ImageReader(buf)
-            c.showPage()
-            c.drawString(40, height - 30, f"Приложение: Фото документа")
-            c.drawImage(img, 40, 100, width=width-80, height=height-150, preserveAspectRatio=True)
-        except Exception as e:
-            logging.error(f"PDF Image insert error: {e}")
 
-    c.save()
-    buffer.seek(0)
+            img = Image.open(buf)
+            
+            # Автоматический поворот перевернутых снимков
+            img = ImageOps.exif_transpose(img)
+            
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            images.append(img)
+        except Exception as e:
+            logging.error(f"Error processing image for PDF: {e}")
+
+    if images:
+        images[0].save(
+            buffer, 
+            format="PDF", 
+            save_all=True, 
+            append_images=images[1:]
+        )
+        buffer.seek(0)
+    else:
+        buffer.write(b"")
+        buffer.seek(0)
+
     return buffer
+
+
+
 
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
@@ -1201,21 +1243,23 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
 
-    ai_formatted_data = await process_docs_with_ai(photos, documents, notes)
-    carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
+# Распаковываем текст И отсортированный список файлов
+ai_formatted_data, sorted_files = await process_docs_with_ai(photos, documents, notes)
+carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
-    admin_msg = (
-        f"📅 {date_str} | 📍 {route_str}\n"
-        f"💰 {price_str}\n\n"
-        f"{carrier_text}\n\n"
-        f"{ai_formatted_data}"
-    )
+admin_msg = (
+    f"📅 {date_str} | 📍 {route_str}\n"
+    f"💰 {price_str}\n\n"
+    f"{carrier_text}\n\n"
+    f"{ai_formatted_data}"
+)
 
-    try:
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+try:
+    await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, photos)
-        pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
+    # Передаем отсортированный список страниц в PDF
+    pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
+            pdf_file = types.BufferedInputFile(pdf_buf.getvalue(), filename=f"Docs_{date_str}.pdf")
         
         await bot.send_document(
             chat_id=ADMIN_CHANNEL_ID, 
