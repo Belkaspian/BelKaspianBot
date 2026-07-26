@@ -8,6 +8,7 @@ import json
 import base64
 import io
 import traceback
+from pydantic import BaseModel, Field
 from datetime import datetime, date, timedelta, timezone
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -627,8 +628,47 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 
 # ==================== ИИ GEMINI С ИСПОЛЬЗОВАНИЕМ GOOGLE-GENAI SDK И ГЕНЕРАЦИЯ PDF ====================
 
+class VehicleDetails(BaseModel):
+    brand_model: str = Field(default="Не распознан", description="Марка и модель (например: DAF XF 105)")
+    plate: str = Field(default="Не распознан", description="Гос. номер (например: 1234 AB-7 или 777AAA01)")
+    vin: str = Field(default="Не распознан", description="VIN номер (17 символов)")
+    country: str = Field(default="Не распознана", description="Страна регистрации ТС")
+
+class DocumentDetails(BaseModel):
+    number: str = Field(default="Не распознан", description="Номер документа")
+    issue_date: str = Field(default="Не распознана", description="Дата выдачи (ГГГГ-ММ-ДД или ДД.ММ.ГГГГ)")
+    authority: str = Field(
+        default="Не распознан", 
+        description=(
+            "Орган выдачи документа. Приоритет — РУССКИЙ ЯЗЫК. "
+            "Для паспортов РБ — точное название (напр. СТАРОДОРОЖСКИЙ РОВД МИНСКОЙ ОБЛАСТИ). "
+            "Для ID-карт РБ — 'Код органа выдачи: XXX'. "
+            "Для Казахстана — 'МВД РК' или 'МВД РЕСПУБЛИКИ КАЗАХСТАН'. "
+            "Для Узбекистана — 'MIA XXXXXX'. "
+            "Для Кыргызстана — 'MIA' или 'PSC'. "
+            "Для Азербайджана — 'MINISTRY OF INTERNAL AFFAIRS'."
+        )
+    )
+    country: str = Field(default="Не распознана", description="Страна выдачи документа на русском языке")
+
+class DriverDetails(BaseModel):
+    full_name: str = Field(default="Не распознан", description="ФИО водителя. ПРИОРИТЕТ — РУССКИЙ ЯЗЫК (Кириллица). Если нет — латиница.")
+    birth_date: str = Field(default="Не распознана", description="Дата рождения водителя")
+    phones: str = Field(
+        default="Не указан", 
+        description="Номера телефонов водителя (только цифры и '+'). Российский номер (+7...) ВСЕГДА ПЕРВЫМ, остальные через слеш '/'"
+    )
+    passport: DocumentDetails = Field(default_factory=DocumentDetails)
+    license: DocumentDetails = Field(default_factory=DocumentDetails)
+
+class FullCargoSubmission(BaseModel):
+    truck: VehicleDetails = Field(default_factory=VehicleDetails)
+    trailer: VehicleDetails = Field(default_factory=VehicleDetails)
+    driver: DriverDetails = Field(default_factory=DriverDetails)
+
+
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
-    """Скачивает фото/файлы из Telegram и обрабатывает через Gemini API с помощью google-genai SDK."""
+    """Облачный ИИ-агент международной логистики с распознаванием визуального и текстового слоя."""
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -639,60 +679,105 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes):
     )
 
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
-        logging.warning("⚠️ Gemini API недоступен или не настроен GEMINI_API_KEY.")
+        logging.warning("⚠️ Gemini API недоступен или не задан GEMINI_API_KEY.")
         return fallback_text
 
-    prompt_text = (
-        "Ты — ИИ-ассистент логистической компании. Твоя задача — извлечь данные с фото документов "
-        "и вернуть текст СТРОГО по шаблону ниже без лишних символов и маркдаун-выделений (*):\n\n"
-        "Тягач: Марка, модель, гос. номер, вин номер, страна регистрации\n"
-        "Прицеп: Марка, модель, гос. номер, вин номер, страна регистрации\n"
-        "Водитель: ФИО, дата рождения\n"
-        f"Номера телефонов: {text_notes or 'Рос номер / далее остальные номера'}\n"
-        "Паспорт: Номер паспорта, дата выдачи, орган выдачи, страна паспорта\n"
-        "Водительское: Номер водительского, дата выдачи, орган выдачи, страна водительского"
-    )
+    contents = []
 
-    contents = [prompt_text]
+    if text_notes:
+        contents.append(f"Заметки и номера от водителя: {text_notes}")
+
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
-
     for file_id in all_files:
         try:
             file_info = await bot.get_file(file_id)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
-            img_bytes = buf.getvalue()
+            file_bytes = buf.getvalue()
 
             mime_type = "image/jpeg"
             if file_info.file_path:
-                if file_info.file_path.lower().endswith('.png'):
+                fp_lower = file_info.file_path.lower()
+                if fp_lower.endswith('.png'):
                     mime_type = "image/png"
-                elif file_info.file_path.lower().endswith('.pdf'):
+                elif fp_lower.endswith('.pdf'):
                     mime_type = "application/pdf"
 
-            contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+            contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
         except Exception as e:
-            logging.error(f"Error downloading file for Gemini AI processing: {e}")
+            logging.error(f"Error downloading document for AI: {e}")
+
+    if not contents:
+        return fallback_text
+
+    system_prompt = (
+        "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
+        "Анализируй визуальный и текстовый слой: печать, штампы, структуру, макет, языки.\n\n"
+        "ПРАВИЛА ИЗВЛЕЧЕНИЯ:\n"
+        "1. ПРИОРИТЕТ ЯЗЫКА: Все наименования (ФИО, Орган выдачи, Страны) выписывай на РУССКОМ ЯЗЫКЕ (кириллица).\n"
+        "   Только если на документе нет русского языка, используй латиницу.\n"
+        "2. СПЕЦИФИКА ОРГАНОВ ВЫДАЧИ:\n"
+        "   - Беларусь (BY): Паспорта — exact русский текст (напр. 'СТАРОДОРОЖСКИЙ РОВД МИНСКОЙ ОБЛАСТИ'). ID-карты — 'Код органа выдачи: XXX'.\n"
+        "   - Россия (RU): Точное наименование МВД/ТП.\n"
+        "   - Казахстан (KZ): 'МВД РК' или 'МВД РЕСПУБЛИКИ КАЗАХСТАН'.\n"
+        "   - Узбекистан (UZ): 'MIA' и цифры (напр. 'MIA 123456').\n"
+        "   - Кыргызстан (KG): 'MIA' или 'PSC'.\n"
+        "   - Азербайджан (AZ): 'MINISTRY OF INTERNAL AFFAIRS'.\n"
+        "3. ТЕЛЕФОНЫ: Только цифры с '+'. Российский номер (+7...) ВСЕГДА ПЕРВЫМ. Остальные через '/'.\n"
+        "4. ТЕХПАСПОРТА: Разделяй Тягач (tractor) и Прицеп (trailer). Включай марку, модель, гос. номер, VIN, страну."
+    )
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",
+        response_schema=FullCargoSubmission,
+        temperature=0.1
+    )
 
     try:
-        # Используем асинхронный вызов через SDK google-genai
         if hasattr(gemini_client, 'aio'):
             response = await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=contents
+                contents=contents,
+                config=config
             )
         else:
             response = await asyncio.to_thread(
                 gemini_client.models.generate_content,
                 model="gemini-2.5-flash",
-                contents=contents
+                contents=contents,
+                config=config
             )
 
         if response and response.text:
-            cleaned_res = response.text.replace('*', '').strip()
-            return cleaned_res
+            import json
+            raw_json = json.loads(response.text)
+            
+            t = raw_json.get("truck", {})
+            tr = raw_json.get("trailer", {})
+            d = raw_json.get("driver", {})
+            p = d.get("passport", {})
+            l = d.get("license", {})
+
+            truck_str = f"{t.get('brand_model', 'Не распознан')}, {t.get('plate', 'Не распознан')}, VIN: {t.get('vin', 'Не распознан')}, {t.get('country', 'Не распознана')}"
+            trailer_str = f"{tr.get('brand_model', 'Не распознан')}, {tr.get('plate', 'Не распознан')}, VIN: {tr.get('vin', 'Не распознан')}, {tr.get('country', 'Не распознана')}"
+            driver_str = f"{d.get('full_name', 'Не распознан')}, дата рождения: {d.get('birth_date', 'Не распознана')}"
+            phones_str = d.get("phones") or text_notes or "Не указан"
+            passport_str = f"№ {p.get('number', 'Не распознан')}, выдан {p.get('issue_date', 'Не распознана')}, {p.get('authority', 'Не распознан')}, {p.get('country', 'Не распознана')}"
+            license_str = f"№ {l.get('number', 'Не распознан')}, выдано {l.get('issue_date', 'Не распознана')}, {l.get('authority', 'Не распознан')}, {l.get('country', 'Не распознана')}"
+
+            formatted_output = (
+                f"Тягач: {truck_str}\n"
+                f"Прицеп: {trailer_str}\n"
+                f"Водитель: {driver_str}\n"
+                f"Номера телефонов: {phones_str}\n"
+                f"Паспорт: {passport_str}\n"
+                f"Водительское: {license_str}"
+            )
+            return formatted_output
+
     except Exception as e:
-        logging.error(f"Gemini API Exception via google-genai: {e}")
+        logging.error(f"Gemini Processing Error: {e}")
 
     return fallback_text
 
