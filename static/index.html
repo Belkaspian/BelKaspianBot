@@ -1,4 +1,4 @@
-INDEX_HTML = """<!DOCTYPE html>
+INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -263,6 +263,17 @@ INDEX_HTML = """<!DOCTYPE html>
         .info-item b { color: var(--text); }
 
         .today-badge {
+            background: rgba(253, 126, 20, 0.15);
+            color: #fd7e14;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        .doc-badge {
             background: rgba(40, 167, 69, 0.15);
             color: #28a745;
             padding: 4px 8px;
@@ -541,10 +552,13 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модальное окно уведомлений -->
+    <!-- Модальное окно уведомлений с крестиком -->
     <div class="modal-overlay" id="notifModal">
         <div class="modal-card">
-            <div class="modal-title">🔔 Уведомления</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🔔 Уведомления</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint); padding: 4px;" onclick="closeNotifModal()">✕</div>
+            </div>
             <div id="notifList"><div class="loader">Загрузка...</div></div>
             <button class="btn-rounded" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
         </div>
@@ -553,7 +567,10 @@ INDEX_HTML = """<!DOCTYPE html>
     <!-- Модалка ввода пароля Админа -->
     <div class="modal-overlay" id="adminPassModal">
         <div class="modal-card">
-            <div class="modal-title">🔐 Вход для администратора</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🔐 Вход для администратора</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPassModal()">✕</div>
+            </div>
             <input type="password" id="adminPassInput" placeholder="Введите пароль..." />
             <div class="buttons">
                 <button class="btn-confirm" onclick="submitAdminPassword()">Войти</button>
@@ -562,23 +579,38 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Модалка Панели Администратора -->
+    <!-- Модалка Админки с 3 разделами -->
     <div class="modal-overlay" id="adminPanelModal">
         <div class="modal-card" style="max-width: 95%; width: 500px;">
-            <div class="modal-title">🎛 Панель Администратора</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">🎛 Панель Администратора</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPanelModal()">✕</div>
+            </div>
+            
             <div class="sub-nav" style="margin-bottom:12px;">
                 <div class="sub-nav-btn active" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">👥 Перевозчики</div>
-                <div class="sub-nav-btn" id="admTabLoads" onclick="switchAdminSubTab('loads')">📦 Все грузы</div>
+                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">📋 Биржа</div>
+                <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
             </div>
+
+            <!-- Фильтр по перевозчикам в сделках -->
+            <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
+                <select id="adminCarrierSelect" style="width:100%; padding:8px; border-radius:8px; background:var(--bg); color:var(--text); border:1px solid var(--border);" onchange="renderAdminConfirmedDeals()">
+                    <option value="ALL">Все перевозчики</option>
+                </select>
+            </div>
+
             <div id="adminContentBody"><div class="loader">Загрузка...</div></div>
-            <button class="btn-rounded" style="width:100%; margin-top:12px; background:var(--hint);" onclick="closeAdminPanelModal()">Закрыть Админку</button>
         </div>
     </div>
 
     <!-- Модалка редактирования груза Админом -->
     <div class="modal-overlay" id="adminEditLoadModal">
         <div class="modal-card">
-            <div class="modal-title">✏️ Редактирование груза</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование груза</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditModal()">✕</div>
+            </div>
             <input type="hidden" id="editLoadId" />
             <div class="form-group"><label>Маршрут:</label><input type="text" id="editRoute" /></div>
             <div class="form-group"><label>Дата:</label><input type="text" id="editDate" /></div>
@@ -591,6 +623,25 @@ INDEX_HTML = """<!DOCTYPE html>
             <div class="buttons">
                 <button class="btn-confirm" onclick="saveAdminLoadEdit()">💾 Сохранить</button>
                 <button style="background: var(--hint);" onclick="closeAdminEditModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка редактирования сделки Админом -->
+    <div class="modal-overlay" id="adminEditDealModal">
+        <div class="modal-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование сделки</div>
+                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditDealModal()">✕</div>
+            </div>
+            <input type="hidden" id="editDealId" />
+            <div class="form-group"><label>Маршрут:</label><input type="text" id="editDealRoute" /></div>
+            <div class="form-group"><label>Дата:</label><input type="text" id="editDealDate" /></div>
+            <div class="form-group"><label>Ставка:</label><input type="text" id="editDealPrice" /></div>
+            <div class="form-group"><label>Забрано авто:</label><input type="text" id="editDealCars" /></div>
+            <div class="buttons">
+                <button class="btn-confirm" onclick="saveAdminDealEdit()">💾 Сохранить</button>
+                <button style="background: var(--hint);" onclick="closeAdminEditDealModal()">Отмена</button>
             </div>
         </div>
     </div>
@@ -611,6 +662,7 @@ INDEX_HTML = """<!DOCTYPE html>
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'carriers';
+        let allAdminDeals = [];
 
         function handleHeaderClick() {
             headerClicks++;
@@ -665,12 +717,17 @@ INDEX_HTML = """<!DOCTYPE html>
         function switchAdminSubTab(tab) {
             adminSubTab = tab;
             document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
-            document.getElementById('admTabLoads').classList.toggle('active', tab === 'loads');
+            document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
+            document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
+
+            document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') {
                 loadAdminCarriers();
-            } else {
+            } else if (tab === 'exchange') {
                 loadAdminLoads();
+            } else if (tab === 'confirmed') {
+                loadAdminConfirmedDeals();
             }
         }
 
@@ -769,6 +826,104 @@ INDEX_HTML = """<!DOCTYPE html>
                     body: JSON.stringify({id: id})
                 });
                 loadAdminLoads();
+                loadData(false);
+            }
+        }
+
+        async function loadAdminConfirmedDeals() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = '<div class="loader">Загрузка сделок...</div>';
+            try {
+                let res = await fetch('/api/admin/confirmed_deals?t=' + Date.now());
+                let data = await res.json();
+                allAdminDeals = data.deals || [];
+
+                let select = document.getElementById('adminCarrierSelect');
+                let carriersMap = {};
+                allAdminDeals.forEach(d => {
+                    carriersMap[d.user_id] = `${d.company} (${d.name})`;
+                });
+                
+                let selectHtml = '<option value="ALL">Все перевозчики</option>';
+                for (let uid in carriersMap) {
+                    selectHtml += `<option value="${uid}">${carriersMap[uid]}</option>`;
+                }
+                select.innerHTML = selectHtml;
+
+                renderAdminConfirmedDeals();
+            } catch(e) {
+                body.innerHTML = 'Ошибка загрузки сделок';
+            }
+        }
+
+        function renderAdminConfirmedDeals() {
+            let body = document.getElementById('adminContentBody');
+            let selectedUser = document.getElementById('adminCarrierSelect')?.value || 'ALL';
+
+            let filtered = allAdminDeals.filter(d => {
+                if (selectedUser !== 'ALL') return String(d.user_id) === String(selectedUser);
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                body.innerHTML = '<div class="loader">Сделок по фильтру не найдено</div>';
+                return;
+            }
+
+            body.innerHTML = filtered.map(d => `
+                <div class="notif-item">
+                    <div class="notif-title">🤝 Сделка #${d.deal_id} | 📍 ${d.route}</div>
+                    <div class="notif-text">📅 Дата: ${d.date} | 💰 Ставка: ${d.price} | 🚛 Авто: ${d.cars}</div>
+                    <div class="notif-text" style="color:#007aff; margin-top:2px;">
+                        👤 <b>${d.company}</b> | ${d.name} (📞 ${d.phone})
+                    </div>
+                    <div class="buttons" style="margin-top:6px;">
+                        <button class="btn-confirm" style="padding:6px;" onclick='openAdminEditDealModal(${JSON.stringify(d).replace(/'/g, "&#39;")})'>✏️ Изменить сделку</button>
+                        <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="cancelAdminDeal(${d.deal_id})">❌ Отменить сделку</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function openAdminEditDealModal(d) {
+            document.getElementById('editDealId').value = d.deal_id;
+            document.getElementById('editDealRoute').value = d.route;
+            document.getElementById('editDealDate').value = d.date;
+            document.getElementById('editDealPrice').value = d.price;
+            document.getElementById('editDealCars').value = d.cars;
+            document.getElementById('adminEditDealModal').classList.add('active');
+        }
+
+        function closeAdminEditDealModal() {
+            document.getElementById('adminEditDealModal').classList.remove('active');
+        }
+
+        async function saveAdminDealEdit() {
+            let data = {
+                deal_id: document.getElementById('editDealId').value,
+                route: document.getElementById('editDealRoute').value,
+                date: document.getElementById('editDealDate').value,
+                price: document.getElementById('editDealPrice').value,
+                cars: document.getElementById('editDealCars').value
+            };
+            await fetch('/api/admin/edit_deal', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            closeAdminEditDealModal();
+            loadAdminConfirmedDeals();
+            loadData(false);
+        }
+
+        async function cancelAdminDeal(dealId) {
+            if (confirm('Отменить эту подтверждённую сделку? Перевозчику придет уведомление.')) {
+                await fetch('/api/admin/cancel_deal', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({deal_id: dealId})
+                });
+                loadAdminConfirmedDeals();
                 loadData(false);
             }
         }
@@ -1046,7 +1201,24 @@ INDEX_HTML = """<!DOCTYPE html>
 
                     tbody.innerHTML = sortedDeals.map(d => {
                         let statusStyle = d.status === 'CONFIRMED' ? 'color:#28a745;' : 'color:#fd7e14;';
-                        let highlightStyle = d.is_today ? 'background: rgba(40, 167, 69, 0.08); border-left: 3px solid #28a745;' : '';
+                        
+                        let highlightStyle = '';
+                        let badgeHtml = '';
+
+                        if (d.docs_submitted) {
+                            highlightStyle = 'background: rgba(40, 167, 69, 0.10); border-left: 3px solid #28a745;';
+                            badgeHtml = '<div class="doc-badge">✅ Данные поданы</div>';
+                        } else if (d.is_today) {
+                            highlightStyle = 'background: rgba(253, 126, 20, 0.10); border-left: 3px solid #fd7e14;';
+                            badgeHtml = '<div class="today-badge">📌 Погрузка сегодня!</div>';
+                        }
+
+                        let docBtnText = d.docs_submitted ? '📄 Данные поданы (обновить)' : '📄 Подать данные (техпаспорт / водитель)';
+
+                        let docButton = '';
+                        if (d.status === 'CONFIRMED') {
+                            docButton = `<button class="btn-confirm" style="background:var(--active-tab); width:100%; margin-top:8px; padding:8px;" onclick="requestDocUpload('${d.load_id || d.id}', event)">${docBtnText}</button>`;
+                        }
 
                         return `
                         <div class="t-row" style="${highlightStyle}" onclick="toggleRow('${d.id}')">
@@ -1056,7 +1228,7 @@ INDEX_HTML = """<!DOCTYPE html>
                             <div class="col-arrow" id="arrow-${d.id}">▼</div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
-                            ${d.is_today ? `<div class="today-badge">📌 Погрузка сегодня!</div>` : ''}
+                            ${badgeHtml}
                             <div style="font-weight:700; margin-bottom:8px; ${statusStyle}">
                                 Статус: ${d.status_text}
                             </div>
@@ -1067,6 +1239,7 @@ INDEX_HTML = """<!DOCTYPE html>
                                 <div class="info-item"><span>Маршрут:</span><b>${d.route}</b></div>
                             </div>
                             ${d.details ? `<div style="font-size:11px; color:var(--hint); margin-top:4px;"><b>Детали:</b> ${d.details}</div>` : ''}
+                            ${docButton}
                         </div>
                     `}).join('');
 
@@ -1078,6 +1251,28 @@ INDEX_HTML = """<!DOCTYPE html>
 
             } catch(e) {
                 if (!isSilent) tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+            }
+        }
+
+        async function requestDocUpload(dealId, event) {
+            event.stopPropagation();
+            let userId = getUserId();
+            if (!userId) return;
+
+            try {
+                let res = await fetch('/api/submit_docs_prompt', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId, deal_id: dealId})
+                });
+                if (res.ok) {
+                    notify('✅ Инструкция по отправке документов отправлена вам в чат с ботом!');
+                    if (tg && tg.close) tg.close();
+                } else {
+                    notify('❌ Ошибка инициализации сбора документов.');
+                }
+            } catch(e) {
+                notify('⚠️ Ошибка соединения с сервером.');
             }
         }
 
