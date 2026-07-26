@@ -43,6 +43,9 @@ CHANNELS = {
 
 CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
 
+# Глобальное хранилище ожидающих встречных ставок логистов
+PENDING_COUNTER_OFFERS = {}
+
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -116,6 +119,17 @@ def init_db():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            title TEXT,
+            text TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -145,6 +159,16 @@ def init_db():
 
 init_db()
 
+def add_notification(user_id: int, title: str, text: str):
+    try:
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO notifications (user_id, title, text) VALUES (?, ?, ?)", (user_id, title, text))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Error adding notification: {e}")
+
 
 # ==================== СОСТОЯНИЯ ====================
 class ProfileEditStates(StatesGroup):
@@ -167,11 +191,10 @@ class AdminCounterStates(StatesGroup):
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ДАТЫ ====================
 def get_main_reply_markup():
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🌐 Открыть каталог грузов"))
     builder.add(types.KeyboardButton(text="🌍 Выбор направлений"))
     builder.add(types.KeyboardButton(text="👤 Личный кабинет"))
     builder.add(types.KeyboardButton(text="📦 Актуальные грузы"))
-    builder.adjust(1, 2, 1)
+    builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def is_auction_price(price_str: str) -> bool:
@@ -224,7 +247,7 @@ def extract_price(text: str) -> str:
     return "Торги"
 
 def extract_time_limit(text: str):
-    """Ищет время 'до 17:00', 'до 17.00' или 'до 17' и возвращает время и строку истечения в МСК (UTC+3)."""
+    """Ищет время 'до 17:00' или 'до 17' и возвращает время и дату окончания по МСК (UTC+3)."""
     match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
     if match:
         raw_time = match.group(1).replace('.', ':')
@@ -277,7 +300,6 @@ def parse_cargo_raw(raw_text: str):
     price_str = extract_price(raw_text)
     cars_str = ""
     
-    # Поиск ограничения по времени
     time_limit, expires_at = extract_time_limit(raw_text)
     if time_limit:
         if "по МСК" not in price_str:
@@ -319,11 +341,9 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Очистка лишних запятых
     route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str)
 
-    # Парсинг Типа ТС, Груза и Веса
     text_lower = raw_text.lower()
     
     car_type = "Тент/реф"
@@ -585,13 +605,7 @@ async def cmd_start_or_menu(message: types.Message, state: FSMContext):
         
     conn.close()
 
-    if text == "🌐 Открыть каталог грузов":
-        web_app_url = f"{RENDER_URL}/webapp"
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🚀 Открыть веб-каталог", web_app=WebAppInfo(url=web_app_url)))
-        await message.answer("Нажмите кнопку ниже для открытия каталога грузов:", reply_markup=builder.as_markup())
-        return
-    elif text == "🌍 Выбор направлений":
+    if text == "🌍 Выбор направлений":
         await show_directions_menu(message)
         return
     elif text == "👤 Личный кабинет":
@@ -600,17 +614,28 @@ async def cmd_start_or_menu(message: types.Message, state: FSMContext):
     elif text == "📦 Актуальные грузы":
         web_app_url = f"{RENDER_URL}/webapp"
         builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="📋 Открыть каталог грузов", web_app=WebAppInfo(url=web_app_url)))
+        builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
         await message.answer("Посмотреть актуальные грузы можно в Web App каталоге:", reply_markup=builder.as_markup())
         return
 
-    await show_main_menu(message)
+    await send_welcome_message(message)
 
-async def show_main_menu(message: types.Message):
-    await message.answer("📍 **Главное меню:**\nВыберите нужный раздел:", reply_markup=get_main_reply_markup(), parse_mode="Markdown")
+async def send_welcome_message(message: types.Message):
+    web_app_url = f"{RENDER_URL}/webapp"
+    inline_builder = InlineKeyboardBuilder()
+    inline_builder.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
 
-async def show_directions_menu(message: types.Message):
-    user_id = message.from_user.id
+    welcome_text = (
+        "Приветствую!\n"
+        "Для удобства использования нашего бота есть Web-App 👇\n\n"
+        "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:"
+    )
+    
+    await message.answer(welcome_text, reply_markup=inline_builder.as_markup())
+    await message.answer("Выберите нужное действие в меню ниже:", reply_markup=get_main_reply_markup())
+
+async def show_directions_menu(event):
+    user_id = event.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
@@ -626,13 +651,18 @@ async def show_directions_menu(message: types.Message):
             text=f"{mark}{direction}",
             callback_data=f"toggle_dir_{direction}"
         ))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
     
     text = (
         "🌍 **Выбор направлений**\n\n"
         "Нажимайте на направления ниже, чтобы подписаться или отписаться:\n\n"
         f"Ваши текущие подписки: {', '.join(user_subs) if user_subs else 'ничего не выбрано'}"
     )
-    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    
+    if isinstance(event, types.CallbackQuery):
+        await event.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    else:
+        await event.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("toggle_dir_"))
 async def callback_toggle_direction(callback: types.CallbackQuery):
@@ -662,6 +692,7 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
             text=f"{mark}{d}",
             callback_data=f"toggle_dir_{d}"
         ))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
         
     text = (
         "🌍 **Выбор направлений**\n\n"
@@ -671,8 +702,8 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     await callback.answer()
 
-async def show_profile_menu(message: types.Message):
-    user_id = message.from_user.id
+async def show_profile_menu(event):
+    user_id = event.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
@@ -695,8 +726,18 @@ async def show_profile_menu(message: types.Message):
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить имя", callback_data="prof_edit_name"))
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить телефон", callback_data="prof_edit_phone"))
     builder.row(types.InlineKeyboardButton(text="📦 Забранные грузы", callback_data="prof_my_deals"))
+    builder.row(types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu"))
 
-    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    if isinstance(event, types.CallbackQuery):
+        await event.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    else:
+        await event.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "back_to_main_menu")
+async def callback_back_to_main(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await send_welcome_message(callback.message)
+    await callback.answer()
 
 @dp.callback_query(F.data == "prof_edit_company")
 async def prof_edit_company_start(callback: types.CallbackQuery, state: FSMContext):
@@ -902,13 +943,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    cursor.execute("SELECT id FROM confirmed_deals WHERE load_id = ? AND user_id = ?", (cargo_id, user_id))
-    if cursor.fetchone():
-        conn.close()
-        await message.answer("Вы уже забронировали этот груз!", reply_markup=get_main_reply_markup())
-        await state.clear()
-        return
-
     current_cars = int(re.search(r'\d+', str(current_cars_str)).group(0)) if re.search(r'\d+', str(current_cars_str)) else 1
     requested_cars = int(re.search(r'\d+', qty_input).group(0)) if re.search(r'\d+', qty_input) else 1
     
@@ -1091,6 +1125,14 @@ async def admin_accept_bid(callback: types.CallbackQuery):
         cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
         conn.close()
+
+        # Отправка уведомления в колокольчик 🔔
+        add_notification(
+            carrier_id, 
+            "✅ Ставка подтверждена", 
+            f"Администратор подтвердил вашу ставку ({agreed_rate}) по грузу {route_str}."
+        )
+
         await update_cargo_messages_for_all_users(cargo_id)
     else:
         conn.close()
@@ -1195,6 +1237,13 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
         cursor.execute("UPDATE bids SET status = 'PARTIAL' WHERE bid_id = ?", (bid_id,))
         conn.commit()
         conn.close()
+
+        add_notification(
+            carrier_id, 
+            "🔀 Частичное подтверждение", 
+            f"Администратор частично подтвердил вашу ставку ({agreed_rate}) на {confirmed_qty} авто по грузу {route_str}."
+        )
+
         await update_cargo_messages_for_all_users(cargo_id)
     else:
         conn.close()
@@ -1223,17 +1272,39 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("counter_bid_"))
 async def admin_start_counter_bid(callback: types.CallbackQuery, state: FSMContext):
     bid_id = int(callback.data.replace("counter_bid_", ""))
+    user_id = callback.from_user.id
+    
+    PENDING_COUNTER_OFFERS[user_id] = bid_id
     await state.update_data(counter_bid_id=bid_id)
-    await callback.message.answer("💡 Введите вашу встречную ставку (например: `2600 USD`):", parse_mode="Markdown")
     await state.set_state(AdminCounterStates.waiting_for_counter_rate)
+    
+    await callback.message.reply(
+        f"💡 **Встречная ставка по заявке #{bid_id}:**\n\n"
+        f"Введите вашу встречную ставку текстом в ответ на это сообщение (например: `2600 USD`), "
+        f"либо отправьте команду:\n`/counter_{bid_id} 2600 USD`",
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
+@dp.message(Command(re.compile(r"counter_\d+")))
 @dp.message(AdminCounterStates.waiting_for_counter_rate)
 async def admin_send_counter_bid(message: types.Message, state: FSMContext):
-    new_rate = message.text.strip()
-    data = await state.get_data()
-    bid_id = data.get("counter_bid_id")
-    
+    text = message.text.strip()
+    bid_id = None
+    new_rate = ""
+
+    cmd_match = re.match(r'/counter_(\d+)\s+(.+)', text)
+    if cmd_match:
+        bid_id = int(cmd_match.group(1))
+        new_rate = cmd_match.group(2).strip()
+    else:
+        data = await state.get_data()
+        bid_id = data.get("counter_bid_id") or PENDING_COUNTER_OFFERS.get(message.from_user.id)
+        new_rate = text
+
+    if not bid_id or not new_rate:
+        return
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT load_id, user_id, cars FROM bids WHERE bid_id = ?", (bid_id,))
@@ -1241,17 +1312,25 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
     
     if not bid:
         conn.close()
-        await message.answer("Ставка не найдена.")
+        await message.answer("❌ Ставка не найдена или устарела.")
         await state.clear()
+        PENDING_COUNTER_OFFERS.pop(message.from_user.id, None)
         return
         
     cargo_id, carrier_id, cars_count = bid
-    cursor.execute("UPDATE bids SET counter_rate = ? WHERE bid_id = ?", (new_rate, bid_id))
+    cursor.execute("UPDATE bids SET counter_rate = ?, status = 'COUNTER_OFFER' WHERE bid_id = ?", (new_rate, bid_id))
     cursor.execute("SELECT route FROM loads WHERE load_id = ?", (cargo_id,))
     load_row = cursor.fetchone()
+    conn.commit()
     conn.close()
     
     route = load_row[0] if load_row else "Груз"
+
+    add_notification(
+        carrier_id, 
+        "💡 Встречная ставка", 
+        f"Логист предложил встречную ставку {new_rate} по грузу {route} ({cars_count} авто)."
+    )
 
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -1262,7 +1341,13 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
     try:
         await bot.send_message(
             chat_id=carrier_id,
-            text=f"💡 **Логист предлагает встречную ставку!**\n\n📍 Маршрут: {route}\n🚛 Авто: {cars_count}\n💰 Встречная цена: **{new_rate}**\n\nВы согласны?",
+            text=(
+                f"💡 **Логист предлагает встречную ставку!**\n\n"
+                f"📍 Маршрут: {route}\n"
+                f"🚛 Авто: {cars_count}\n"
+                f"💰 Встречная цена: **{new_rate}**\n\n"
+                f"Вы согласны?"
+            ),
             reply_markup=builder.as_markup(),
             parse_mode="Markdown"
         )
@@ -1271,6 +1356,7 @@ async def admin_send_counter_bid(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Не удалось отправить сообщение перевозчику: {e}")
 
     await state.clear()
+    PENDING_COUNTER_OFFERS.pop(message.from_user.id, None)
 
 @dp.callback_query(F.data.startswith("carr_acc_count_"))
 async def carrier_accept_counter(callback: types.CallbackQuery):
@@ -1334,14 +1420,24 @@ async def admin_decline_bid(callback: types.CallbackQuery):
     cargo_id, carrier_id, rate = bid
     cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
     
-    cursor.execute("SELECT date, route, details, price FROM loads WHERE load_id = ?", (cargo_id,))
+    cursor.execute("SELECT route FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
+    conn.commit()
     conn.close()
+
+    route_name = row[0] if row else "Груз"
+
+    # Уведомление в колокольчик 🔔
+    add_notification(
+        carrier_id, 
+        "❌ Ставка отклонена", 
+        f"Ваша ставка ({rate}) по грузу {route_name} была отклонена администратором."
+    )
 
     try:
         await bot.send_message(
             chat_id=carrier_id, 
-            text=f"❌ Ваша заявка/ставка ({rate}) по грузу отклонена администратором."
+            text=f"❌ Ваша ставка ({rate}) по грузу {route_name} отклонена администратором."
         )
     except Exception:
         pass
@@ -1560,6 +1656,8 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
         cursor.execute("DELETE FROM confirmed_deals WHERE id = ?", (deal_id,))
         conn.commit()
         conn.close()
+        
+        add_notification(carrier_id, "⚠️ Отмена сделки", f"Ваш груз по маршруту {route} отменен администратором.")
         try:
             await bot.send_message(chat_id=carrier_id, text=f"⚠️ Ваш груз по маршруту {route} отменен администратором.")
         except Exception:
@@ -1570,6 +1668,8 @@ async def execute_cancel_deal(callback: types.CallbackQuery, deal_id: int, cance
         cursor.execute("UPDATE confirmed_deals SET cars = ? WHERE id = ?", (new_cars, deal_id))
         conn.commit()
         conn.close()
+        
+        add_notification(carrier_id, "⚠️ Частичная отмена", f"По сделке ({route}) отменено {cancel_qty} авто.")
         try:
             await bot.send_message(chat_id=carrier_id, text=f"⚠️ По сделке ({route}) отменено {cancel_qty} авто. Осталось в сделке: {new_cars}.")
         except Exception:
@@ -1715,7 +1815,7 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
 
 
-# ==================== WEB APP HTML (ВСТРОЕННЫЙ) ====================
+# ==================== WEB APP HTML (ВСТРОЕННЫЙС КОЛОКОЛЬЧИКОМ УВЕДОМЛЕНИЙ) ====================
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1747,13 +1847,42 @@ INDEX_HTML = """<!DOCTYPE html>
             user-select: none;
         }
 
+        .header-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding: 0 4px;
+        }
+
         .header-title {
-            text-align: center;
             font-size: 15px;
             font-weight: 700;
-            margin-bottom: 8px;
             color: var(--text);
             letter-spacing: 0.3px;
+        }
+
+        .bell-icon {
+            position: relative;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 8px;
+            background: var(--card);
+            border-radius: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .bell-badge {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            background: #dc3545;
+            color: #ffffff;
+            font-size: 9px;
+            font-weight: 700;
+            border-radius: 10px;
+            padding: 1px 5px;
+            display: none;
         }
 
         .main-nav {
@@ -2027,13 +2156,35 @@ INDEX_HTML = """<!DOCTYPE html>
             width: 100%;
             max-width: 340px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            max-height: 80vh;
+            overflow-y: auto;
         }
         .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center; }
+
+        .notif-item {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+        }
+        .notif-item.unread {
+            border-left: 3px solid var(--active-tab);
+        }
+        .notif-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
+        .notif-text { font-size: 11px; color: var(--text); line-height: 1.3; }
+        .notif-date { font-size: 9px; color: var(--hint); margin-top: 4px; text-align: right; }
     </style>
 </head>
 <body>
 
-    <div class="header-title">ЧТУП «Белкаспиан» | Биржа</div>
+    <div class="header-top">
+        <div class="header-title">ЧТУП «Белкаспиан» | Биржа</div>
+        <div class="bell-icon" onclick="openNotifications()">
+            🔔
+            <div class="bell-badge" id="bellBadge">0</div>
+        </div>
+    </div>
 
     <div class="main-nav">
         <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Биржа</div>
@@ -2048,7 +2199,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="chip" onclick="setFilter('Узбекистан', this)">🇺🇿 Узбекистан</div>
         <div class="chip" onclick="setFilter('Кыргызстан', this)">🇰🇬 Кыргызстан</div>
         <div class="chip" onclick="setFilter('Грузия', this)">🇬🇪 Грузия</div>
-        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦🇿 Азербайджан</div>
+        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦зербайджан</div>
         <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
     </div>
 
@@ -2088,7 +2239,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 <div class="sub-chip" data-val="Узбекистан 🇺🇿" onclick="toggleSubChip(this)">🇺🇿 Узбекистан</div>
                 <div class="sub-chip" data-val="Кыргызстан 🇰🇬" onclick="toggleSubChip(this)">🇰🇬 Кыргызстан</div>
                 <div class="sub-chip" data-val="Грузия 🇬🇪" onclick="toggleSubChip(this)">🇬🇪 Грузия</div>
-                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦🇿 Азербайджан</div>
+                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦зербайджан</div>
                 <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">🇦🇲 Армения</div>
             </div>
         </div>
@@ -2106,6 +2257,15 @@ INDEX_HTML = """<!DOCTYPE html>
                 <button class="btn-confirm" onclick="submitModalBid()">Отправить</button>
                 <button style="background: var(--hint);" onclick="closeModal()">Отмена</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно уведомлений -->
+    <div class="modal-overlay" id="notifModal">
+        <div class="modal-card">
+            <div class="modal-title">🔔 Уведомления</div>
+            <div id="notifList"><div class="loader">Загрузка...</div></div>
+            <button class="btn-confirm" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
         </div>
     </div>
 
@@ -2183,9 +2343,67 @@ INDEX_HTML = """<!DOCTYPE html>
             loadData(false);
         }
 
+        async function checkNotifications() {
+            let userId = getUserId();
+            if (!userId) return;
+            try {
+                let res = await fetch(`/api/notifications?user_id=${userId}&t=` + Date.now());
+                let data = await res.json();
+                let badge = document.getElementById('bellBadge');
+                if (data.unread_count > 0) {
+                    badge.textContent = data.unread_count;
+                    badge.style.display = 'block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            } catch(e) {}
+        }
+
+        async function openNotifications() {
+            let userId = getUserId();
+            if (!userId) return;
+
+            document.getElementById('notifModal').classList.add('active');
+            let list = document.getElementById('notifList');
+            list.innerHTML = '<div class="loader">Загрузка...</div>';
+
+            try {
+                let res = await fetch(`/api/notifications?user_id=${userId}&t=` + Date.now());
+                let data = await res.json();
+
+                if (!data.notifications || data.notifications.length === 0) {
+                    list.innerHTML = '<div class="loader">Уведомлений пока нет</div>';
+                } else {
+                    list.innerHTML = data.notifications.map(n => `
+                        <div class="notif-item ${n.is_read ? '' : 'unread'}">
+                            <div class="notif-title">${n.title}</div>
+                            <div class="notif-text">${n.text}</div>
+                            <div class="notif-date">${n.created_at || ''}</div>
+                        </div>
+                    `).join('');
+                }
+
+                // Отмечаем прочитанными
+                await fetch('/api/notifications/read', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId})
+                });
+                document.getElementById('bellBadge').style.display = 'none';
+            } catch(e) {
+                list.innerHTML = '<div class="loader">Ошибка загрузки</div>';
+            }
+        }
+
+        function closeNotifModal() {
+            document.getElementById('notifModal').classList.remove('active');
+        }
+
         async function loadData(isSilent = false) {
             if (!isSilent) tbody.innerHTML = '<div class="loader">Загрузка данных...</div>';
             let userId = getUserId();
+
+            checkNotifications();
 
             try {
                 if (currentTab === 'catalog') {
@@ -2551,7 +2769,6 @@ async def my_loads_api(request):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    # 1. Подтвержденные сделки
     cursor.execute("""
         SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, 
                COALESCE(cd.details, ''), 'CONFIRMED' as status,
@@ -2565,7 +2782,6 @@ async def my_loads_api(request):
     """, (user_id,))
     confirmed_rows = cursor.fetchall()
     
-    # 2. Активные заявки на рассмотрении (PENDING)
     cursor.execute("""
         SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, b.rate as price,
                COALESCE(l.details, ''), 'PENDING' as status,
@@ -2583,7 +2799,6 @@ async def my_loads_api(request):
     
     deals = []
     
-    # Разворачиваем заявки на рассмотрении по количеству авто
     for r in pending_rows:
         bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
         try:
@@ -2605,7 +2820,6 @@ async def my_loads_api(request):
                 "weight": weight
             })
 
-    # Разворачиваем подтвержденные сделки по количеству авто
     for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight = r
         try:
@@ -2628,6 +2842,48 @@ async def my_loads_api(request):
             })
             
     return web.json_response({"deals": deals})
+
+async def notifications_get_api(request):
+    raw_uid = request.query.get('user_id')
+    if not raw_uid:
+        return web.json_response({"notifications": [], "unread_count": 0})
+    try:
+        user_id = int(raw_uid)
+    except (ValueError, TypeError):
+        return web.json_response({"notifications": [], "unread_count": 0})
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, text, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 30", (user_id,))
+    rows = cursor.fetchall()
+    
+    cursor.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", (user_id,))
+    unread_count = cursor.fetchone()[0]
+    conn.close()
+
+    notifs = [{
+        "id": r[0],
+        "title": r[1],
+        "text": r[2],
+        "is_read": r[3],
+        "created_at": r[4]
+    } for r in rows]
+
+    return web.json_response({"notifications": notifs, "unread_count": unread_count})
+
+async def notifications_read_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get('user_id', 0))
+        if user_id:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+    return web.json_response({"status": "success"})
 
 async def profile_get_api(request):
     raw_uid = request.query.get('user_id')
@@ -2750,15 +3006,14 @@ async def book_load_api(request):
     status, route_str, date_str, price_str, cars_count_str, details_text, raw_cargo_text = load
     current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if cars_count_str and re.search(r'\d+', str(cars_count_str)) else 1
 
+    if current_cars <= 0:
+        conn.close()
+        return web.json_response({"error": "Все авто по этому грузу уже забронированы"}, status=400)
+
     carrier_text = format_carrier_info(user_id, username, first_name)
 
     # --- Забор по фиксированной ставке логиста ---
     if action == 'confirm':
-        cursor.execute("SELECT id FROM confirmed_deals WHERE load_id = ? AND user_id = ?", (load_id, user_id))
-        if cursor.fetchone():
-            conn.close()
-            return web.json_response({"error": "Вы уже забронировали этот груз!"}, status=400)
-
         if requested_cars > current_cars:
             requested_cars = current_cars
 
@@ -2775,6 +3030,12 @@ async def book_load_api(request):
 
         conn.commit()
         conn.close()
+
+        add_notification(
+            user_id, 
+            "✅ Груз забронирован", 
+            f"Вы забронировали {requested_cars} авто по маршруту {route_str} ({price_str})."
+        )
 
         await update_cargo_messages_for_all_users(load_id)
 
@@ -2802,6 +3063,12 @@ async def book_load_api(request):
         bid_id = cursor.lastrowid
         conn.commit()
         conn.close()
+
+        add_notification(
+            user_id, 
+            "⏳ Ставка отправлена", 
+            f"Ваша ставка {proposed_price} на {requested_cars} авто по грузу {route_str} отправлена логисту."
+        )
 
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
@@ -2924,6 +3191,8 @@ async def web_server():
     app.router.add_get("/directions", serve_directions)
     app.router.add_get("/api/loads", get_loads_api)
     app.router.add_get("/api/my_loads", my_loads_api)
+    app.router.add_get("/api/notifications", notifications_get_api)
+    app.router.add_post("/api/notifications/read", notifications_read_api)
     app.router.add_get("/api/profile", profile_get_api)
     app.router.add_post("/api/profile", profile_post_api)
     app.router.add_post("/api/book/{id}", book_load_api)
