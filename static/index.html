@@ -1312,6 +1312,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
             let userId = getUserId();
             if (!userId) return;
 
+            let btn = event.currentTarget;
+            let originalText = btn.textContent;
+            btn.textContent = '⏳ Запрос отправлен...';
+
             try {
                 let res = await fetch('/api/submit_docs_prompt', {
                     method: 'POST',
@@ -1319,13 +1323,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
                     body: JSON.stringify({user_id: userId, deal_id: dealId})
                 });
                 if (res.ok) {
-                    notify('✅ Инструкция по отправке документов отправлена вам в чат с ботом!');
-                    if (tg && tg.close) tg.close();
+                    btn.textContent = '✅ Бот готов принять документы в чате!';
+                    btn.style.background = '#28a745';
                 } else {
-                    notify('❌ Ошибка инициализации сбора документов.');
+                    btn.textContent = '❌ Ошибка';
+                    setTimeout(() => { btn.textContent = originalText; }, 2000);
                 }
             } catch(e) {
-                notify('⚠️ Ошибка соединения с сервером.');
+                btn.textContent = '⚠️ Ошибка сети';
+                setTimeout(() => { btn.textContent = originalText; }, 2000);
             }
         }
 
