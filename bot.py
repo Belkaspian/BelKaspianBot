@@ -56,6 +56,8 @@ if GEMINI_API_KEY and HAS_GENAI:
         logging.info("✅ Gemini API Client (google-genai) успешно инициализирован.")
     except Exception as e:
         logging.error(f"❌ Ошибка инициализации Gemini Client: {e}")
+else:
+    logging.warning("⚠️ GEMINI_API_KEY не установлен или google-genai не импортирован. ИИ отключен.")
 
 ADMIN_CHANNEL_ID_RAW = os.getenv("ADMIN_CHANNEL_ID", "-1004271518848")
 try:
@@ -246,7 +248,6 @@ def add_notification(user_id: int, title: str, text: str):
     except Exception as e:
         logging.error(f"Error adding notification: {e}")
 
-
 # ==================== СОСТОЯНИЯ ====================
 class ProfileEditStates(StatesGroup):
     waiting_for_company = State()
@@ -272,11 +273,9 @@ class AdminEditStates(StatesGroup):
 class AdminCounterStates(StatesGroup):
     waiting_for_counter_rate = State()
 
-
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def extract_surname_and_name(full_name: str) -> str:
-    """Извлекает строго Фамилию и Имя из полного имени (без отчества)."""
     if not full_name or full_name.lower().strip() in ["не распознан", "не указан"]:
         return "Не распознан"
     parts = full_name.strip().split()
@@ -713,7 +712,6 @@ class FullCargoSubmission(BaseModel):
     image_roles: Optional[list[ImageClassification]] = None
 
 def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
-    """Возвращает True, если документ просрочен или до окончания осталось менее threshold_days дней."""
     if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
         return False
     
@@ -736,117 +734,144 @@ def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -
     except ValueError:
         return False
 
-def crop_document_margins(img: Image.Image) -> Image.Image:
-    try:
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        from PIL import ImageChops
-        bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
-        diff = ImageChops.difference(img, bg)
-        diff = ImageChops.add(diff, diff, 2.0, -100)
-        bbox = diff.getbbox()
-        if bbox:
-            w, h = img.size
-            bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            if bw > w * 0.4 and bh > h * 0.4:
-                return img.crop(bbox)
-    except Exception:
-        pass
-    return img
+def four_point_transform(image, pts):
+    """Выполняет перспективное выравнивание прямоугольника (4-point transform)"""
+    import cv2
+    import numpy as np
+
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)] # Верхний левый
+    rect[2] = pts[np.argmax(s)] # Нижний правый
+
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)] # Верхний правый
+    rect[3] = pts[np.argmax(diff)] # Нижний левый
+
+    (tl, tr, br, bl) = rect
+    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
+
+    dst = np.array([
+        [0, 0],
+        [maxWidth - 1, 0],
+        [maxWidth - 1, maxHeight - 1],
+        [0, maxHeight - 1]
+    ], dtype="float32")
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+    return warped
 
 def enhance_image_to_scan(image_bytes: bytes) -> bytes:
-    """Трансформирует фото документа в ровный, чистый и контрастный скан (перспектива + CLAHE)."""
+    """
+    Профессиональный сканер документов:
+    1. Поиск контуров и перспективное выравнивание (4-point transform).
+    2. Фоновое удаление теней и бликов (Illumination Correction).
+    3. Повышение резкости (Unsharp Mask) и контраста текстов/печатей.
+    """
     try:
-        try:
-            import cv2
-            import numpy as np
+        import cv2
+        import numpy as np
 
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return image_bytes
 
-            if img is not None:
-                orig = img.copy()
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                blur = cv2.GaussianBlur(gray, (5, 5), 0)
-                edged = cv2.Canny(blur, 75, 200)
+        orig_h, orig_w = img.shape[:2]
 
-                contours, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-                contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+        # --- ШАГ 1: ПОИСК КОНТУРА И ПЕРСПЕКТИВНОЕ ВЫРАВНИВАНИЕ ---
+        ratio = orig_h / 800.0
+        small_h = 800
+        small_w = int(orig_w / ratio)
+        resized = cv2.resize(img, (small_w, small_h))
 
-                doc_cnt = None
-                for c in contours:
-                    peri = cv2.arcLength(c, True)
-                    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-                    if len(approx) == 4:
-                        doc_cnt = approx
-                        break
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-                if doc_cnt is not None:
-                    pts = doc_cnt.reshape(4, 2)
-                    rect = np.zeros((4, 2), dtype="float32")
+        edged = cv2.Canny(blur, 30, 150)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
 
-                    s = pts.sum(axis=1)
-                    rect[0] = pts[np.argmin(s)]
-                    rect[2] = pts[np.argmax(s)]
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
 
-                    diff = np.diff(pts, axis=1)
-                    rect[1] = pts[np.argmin(diff)]
-                    rect[3] = pts[np.argmax(diff)]
+        doc_cnt = None
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < (small_w * small_h * 0.12):
+                continue
 
-                    (tl, tr, br, bl) = rect
-                    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-                    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-                    maxWidth = max(int(widthA), int(widthB))
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4:
+                doc_cnt = approx
+                break
+            elif len(approx) > 4:
+                hull = cv2.convexHull(c)
+                hull_peri = cv2.arcLength(hull, True)
+                hull_approx = cv2.approxPolyDP(hull, 0.03 * hull_peri, True)
+                if len(hull_approx) == 4:
+                    doc_cnt = hull_approx
+                    break
 
-                    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-                    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-                    maxHeight = max(int(heightA), int(heightB))
+        if doc_cnt is not None:
+            pts = doc_cnt.reshape(4, 2) * ratio
+            warped = four_point_transform(img, pts)
+        else:
+            crop_y = int(orig_h * 0.02)
+            crop_x = int(orig_w * 0.02)
+            warped = img[crop_y:orig_h-crop_y, crop_x:orig_w-crop_x]
 
-                    dst = np.array([
-                        [0, 0],
-                        [maxWidth - 1, 0],
-                        [maxWidth - 1, maxHeight - 1],
-                        [0, maxHeight - 1]
-                    ], dtype="float32")
+        # --- ШАГ 2: УДАЛЕНИЕ ТЕНЕЙ И ВЫРАВНИВАНИЕ ФОНА ---
+        rgb_planes = cv2.split(warped)
+        result_planes = []
 
-                    M = cv2.getPerspectiveTransform(rect, dst)
-                    warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
-                    img = warped
+        for plane in rgb_planes:
+            dilated = cv2.dilate(plane, np.ones((7, 7), np.uint8))
+            bg_img = cv2.medianBlur(dilated, 21)
+            diff_img = 255 - cv2.absdiff(plane, bg_img)
+            norm_img = cv2.normalize(diff_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+            result_planes.append(norm_img)
 
-                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-                l, a, b = cv2.split(lab)
-                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                cl = clahe.apply(l)
-                limg = cv2.merge((cl, a, b))
-                final_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+        scanned_color = cv2.merge(result_planes)
 
-                _, encoded_img = cv2.imencode('.jpg', final_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-                return encoded_img.tobytes()
-        except Exception as e_cv:
-            logging.warning(f"OpenCV processing unavailable, fallback to PIL: {e_cv}")
+        # --- ШАГ 3: ПОВЫШЕНИЕ РЕЗКОСТИ И ЧЁТКОСТИ ТЕКСТА ---
+        gaussian_blur = cv2.GaussianBlur(scanned_color, (0, 0), 3)
+        sharpened = cv2.addWeighted(scanned_color, 1.6, gaussian_blur, -0.6, 0)
 
-        pil_img = Image.open(io.BytesIO(image_bytes))
-        pil_img = ImageOps.exif_transpose(pil_img)
-        if pil_img.mode != 'RGB':
-            pil_img = pil_img.convert('RGB')
+        lab = cv2.cvtColor(sharpened, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        final_lab = cv2.merge((cl, a, b))
+        final_scanned = cv2.cvtColor(final_lab, cv2.COLOR_LAB2BGR)
 
-        pil_img = crop_document_margins(pil_img)
+        _, encoded_img = cv2.imencode('.jpg', final_scanned, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        return encoded_img.tobytes()
 
-        enhancer_c = ImageEnhance.Contrast(pil_img)
-        pil_img = enhancer_c.enhance(1.45)
-
-        enhancer_s = ImageEnhance.Sharpness(pil_img)
-        pil_img = enhancer_s.enhance(1.5)
-
-        enhancer_b = ImageEnhance.Brightness(pil_img)
-        pil_img = enhancer_b.enhance(1.05)
-
-        out = io.BytesIO()
-        pil_img.save(out, format="JPEG", quality=92)
-        return out.getvalue()
     except Exception as e:
-        logging.error(f"Error in scan enhancement: {e}")
-        return image_bytes
+        logging.error(f"Error in OpenCV scan enhancement: {e}")
+        try:
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            pil_img = ImageOps.exif_transpose(pil_img)
+            if pil_img.mode != 'RGB':
+                pil_img = pil_img.convert('RGB')
+            enhancer_c = ImageEnhance.Contrast(pil_img)
+            pil_img = enhancer_c.enhance(1.6)
+            enhancer_s = ImageEnhance.Sharpness(pil_img)
+            pil_img = enhancer_s.enhance(2.0)
+            out = io.BytesIO()
+            pil_img.save(out, format="JPEG", quality=92)
+            return out.getvalue()
+        except Exception:
+            return image_bytes
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
     fallback_text = (
@@ -861,6 +886,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
 
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI or not all_files:
+        logging.warning("⚠️ process_docs_with_ai: Gemini API Key отсутствует или нет файлов.")
         return fallback_text, all_files, {}
 
     contents = []
@@ -912,12 +938,10 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     )
 
     response = None
-    # Приоритет моделей: от более сильной к базовой
     models_to_try = [
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-1.5-flash",
+        "gemini-1.5-pro"
     ]
 
     for model_name in models_to_try:
@@ -943,7 +967,17 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     if response and response.text:
         try:
-            raw_json = json.loads(response.text)
+            raw_text = response.text.strip()
+            # Очистка Markdown разметки ```json ... ``` для предотвращения JSONDecodeError
+            if "```" in raw_text:
+                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.MULTILINE)
+                raw_text = re.sub(r"\s*```$", "", raw_text, flags=re.MULTILINE)
+
+            match_json = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if match_json:
+                raw_text = match_json.group(0)
+
+            raw_json = json.loads(raw_text)
             
             t = raw_json.get("truck") or {}
             tr = raw_json.get("trailer") or {}
@@ -1071,7 +1105,6 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
-            img = crop_document_margins(img)
             images.append(img)
         except Exception as e:
             logging.error(f"Error converting file {pid} for PDF: {e}")
@@ -1086,7 +1119,6 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
         buffer.seek(0)
 
     return buffer
-
 
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ТАЙМЕРУ МСК ====================
 async def auto_clean_expired_cargos():
@@ -1120,7 +1152,6 @@ async def auto_clean_expired_cargos():
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
         await asyncio.sleep(30)
-
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
@@ -1396,7 +1427,6 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     await message.answer("✅ Телефон обновлен!")
     await show_profile_menu(message)
 
-
 # ==================== СДЕЛАТЬ СКАН (СКАНЕР ДОКУМЕНТОВ) ====================
 
 @dp.message(F.text == "📸 Сделать скан")
@@ -1406,7 +1436,7 @@ async def cmd_make_scan_start(event: types.Message | types.CallbackQuery, state:
     prompt = (
         "📸 **Режим «Сделать скан»**\n\n"
         "Отправьте фото документа в этот чат.\n"
-        "Система обложит грани, выровняет перспективу, оптимизирует контрастность и чёткость снимка.\n\n"
+        "Система автоматически найдет границы, выровняет перспективу, уберет тени и повысит резкость текста.\n\n"
         "⚠️ *Все тексты, подписи и печати сохраняются в точности без изменений.*"
     )
     builder = ReplyKeyboardBuilder()
@@ -1425,7 +1455,7 @@ async def cancel_make_scan(message: types.Message, state: FSMContext):
 
 @dp.message(ScanStates.waiting_for_photo, F.photo)
 async def process_scan_photo(message: types.Message, state: FSMContext):
-    status_msg = await message.answer("🔄 Обработка фото и создание скана...")
+    status_msg = await message.answer("🔄 Обработка фото, выравнивание перспектив и создание скана...")
     try:
         photo = message.photo[-1]
         file_info = await bot.get_file(photo.file_id)
@@ -1444,7 +1474,6 @@ async def process_scan_photo(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer("Готово!", reply_markup=get_main_reply_markup(message.from_user))
-
 
 # ==================== ПРЕОБРАЗОВАТЬ ДАННЫЕ (АВТОНОМНО) ====================
 
@@ -1567,7 +1596,6 @@ async def handle_convert_text_notes(message: types.Message, state: FSMContext):
     new_notes = (old_notes + "\n" + message.text).strip()
     await state.update_data(text_notes=new_notes)
 
-
 # ==================== ХЭНДЛЕРЫ ПОДАЧИ / ЗАМЕНЫ ДОКУМЕНТОВ ====================
 
 @dp.message(DocUploadStates.waiting_for_docs, F.photo)
@@ -1646,10 +1674,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     new_driver_short_name = extract_surname_and_name(full_driver_name)
     new_driver_phone = (d_data.get("phones") or notes or "Не указан").strip()
 
-    # Проверка на просроченные или отсутствующие документы
     missing_items = []
 
-    # Паспорт
     p_num = p_data.get("number")
     p_exp = p_data.get("expiry_date")
     if not p_num or p_num == "Не распознан":
@@ -1657,7 +1683,6 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     elif is_doc_expired_or_expiring_soon(p_exp, 15):
         missing_items.append("Паспорт (просрочен/истекает)")
 
-    # Права
     l_num = l_data.get("number")
     l_exp = l_data.get("expiry_date")
     if not l_num or l_num == "Не распознан":
@@ -1943,7 +1968,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     await state.clear()
     await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
-
 
 # ==================== ОБРАБОТКА СТАВОК ЛОГИСТОМ В ТЕЛЕГРАМ ====================
 
@@ -2254,7 +2278,6 @@ async def admin_decline_bid(callback: types.CallbackQuery):
         
     await callback.message.edit_text(callback.message.text + "\n\n[СТАТУС: Отклонено ❌]", reply_markup=None)
     await callback.answer("Отклонено.")
-
 
 # ==================== АДМИН-ПАНЕЛЬ В TELEGRAM ====================
 
@@ -2726,7 +2749,6 @@ async def admin_unblock_user(callback: types.CallbackQuery):
     await callback.message.edit_text(text=new_text, reply_markup=kb.as_markup(), parse_mode="Markdown")
     await callback.answer("Разблокирован!")
 
-
 # ==================== ПАРСИНГ ИЗ КАНАЛОВ НАПРАВЛЕНИЙ ====================
 
 @dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
@@ -2763,7 +2785,6 @@ async def handle_channel_post(message: types.Message):
             if subs and direction in [s.strip() for s in subs.split(",")]:
                 await send_cargo_to_user(u_id, cargo_id)
                 await asyncio.sleep(0.05)
-
 
 # ==================== WEB APP БЭКЕНД И REST API ====================
 
@@ -3408,7 +3429,6 @@ async def serve_index(request):
         return web.Response(text=html_content, content_type='text/html')
     except Exception as e:
         return web.Response(text=f"Error loading index.html: {e}", status=500)
-
 
 # ==================== СЕРВЕР И ЗАПУСК ====================
 
