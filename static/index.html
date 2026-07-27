@@ -23,7 +23,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             background: var(--bg);
             color: var(--text);
             margin: 0;
-            padding: 10px;
+            padding: 10px 10px 120px 10px; /* Безопасный отступ снизу под нижнюю панель Telegram на смартфонах */
             font-size: 13px;
             -webkit-user-select: none;
             user-select: none;
@@ -1289,7 +1289,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                         let docButton = '';
                         if (d.status === 'CONFIRMED') {
                             let targetDealId = d.deal_id || d.id;
-                            docButton = `<button class="btn-confirm" style="background:${docBtnBg}; width:100%; margin-top:8px; padding:8px;" onclick="requestDocUpload('${targetDealId}', event)">${docBtnText}</button>`;
+                            docButton = `<div style="margin-top:10px; width:100%; position:relative; z-index:10;"><button class="btn-confirm" style="background:${docBtnBg}; width:100%; padding:12px; min-height:44px; font-size:12px; font-weight:700; display:block; border-radius:10px; border:none; color:#fff; cursor:pointer; -webkit-tap-highlight-color:transparent;" onclick="requestDocUpload('${targetDealId}', event)">${docBtnText}</button></div>`;
                         }
 
                         return `
