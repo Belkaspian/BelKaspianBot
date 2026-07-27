@@ -145,9 +145,9 @@
             transition: filter 0.25s ease;
         }
 
-        /* Конвертация цвета логотипа под светлую и темную тему */
+        /* Конвертация логотипа с сохранением голубого цвета буквы S */
         [data-theme="light"] .header-logo-img {
-            filter: brightness(0.15);
+            filter: invert(0.85) hue-rotate(180deg) saturate(200%);
         }
 
         [data-theme="dark"] .header-logo-img {
@@ -326,7 +326,18 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        /* Сортировка + Направление + Поиск */
+        /* Стили подменю раздела Выгружены */
+        .unloaded-sub-nav {
+            margin-top: -6px;
+            gap: 4px;
+        }
+
+        .unloaded-sub-nav .sub-nav-btn {
+            font-size: 10px;
+            padding: 6px 4px;
+        }
+
+        /* Сортировка + Пирамидка + Увеличенная Лупа */
         .sort-search-bar {
             display: flex;
             align-items: center;
@@ -345,6 +356,7 @@
             border: 1px solid var(--border);
             box-shadow: var(--shadow-sm);
             transition: var(--transition);
+            height: 40px;
         }
 
         .sort-container:focus-within, .sort-container:hover {
@@ -363,30 +375,28 @@
             align-items: center;
             gap: 4px;
             transition: var(--transition);
-            font-size: 11px;
-            font-weight: 700;
+            height: 30px;
         }
 
         .sort-dir-btn:hover {
             background: var(--primary-light);
             border-color: var(--primary);
-            transform: scale(1.02);
+            transform: scale(1.03);
         }
 
-        .sort-dir-btn .dir-arrow {
-            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        .pyramid-icon line {
+            transition: all 0.25s ease;
         }
 
-        .sort-dir-btn.asc .dir-arrow {
-            transform: rotate(180deg);
-        }
-
+        /* Увеличенная форма поиска */
         .expandable-search {
             display: flex;
             align-items: center;
-            max-width: 36px;
+            min-width: 40px;
+            max-width: 40px;
+            height: 40px;
             overflow: hidden;
-            transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s;
+            transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s, border-color 0.2s;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius-md);
@@ -420,8 +430,8 @@
             background: transparent;
             border: none;
             color: var(--text-muted);
-            min-width: 34px;
-            height: 34px;
+            min-width: 38px;
+            height: 38px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -431,6 +441,11 @@
         }
 
         .search-toggle-btn:hover { color: var(--primary); }
+
+        .search-toggle-btn .icon {
+            width: 18px;
+            height: 18px;
+        }
 
         .qty-picker {
             display: flex;
@@ -640,9 +655,7 @@
             transition: var(--transition);
         }
 
-        .profile-card:hover {
-            box-shadow: var(--shadow-lg);
-        }
+        .profile-card:hover { box-shadow: var(--shadow-lg); }
 
         .profile-title {
             font-weight: 700;
@@ -687,11 +700,7 @@
             box-shadow: var(--shadow-sm);
         }
 
-        .sub-chip:hover {
-            border-color: var(--primary);
-            transform: translateY(-1px);
-        }
-
+        .sub-chip:hover { border-color: var(--primary); transform: translateY(-1px); }
         .sub-chip.active {
             background: var(--primary);
             color: #ffffff;
@@ -700,9 +709,9 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        /* Дизайн пустых состояний (Empty State) */
+        /* Красивое Пустое состояние (Empty State) */
         .empty-state {
-            padding: 40px 20px;
+            padding: 42px 20px;
             text-align: center;
             display: flex;
             flex-direction: column;
@@ -712,15 +721,15 @@
         }
 
         .empty-illustration-container {
-            width: 80px;
-            height: 80px;
+            width: 90px;
+            height: 60px;
             margin-bottom: 16px;
             animation: emptyFloat 3s ease-in-out infinite;
         }
 
         @keyframes emptyFloat {
             0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-6px); }
+            50% { transform: translateY(-5px); }
         }
 
         .empty-illustration {
@@ -787,11 +796,7 @@
             margin-bottom: 14px;
         }
 
-        .modal-title {
-            font-weight: 700;
-            font-size: 14px;
-            color: var(--text);
-        }
+        .modal-title { font-weight: 700; font-size: 14px; color: var(--text); }
 
         .modal-close {
             cursor: pointer;
@@ -814,10 +819,7 @@
             transition: var(--transition);
         }
 
-        .notif-item:hover {
-            box-shadow: var(--shadow-md);
-        }
-
+        .notif-item:hover { box-shadow: var(--shadow-md); }
         .notif-item.unread { border-left: 3px solid var(--primary); }
         .notif-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
         .notif-text { font-size: 11px; color: var(--text); line-height: 1.4; }
@@ -929,7 +931,7 @@
             </div>
             <div class="header-title-text" id="headerTitleText">
                 <div class="header-title" id="headerTitleName">Белкаспиан</div>
-                <div class="header-subtitle">Транспорт и логистика</div>
+                <div class="header-subtitle" id="headerSubtitle">Транспорт и логистика</div>
             </div>
         </div>
         <div class="header-actions">
@@ -968,12 +970,23 @@
         </div>
     </div>
 
-    <!-- Блок Интерактивной Сортировки -->
+    <!-- Подменю для раздела "Выгружены" -->
+    <div class="sub-nav unloaded-sub-nav" id="unloaded-sub-nav" style="display: none;">
+        <div class="sub-nav-btn active" id="unloaded-pending" onclick="switchUnloadedSubTab('unloaded_pending')">Ожидают документы</div>
+        <div class="sub-nav-btn" id="unloaded-approved" onclick="switchUnloadedSubTab('unloaded_approved')">Приняты</div>
+        <div class="sub-nav-btn" id="unloaded-paid" onclick="switchUnloadedSubTab('unloaded_paid')">Архив (Оплачены)</div>
+    </div>
+
+    <!-- Блок Интерактивной Сортировки + Увеличенная Лупа Поиска -->
     <div class="sort-search-bar" id="sort-search-container">
         <div class="sort-container" id="sort-container">
+            <!-- Кнопка пирамидки сортировки -->
             <button class="sort-dir-btn" id="sortDirBtn" onclick="toggleSortDirection()" title="Направление сортировки">
-                <svg class="icon" viewBox="0 0 24 24"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="12" x2="12" y2="12"/><line x1="4" y1="18" x2="8" y2="18"/></svg>
-                <span class="dir-arrow" id="dirArrow">↓</span>
+                <svg class="icon pyramid-icon" viewBox="0 0 24 24" id="pyramidIcon">
+                    <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="10" y1="18" x2="14" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                </svg>
             </button>
             <select id="sortSelect" onchange="loadData(false)">
                 <option value="date_load">По дате погрузки</option>
@@ -1229,18 +1242,27 @@
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">Сделки</div>
             </div>
 
-            <div id="adminControlsBox">
-                <input type="text" id="adminSearchInput" placeholder="Поиск компаний, рейсов..." oninput="applyAdminFilters()" style="margin-bottom: 8px;" />
-                <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+            <!-- Идентичный модуль Сортировки и Поиска в Админке -->
+            <div class="sort-search-bar" id="admin-sort-search-container" style="margin-bottom: 10px;">
+                <div class="sort-container">
+                    <button class="sort-dir-btn" id="adminSortDirBtn" onclick="toggleAdminSortDirection()" title="Направление сортировки">
+                        <svg class="icon pyramid-icon" viewBox="0 0 24 24" id="adminPyramidIcon">
+                            <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                            <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                            <line x1="10" y1="18" x2="14" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                        </svg>
+                    </button>
                     <select id="adminSortSelect" onchange="applyAdminFilters()">
                         <option value="name">По алфавиту (А-Я)</option>
                         <option value="status">Сначала активные</option>
                     </select>
-                    <select id="adminCarrierDirSelect" onchange="applyAdminFilters()">
-                        <option value="ALL">Все направления</option>
-                        <option value="Казахстан">Казахстан</option>
-                        <option value="Узбекистан">Узбекистан</option>
-                    </select>
+                </div>
+
+                <div class="expandable-search" id="adminExpandableSearch">
+                    <button class="search-toggle-btn" onclick="toggleAdminSearchInput()" title="Поиск">
+                        <svg class="icon" viewBox="0 0 24 24" id="adminSearchBtnIcon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    </button>
+                    <input type="text" id="adminSearchInput" placeholder="Поиск компаний, рейсов..." oninput="applyAdminFilters()" />
                 </div>
             </div>
 
@@ -1264,12 +1286,14 @@
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
         let mySubTab = 'active';
+        let unloadedSubTab = 'unloaded_pending'; // Ожидают документы по умолчанию
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
         let selectedFiles = [];
 
         let sortAscending = false;
+        let adminSortAscending = false;
 
         let headerClicks = 0;
         let headerTimer = null;
@@ -1279,15 +1303,21 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
+        // Пропорциональная и красивая векторная иллюстрация грузовика
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 80 80" class="empty-illustration">
-                        <circle cx="40" cy="40" r="36" fill="var(--primary-light)" />
-                        <path d="M22 48h36M22 36h22v12H22zM44 38h10l4 5v5H44z" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                        <circle cx="29" cy="48" r="3.5" fill="var(--surface)" stroke="var(--primary)" stroke-width="2.5"/>
-                        <circle cx="51" cy="48" r="3.5" fill="var(--surface)" stroke="var(--primary)" stroke-width="2.5"/>
-                        <path d="M28 28l3 3M52 28l-3 3M40 23v4" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/>
+                    <svg viewBox="0 0 90 60" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="8" y="16" width="46" height="26" rx="2" fill="var(--primary-light)" />
+                            <path d="M54 26h18l6 8v14H54V26z" fill="var(--surface)" />
+                            <path d="M60 29h10l4 5h-14v-5z" fill="var(--primary-light)" />
+                            <circle cx="20" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
+                            <circle cx="32" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
+                            <circle cx="66" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
+                            <line x1="4" y1="51" x2="86" y2="51" stroke="var(--border)" stroke-width="2" />
+                            <path d="M78 22c2-2 4-2 6 0M80 18c3-3 7-3 10 0" stroke="var(--text-muted)" stroke-width="1.8"/>
+                        </g>
                     </svg>
                 </div>
                 <div class="empty-title">Активных заявок пока нет</div>
@@ -1295,20 +1325,19 @@
             </div>
         `;
 
-        // Обработка мягкой загрузки логотипа + скрытие дублирующего названия
         function handleLogoLoad(success) {
             const img = document.getElementById('headerLogoImg');
             const fallback = document.getElementById('brandFallback');
-            const titleName = document.getElementById('headerTitleName');
+            const titleText = document.getElementById('headerTitleText');
             
             if (success) {
                 img.style.display = 'block';
                 fallback.style.display = 'none';
-                if (titleName) titleName.style.display = 'none'; // Скрываем текстовый дубль
+                if (titleText) titleText.style.display = 'none'; // Полностью скрываем текст, т.к. название есть в логотипе
             } else {
                 img.style.display = 'none';
                 fallback.style.display = 'flex';
-                if (titleName) titleName.style.display = 'block'; // Показываем название при fallback
+                if (titleText) titleText.style.display = 'flex'; // Показываем название при ошибке логотипа
             }
         }
 
@@ -1339,11 +1368,37 @@
             setTheme('light');
         }
 
+        // Логика кнопки пирамидки (переворот линий)
         function toggleSortDirection() {
             sortAscending = !sortAscending;
-            const btn = document.getElementById('sortDirBtn');
-            btn.classList.toggle('asc', sortAscending);
+            updatePyramidIcon('pyramidIcon', sortAscending);
             loadData(false);
+        }
+
+        function toggleAdminSortDirection() {
+            adminSortAscending = !adminSortAscending;
+            updatePyramidIcon('adminPyramidIcon', adminSortAscending);
+            applyAdminFilters();
+        }
+
+        function updatePyramidIcon(iconId, isAsc) {
+            const svg = document.getElementById(iconId);
+            if (!svg) return;
+            if (isAsc) {
+                // Перевернутая пирамидка (маленькая -> средняя -> большая)
+                svg.innerHTML = `
+                    <line x1="10" y1="6" x2="14" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                `;
+            } else {
+                // Прямая пирамидка (большая -> средняя -> маленькая)
+                svg.innerHTML = `
+                    <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <line x1="10" y1="18" x2="14" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                `;
+            }
         }
 
         function toggleSearchInput() {
@@ -1358,6 +1413,22 @@
             } else {
                 searchInput.value = '';
                 loadData(true);
+                icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
+            }
+        }
+
+        function toggleAdminSearchInput() {
+            const searchBox = document.getElementById('adminExpandableSearch');
+            const searchInput = document.getElementById('adminSearchInput');
+            const icon = document.getElementById('adminSearchBtnIcon');
+
+            searchBox.classList.toggle('open');
+            if (searchBox.classList.contains('open')) {
+                searchInput.focus();
+                icon.innerHTML = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+            } else {
+                searchInput.value = '';
+                applyAdminFilters();
                 icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
             }
         }
@@ -1441,9 +1512,7 @@
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
             document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
 
-            document.getElementById('adminControlsBox').style.display = 'block';
-            document.getElementById('adminCarrierDirSelect').style.display = (tab === 'carriers') ? 'block' : 'none';
-            document.getElementById('adminSortSelect').style.display = (tab !== 'confirmed') ? 'block' : 'none';
+            document.getElementById('admin-sort-search-container').style.display = 'flex';
             document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') loadAdminCarriers();
@@ -1712,6 +1781,7 @@
 
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
+            document.getElementById('unloaded-sub-nav').style.display = (tab === 'my' && mySubTab === 'archive') ? 'flex' : 'none';
 
             const tableEl = document.getElementById('main-table');
             const profileEl = document.getElementById('profile-container');
@@ -1739,6 +1809,18 @@
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
             document.getElementById('subnav-transit').classList.toggle('active', sub === 'transit');
             document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
+
+            document.getElementById('unloaded-sub-nav').style.display = (sub === 'archive') ? 'flex' : 'none';
+
+            loadData(false);
+        }
+
+        function switchUnloadedSubTab(unloadedTab) {
+            unloadedSubTab = unloadedTab;
+            currentDataHash = '';
+            document.getElementById('unloaded-pending').classList.toggle('active', unloadedTab === 'unloaded_pending');
+            document.getElementById('unloaded-approved').classList.toggle('active', unloadedTab === 'unloaded_approved');
+            document.getElementById('unloaded-paid').classList.toggle('active', unloadedTab === 'unloaded_paid');
             loadData(false);
         }
 
@@ -1907,9 +1989,18 @@
                     let deals = data.deals || [];
 
                     let filteredDeals = deals.filter(d => {
-                        if (mySubTab === 'archive') return d.is_archived || d.status === 'UNLOADED';
+                        if (mySubTab === 'archive') {
+                            if (unloadedSubTab === 'unloaded_pending') {
+                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status !== 'APPROVED' && !d.is_paid && !d.is_archived;
+                            } else if (unloadedSubTab === 'unloaded_approved') {
+                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status === 'APPROVED' && !d.is_paid && !d.is_archived;
+                            } else if (unloadedSubTab === 'unloaded_paid') {
+                                return d.is_archived || d.is_paid || d.status === 'PAID';
+                            }
+                            return d.is_archived || d.status === 'UNLOADED';
+                        }
                         if (mySubTab === 'transit') return d.status === 'CONFIRMED' && !d.is_archived;
-                        return d.status !== 'CONFIRMED' && !d.is_archived;
+                        return d.status !== 'CONFIRMED' && d.status !== 'UNLOADED' && !d.is_archived;
                     });
 
                     let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
