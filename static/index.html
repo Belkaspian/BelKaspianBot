@@ -35,13 +35,13 @@
             --error: #dc2626;
             --error-light: rgba(220, 38, 38, 0.1);
             
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-sm: 0 2px 4px 0 rgba(15, 23, 42, 0.04);
+            --shadow-md: 0 4px 12px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
+            --shadow-lg: 0 12px 24px -4px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
             --radius-sm: 6px;
             --radius-md: 10px;
             --radius-lg: 14px;
-            --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         [data-theme="dark"] {
@@ -55,16 +55,16 @@
             --text: #f8fafc;
             --text-muted: #94a3b8;
             
-            --success: #10b981;
+            --success: #34d399;
             --success-light: rgba(16, 185, 129, 0.15);
-            --warning: #f59e0b;
-            --warning-light: rgba(245, 158, 11, 0.15);
-            --error: #ef4444;
-            --error-light: rgba(239, 68, 68, 0.15);
+            --warning: #fbbf24;
+            --warning-light: rgba(251, 191, 36, 0.15);
+            --error: #f87171;
+            --error-light: rgba(248, 113, 113, 0.15);
             
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-            --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            --shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 6px 16px -2px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 16px 32px -4px rgba(0, 0, 0, 0.6);
         }
 
         * {
@@ -99,6 +99,16 @@
             flex-shrink: 0;
         }
 
+        /* Анимации перехода страниц */
+        .page-transition {
+            animation: pageSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes pageSlideIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         /* Header Bar */
         .header-top {
             display: flex;
@@ -113,6 +123,11 @@
             align-items: center;
             gap: 10px;
             cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .header-brand:hover {
+            opacity: 0.9;
         }
 
         .header-logo-container {
@@ -127,6 +142,16 @@
             width: auto;
             object-fit: contain;
             display: none;
+            transition: filter 0.25s ease;
+        }
+
+        /* Конвертация цвета логотипа под светлую и темную тему */
+        [data-theme="light"] .header-logo-img {
+            filter: brightness(0.15);
+        }
+
+        [data-theme="dark"] .header-logo-img {
+            filter: none;
         }
 
         .header-brand-fallback {
@@ -141,12 +166,13 @@
             font-weight: 700;
             font-size: 13px;
             letter-spacing: 0.5px;
-            box-shadow: var(--shadow-sm);
+            box-shadow: var(--shadow-md);
         }
 
         .header-title-text {
             display: flex;
             flex-direction: column;
+            justify-content: center;
         }
 
         .header-title {
@@ -155,6 +181,7 @@
             color: var(--text);
             letter-spacing: -0.3px;
             line-height: 1.2;
+            transition: var(--transition);
         }
 
         .header-subtitle {
@@ -185,20 +212,23 @@
             box-shadow: var(--shadow-sm);
         }
 
-        .icon-btn:hover, .icon-btn.active {
+        .icon-btn:hover {
             background: var(--surface-hover);
             color: var(--text);
             border-color: var(--primary);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
         }
 
         .icon-btn.active {
             background: var(--primary);
             color: #ffffff;
             border-color: var(--primary);
+            box-shadow: 0 4px 12px var(--primary-light);
         }
 
         .icon-btn:active {
-            transform: scale(0.96);
+            transform: scale(0.96) translateY(0);
         }
 
         .bell-badge {
@@ -214,6 +244,7 @@
             border: 2px solid var(--bg);
             display: none;
             line-height: 1;
+            box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);
         }
 
         /* Главная Навигация */
@@ -225,12 +256,12 @@
             padding: 4px;
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
-            box-shadow: var(--shadow-sm);
+            box-shadow: var(--shadow-md);
         }
 
         .nav-btn {
             flex: 1;
-            padding: 8px 10px;
+            padding: 9px 10px;
             text-align: center;
             font-weight: 600;
             font-size: 12px;
@@ -245,12 +276,15 @@
             white-space: nowrap;
         }
 
-        .nav-btn:hover { color: var(--text); }
+        .nav-btn:hover {
+            color: var(--text);
+            background: var(--surface-hover);
+        }
 
         .nav-btn.active {
             background: var(--primary);
             color: #ffffff;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 3px 10px var(--primary-light);
         }
 
         /* Подразделы "Мои грузы" */
@@ -276,12 +310,20 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sub-nav-btn:hover {
+            border-color: var(--primary);
+            color: var(--text);
+            transform: translateY(-1px);
         }
 
         .sub-nav-btn.active {
             background: var(--primary);
             color: #ffffff;
             border-color: var(--primary);
+            box-shadow: 0 3px 10px var(--primary-light);
         }
 
         /* Сортировка + Направление + Поиск */
@@ -302,6 +344,12 @@
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
             box-shadow: var(--shadow-sm);
+            transition: var(--transition);
+        }
+
+        .sort-container:focus-within, .sort-container:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
         }
 
         .sort-dir-btn {
@@ -322,10 +370,11 @@
         .sort-dir-btn:hover {
             background: var(--primary-light);
             border-color: var(--primary);
+            transform: scale(1.02);
         }
 
         .sort-dir-btn .dir-arrow {
-            transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         .sort-dir-btn.asc .dir-arrow {
@@ -337,11 +386,16 @@
             align-items: center;
             max-width: 36px;
             overflow: hidden;
-            transition: max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius-md);
             box-shadow: var(--shadow-sm);
+        }
+
+        .expandable-search:hover, .expandable-search.open {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
         }
 
         .expandable-search.open {
@@ -387,6 +441,7 @@
             padding: 8px 12px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
+            box-shadow: var(--shadow-sm);
         }
 
         .qty-picker label {
@@ -424,13 +479,14 @@
             background-color: transparent;
         }
 
-        /* Таблица */
+        /* Таблица & Карточки */
         .table-container {
             background: var(--surface);
             border-radius: var(--radius-md);
             overflow: hidden;
             border: 1px solid var(--border);
-            box-shadow: var(--shadow-sm);
+            box-shadow: var(--shadow-md);
+            transition: var(--transition);
         }
 
         .t-head {
@@ -451,31 +507,37 @@
             grid-template-columns: 75px 1fr 100px 20px;
             padding: 11px 12px;
             border-bottom: 1px solid var(--border);
+            border-left: 3px solid transparent;
             align-items: center;
             cursor: pointer;
-            transition: var(--transition);
+            transition: background-color 0.18s ease, border-color 0.18s ease, padding 0.18s ease;
         }
 
-        .t-row:hover { background: var(--surface-hover); }
+        .t-row:hover {
+            background: var(--surface-hover);
+            border-left-color: var(--primary);
+            padding-left: 14px;
+        }
+
         .t-row:last-child { border-bottom: none; }
 
         .col-date { font-weight: 600; color: var(--text-muted); font-size: 11px; }
         .col-route { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
         .col-price { font-weight: 700; color: var(--success); text-align: right; font-size: 12px; }
-        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.2s; display: flex; justify-content: flex-end; }
+        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.2s ease; display: flex; justify-content: flex-end; }
 
-        .t-row.expanded .col-arrow { transform: rotate(180deg); }
+        .t-row.expanded .col-arrow { transform: rotate(180deg); color: var(--primary); }
 
         .t-details {
             display: none;
             padding: 14px 16px;
             background: var(--bg);
             border-bottom: 1px solid var(--border);
-            animation: slideDown 0.2s ease-out;
+            animation: slideDown 0.22s ease-out;
         }
 
         @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-4px); }
+            from { opacity: 0; transform: translateY(-6px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
@@ -504,8 +566,8 @@
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 3px 8px;
-            border-radius: 4px;
+            padding: 4px 9px;
+            border-radius: 6px;
             font-size: 11px;
             font-weight: 600;
             margin-bottom: 10px;
@@ -546,14 +608,27 @@
             box-shadow: var(--shadow-sm);
         }
 
-        .btn:hover { opacity: 0.95; }
-        .btn:active { transform: translateY(1px); }
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn:active { transform: translateY(0) scale(0.98); }
 
         .btn-success { background: var(--success); }
+        .btn-success:hover { background: #047857; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25); }
+
         .btn-warning { background: var(--warning); color: #fff; }
+        .btn-warning:hover { background: #b45309; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25); }
+
         .btn-primary { background: var(--primary); }
+        .btn-primary:hover { background: var(--primary-hover); box-shadow: 0 4px 12px var(--primary-light); }
+
         .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--surface-hover); border-color: var(--text-muted); }
+
         .btn-danger { background: var(--error); }
+        .btn-danger:hover { background: #b91c1c; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25); }
 
         .profile-card {
             background: var(--surface);
@@ -561,7 +636,12 @@
             padding: 16px;
             border: 1px solid var(--border);
             margin-bottom: 12px;
-            box-shadow: var(--shadow-sm);
+            box-shadow: var(--shadow-md);
+            transition: var(--transition);
+        }
+
+        .profile-card:hover {
+            box-shadow: var(--shadow-lg);
         }
 
         .profile-title {
@@ -604,6 +684,12 @@
             transition: var(--transition);
             text-align: center;
             color: var(--text);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sub-chip:hover {
+            border-color: var(--primary);
+            transform: translateY(-1px);
         }
 
         .sub-chip.active {
@@ -611,6 +697,49 @@
             color: #ffffff;
             border-color: var(--primary);
             font-weight: 600;
+            box-shadow: 0 3px 10px var(--primary-light);
+        }
+
+        /* Дизайн пустых состояний (Empty State) */
+        .empty-state {
+            padding: 40px 20px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .empty-illustration-container {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 16px;
+            animation: emptyFloat 3s ease-in-out infinite;
+        }
+
+        @keyframes emptyFloat {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
+
+        .empty-illustration {
+            width: 100%;
+            height: 100%;
+        }
+
+        .empty-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .empty-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            max-width: 280px;
+            line-height: 1.4;
         }
 
         .modal-overlay {
@@ -618,7 +747,7 @@
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(6px);
             z-index: 1000;
             align-items: center;
             justify-content: center;
@@ -636,13 +765,19 @@
         .modal-card {
             background: var(--surface);
             border-radius: var(--radius-lg);
-            padding: 18px;
+            padding: 20px;
             width: 100%;
             max-width: 420px;
             box-shadow: var(--shadow-lg);
             max-height: 85vh;
             overflow-y: auto;
             border: 1px solid var(--border);
+            animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes modalPop {
+            from { opacity: 0; transform: scale(0.95) translateY(10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
         }
 
         .modal-header {
@@ -675,6 +810,12 @@
             border-radius: var(--radius-sm);
             padding: 10px 12px;
             margin-bottom: 8px;
+            box-shadow: var(--shadow-sm);
+            transition: var(--transition);
+        }
+
+        .notif-item:hover {
+            box-shadow: var(--shadow-md);
         }
 
         .notif-item.unread { border-left: 3px solid var(--primary); }
@@ -684,7 +825,7 @@
 
         .loader {
             text-align: center;
-            padding: 24px;
+            padding: 30px;
             color: var(--text-muted);
             font-size: 12px;
             display: flex;
@@ -694,8 +835,8 @@
         }
 
         .spinner {
-            width: 22px;
-            height: 22px;
+            width: 24px;
+            height: 24px;
             border: 2px solid var(--border);
             border-top-color: var(--primary);
             border-radius: 50%;
@@ -707,7 +848,7 @@
         .dropzone {
             border: 2px dashed var(--border);
             border-radius: var(--radius-md);
-            padding: 16px;
+            padding: 18px;
             text-align: center;
             background: var(--bg);
             cursor: pointer;
@@ -751,7 +892,7 @@
             background: var(--surface);
             color: var(--text);
             border: 1px solid var(--border);
-            padding: 8px 14px;
+            padding: 10px 16px;
             border-radius: 20px;
             box-shadow: var(--shadow-lg);
             font-size: 12px;
@@ -759,7 +900,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            animation: toastIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         @keyframes toastIn {
@@ -786,15 +927,12 @@
                      onerror="handleLogoLoad(false)" />
                 <div class="header-brand-fallback" id="brandFallback">БК</div>
             </div>
-            <div class="header-title-text">
-                <div class="header-title">Белкаспиан</div>
+            <div class="header-title-text" id="headerTitleText">
+                <div class="header-title" id="headerTitleName">Белкаспиан</div>
                 <div class="header-subtitle">Транспорт и логистика</div>
             </div>
         </div>
         <div class="header-actions">
-            <button class="icon-btn" onclick="toggleTheme()" title="Смена темы">
-                <svg class="icon" viewBox="0 0 24 24" id="theme-icon"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
-            </button>
             <button class="icon-btn" onclick="openNotifications()" title="Уведомления">
                 <svg class="icon" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                 <div class="bell-badge" id="bellBadge">0</div>
@@ -854,7 +992,7 @@
     </div>
 
     <!-- Реестр Грузов -->
-    <div class="table-container" id="main-table">
+    <div class="table-container page-transition" id="main-table">
         <div class="t-head">
             <div>Дата</div>
             <div>Маршрут</div>
@@ -867,7 +1005,7 @@
     </div>
 
     <!-- Личный Кабинет -->
-    <div id="profile-container" style="display: none;">
+    <div id="profile-container" class="page-transition" style="display: none;">
         <div class="profile-card">
             <div class="profile-title">
                 <svg class="icon" viewBox="0 0 24 24"><path d="M19 21V5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1"/></svg>
@@ -884,6 +1022,17 @@
             <div class="form-group">
                 <label>Контактный телефон</label>
                 <input type="text" id="profPhone" placeholder="+375 / +7..." oninput="autoSaveProfile()" />
+            </div>
+        </div>
+
+        <div class="profile-card">
+            <div class="profile-title">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                Тема оформления
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-primary" id="theme-btn-light" onclick="setTheme('light')">Светлая</button>
+                <button class="btn btn-secondary" id="theme-btn-dark" onclick="setTheme('dark')">Тёмная</button>
             </div>
         </div>
 
@@ -1130,16 +1279,64 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
+        const emptyStateHTML = `
+            <div class="empty-state">
+                <div class="empty-illustration-container">
+                    <svg viewBox="0 0 80 80" class="empty-illustration">
+                        <circle cx="40" cy="40" r="36" fill="var(--primary-light)" />
+                        <path d="M22 48h36M22 36h22v12H22zM44 38h10l4 5v5H44z" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <circle cx="29" cy="48" r="3.5" fill="var(--surface)" stroke="var(--primary)" stroke-width="2.5"/>
+                        <circle cx="51" cy="48" r="3.5" fill="var(--surface)" stroke="var(--primary)" stroke-width="2.5"/>
+                        <path d="M28 28l3 3M52 28l-3 3M40 23v4" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <div class="empty-title">Активных заявок пока нет</div>
+                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями в течение дня.</div>
+            </div>
+        `;
+
+        // Обработка мягкой загрузки логотипа + скрытие дублирующего названия
         function handleLogoLoad(success) {
             const img = document.getElementById('headerLogoImg');
             const fallback = document.getElementById('brandFallback');
+            const titleName = document.getElementById('headerTitleName');
+            
             if (success) {
                 img.style.display = 'block';
                 fallback.style.display = 'none';
+                if (titleName) titleName.style.display = 'none'; // Скрываем текстовый дубль
             } else {
                 img.style.display = 'none';
                 fallback.style.display = 'flex';
+                if (titleName) titleName.style.display = 'block'; // Показываем название при fallback
             }
+        }
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            updateThemeButtons();
+        }
+
+        function updateThemeButtons() {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+            const lightBtn = document.getElementById('theme-btn-light');
+            const darkBtn = document.getElementById('theme-btn-dark');
+            if (lightBtn && darkBtn) {
+                if (currentTheme === 'dark') {
+                    lightBtn.className = 'btn btn-secondary';
+                    darkBtn.className = 'btn btn-primary';
+                } else {
+                    lightBtn.className = 'btn btn-primary';
+                    darkBtn.className = 'btn btn-secondary';
+                }
+            }
+        }
+
+        if (localStorage.getItem('theme') === 'dark') {
+            setTheme('dark');
+        } else {
+            setTheme('light');
         }
 
         function toggleSortDirection() {
@@ -1164,22 +1361,6 @@
                 icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
             }
         }
-
-        function toggleTheme() {
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            
-            const icon = document.getElementById('theme-icon');
-            if(newTheme === 'dark') {
-                icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
-            } else {
-                icon.innerHTML = '<path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
-            }
-        }
-
-        if (localStorage.getItem('theme') === 'dark') toggleTheme();
 
         function showToast(message) {
             const container = document.getElementById('toastContainer');
@@ -1532,11 +1713,24 @@
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
 
-            document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
-            document.getElementById('profile-container').style.display = (tab === 'profile') ? 'block' : 'none';
+            const tableEl = document.getElementById('main-table');
+            const profileEl = document.getElementById('profile-container');
 
-            if (tab === 'profile') loadProfile();
-            else loadData(false);
+            if (tab === 'profile') {
+                tableEl.style.display = 'none';
+                profileEl.style.display = 'block';
+                profileEl.classList.remove('page-transition');
+                void profileEl.offsetWidth;
+                profileEl.classList.add('page-transition');
+                loadProfile();
+            } else {
+                profileEl.style.display = 'none';
+                tableEl.style.display = 'block';
+                tableEl.classList.remove('page-transition');
+                void tableEl.offsetWidth;
+                tableEl.classList.add('page-transition');
+                loadData(false);
+            }
         }
 
         function switchMySubTab(sub) {
@@ -1650,7 +1844,7 @@
                     currentDataHash = newHash;
 
                     if (!sortedLoads || sortedLoads.length === 0) {
-                        tbody.innerHTML = '<div class="loader">Активных заявок пока нет</div>';
+                        tbody.innerHTML = emptyStateHTML;
                         return;
                     }
 
@@ -1732,7 +1926,7 @@
                     currentDataHash = newHash;
 
                     if (sortedDeals.length === 0) {
-                        tbody.innerHTML = '<div class="loader">Заявок не найдено</div>';
+                        tbody.innerHTML = emptyStateHTML;
                         return;
                     }
 
