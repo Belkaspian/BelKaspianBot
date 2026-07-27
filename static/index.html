@@ -267,19 +267,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
         .info-item b { color: var(--text); }
 
         .today-badge {
-            background: rgba(253, 126, 20, 0.15);
-            color: #fd7e14;
-            padding: 4px 8px;
+            background: rgba(220, 53, 69, 0.15);
+            color: #dc3545;
+            padding: 3px 8px;
             border-radius: 6px;
-            font-size: 11px;
+            font-size: 10px;
             font-weight: 700;
             display: inline-block;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
+            border: 1px solid rgba(220, 53, 69, 0.3);
         }
 
         .doc-badge {
-            background: rgba(40, 167, 69, 0.15);
-            color: #28a745;
             padding: 4px 8px;
             border-radius: 6px;
             font-size: 11px;
@@ -287,6 +286,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
             display: inline-block;
             margin-bottom: 8px;
         }
+        .doc-badge.green { background: rgba(40, 167, 69, 0.2); color: #1e7e34; }
+        .doc-badge.yellow { background: rgba(255, 193, 7, 0.25); color: #856404; }
 
         .admin-comment {
             background: rgba(255, 193, 7, 0.15);
@@ -1257,20 +1258,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
                         
                         let highlightStyle = '';
                         let badgeHtml = '';
+                        let missingHtml = '';
+                        let docBtnText = '📄 Подать данные (техпаспорт / водитель)';
+                        let docBtnBg = 'var(--active-tab)';
 
-                        if (d.docs_submitted) {
-                            highlightStyle = 'background: rgba(40, 167, 69, 0.10); border-left: 3px solid #28a745;';
-                            badgeHtml = '<div class="doc-badge">✅ Данные поданы</div>';
-                        } else if (d.is_today) {
-                            highlightStyle = 'background: rgba(253, 126, 20, 0.10); border-left: 3px solid #fd7e14;';
-                            badgeHtml = '<div class="today-badge">📌 Погрузка сегодня!</div>';
+                        // 1. Обозначение "Погрузка сегодня!"
+                        if (d.is_today) {
+                            badgeHtml += '<div class="today-badge">🔥 Погрузка сегодня!</div> ';
                         }
 
-                        let docBtnText = d.docs_submitted ? '📄 Данные поданы (обновить)' : '📄 Подать данные (техпаспорт / водитель)';
+                        // 2. Цветовая гамма строго под статус документов
+                        if (d.docs_status === 'FULL') {
+                            highlightStyle = 'background: rgba(40, 167, 69, 0.12); border-left: 4px solid #28a745;';
+                            badgeHtml += '<div class="doc-badge green">🟢 Все данные внесены</div>';
+                            docBtnText = '📄 Данные внесены (обновить)';
+                            docBtnBg = '#28a745';
+                        } else if (d.docs_status === 'PARTIAL') {
+                            highlightStyle = 'background: rgba(255, 193, 7, 0.18); border-left: 4px solid #ffc107;';
+                            badgeHtml += '<div class="doc-badge yellow">🟡 Внесены частично</div>';
+                            if (d.missing_docs) {
+                                missingHtml = `<div style="font-size:11px; color:#856404; font-weight:600; margin-top:6px; background:rgba(255, 193, 7, 0.2); padding:6px 8px; border-radius:6px;">⚠️ Не хватает: <b>${d.missing_docs}</b></div>`;
+                            }
+                            docBtnText = '📥 Дослать данные';
+                            docBtnBg = '#fd7e14';
+                        } else {
+                            // NONE - стандартный цвет карточки
+                            highlightStyle = '';
+                        }
 
                         let docButton = '';
                         if (d.status === 'CONFIRMED') {
-                            docButton = `<button class="btn-confirm" style="background:var(--active-tab); width:100%; margin-top:8px; padding:8px;" onclick="requestDocUpload('${d.load_id || d.id}', event)">${docBtnText}</button>`;
+                            let targetDealId = d.deal_id || d.id;
+                            docButton = `<button class="btn-confirm" style="background:${docBtnBg}; width:100%; margin-top:8px; padding:8px;" onclick="requestDocUpload('${targetDealId}', event)">${docBtnText}</button>`;
                         }
 
                         return `
@@ -1292,6 +1311,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                                 <div class="info-item"><span>Маршрут:</span><b>${d.route}</b></div>
                             </div>
                             ${d.details ? `<div style="font-size:11px; color:var(--hint); margin-top:4px;"><b>Детали:</b> ${d.details}</div>` : ''}
+                            ${missingHtml}
                             ${docButton}
                         </div>
                     `}).join('');
