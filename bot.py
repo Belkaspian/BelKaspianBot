@@ -650,8 +650,9 @@ class VehicleDetails(BaseModel):
 class DocumentDetails(BaseModel):
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
-    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа в оригинальном написании")
-    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи документа")
+    expiry_date: Optional[str] = Field(default="Не указана", description="Дата окончания / срок действия документа (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)")
+    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа в оригинальном написании с документа")
+    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи документа СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия)")
 
 class DriverDetails(BaseModel):
     full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя в оригинальном написании (не переводить)")
@@ -723,9 +724,10 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         "Примеры марок прицепов: WIELTON (СТРОГО WIELTON, не Welton!), SCHMITZ CARGOBULL, KRONE, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ. "
         "Примеры марок тягачей: DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
         "3. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
-        "4. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
+        "4. Даты окончания документов: Обязательно извлекай expiry_date (срок действия / дата окончания) для паспорта и водительских прав при наличии.\n"
+        "5. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "5. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
+        "6. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -1307,6 +1309,32 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
 
     # Проверяем полноту внесенных данных
+    def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
+    """Возвращает True, если документ просрочен или до конца осталось менее threshold_days дней."""
+    if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
+        return False
+    
+    # Регулярные выражения для формата ДД.ММ.ГГГГ / ДД-ММ-ГГГГ и ISO ГГГГ-ММ-ДД
+    match = re.search(r'(\d{1,2})[\./-](\d{1,2})[\./-](\d{2,4})', str(expiry_str))
+    if not match:
+        match_iso = re.search(r'(\d{4})[\./-](\d{1,2})[\./-](\d{1,2})', str(expiry_str))
+        if match_iso:
+            year, month, day = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
+        else:
+            return False
+    else:
+        day, month, year_raw = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        year = year_raw + 2000 if year_raw < 100 else year_raw
+
+    try:
+        exp_date = date(year, month, day)
+        today = datetime.now(timezone.utc).date()
+        cutoff_date = today + timedelta(days=threshold_days)
+        return exp_date <= cutoff_date
+    except ValueError:
+        return False
+
+    # Проверяем полноту и валидность внесенных данных
     missing_items = []
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
@@ -1314,15 +1342,29 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
-    if not p_data.get("number") or p_data.get("number") == "Не распознан":
+    # Проверка Паспорта
+    p_num = p_data.get("number")
+    p_exp = p_data.get("expiry_date")
+    if not p_num or p_num == "Не распознан":
         missing_items.append("Паспорт водителя")
-    if not l_data.get("number") or l_data.get("number") == "Не распознан":
+    elif is_doc_expired_or_expiring_soon(p_exp, 15):
+        missing_items.append("Паспорт водителя (просрочен/истекает)")
+
+    # Проверка Водительского удостоверения
+    l_num = l_data.get("number")
+    l_exp = l_data.get("expiry_date")
+    if not l_num or l_num == "Не распознан":
         missing_items.append("Водительское удостоверение")
+    elif is_doc_expired_or_expiring_soon(l_exp, 15):
+        missing_items.append("Водительское удостоверение (просрочено/истекает)")
+
+    # Проверка техпаспортов
     if not t_data.get("plate") or t_data.get("plate") == "Не распознан":
         missing_items.append("Техпаспорт тягача")
     if not tr_data.get("plate") or tr_data.get("plate") == "Не распознан":
         missing_items.append("Техпаспорт прицепа")
     
+    # Проверка телефона
     phone_val = d_data.get("phones") or notes
     if not phone_val or phone_val == "Не указан":
         missing_items.append("Номер телефона")
@@ -3913,18 +3955,9 @@ async def get_loads_api(request):
     params = []
 
     if country and country != 'ALL':
-        query += " AND (destination_country LIKE ? OR route LIKE ?)"
-        params.extend([f"%{country}%", f"%{country}%"])
-    elif user_subs:
-        sub_conditions = []
-        for sub in user_subs:
-            clean_sub = sub.split(' ')[0]
-            sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
-            params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
-        query += " AND (" + " OR ".join(sub_conditions) + ")"
-    elif user_id:
-        conn.close()
-        return web.json_response({"loads": []})
+            query += " AND (destination_country LIKE ? OR route LIKE ?)"
+            params.extend([f"%{country}%", f"%{country}%"])
+        # Если фильтр по стране не задан или 'ALL' — отдаем все активные грузы биржи
         
     query += " ORDER BY load_id DESC"
     
