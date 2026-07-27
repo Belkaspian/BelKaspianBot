@@ -493,6 +493,11 @@
         </select>
     </div>
 
+    <!-- Поиск по каталогу и заявкам -->
+    <div class="sort-bar" id="search-container" style="margin-bottom: 8px;">
+        <input type="text" id="searchInput" placeholder="🔍 Поиск по маршруту, дате, цене..." oninput="loadData(true)" style="margin-bottom: 0;" />
+    </div>
+
     <!-- Список грузов / Таблица -->
     <div class="table-container" id="main-table">
         <div class="t-head">
@@ -589,15 +594,29 @@
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
             </div>
 
-            <!-- Сортировки админки -->
-            <div id="adminSortBox" style="margin-bottom:10px;">
-                <select id="adminSortSelect" onchange="applyAdminSort()">
-                    <option value="name">👤 По названию/имени (А-Я)</option>
-                    <option value="status">🟢 По статусу (Сначала активные)</option>
-                </select>
+            <!-- Поиск и фильтры Админки -->
+            <div id="adminControlsBox" style="margin-bottom:10px;">
+                <input type="text" id="adminSearchInput" placeholder="🔍 Поиск (компания, имя, тел, ID, маршрут)..." oninput="applyAdminFilters()" style="margin-bottom:8px;" />
+                
+                <div style="display:flex; gap:6px;">
+                    <select id="adminSortSelect" onchange="applyAdminFilters()" style="flex:1;">
+                        <option value="name">👤 По названию/имени (А-Я)</option>
+                        <option value="status">🟢 По статусу (Сначала активные)</option>
+                    </select>
+
+                    <select id="adminCarrierDirSelect" onchange="applyAdminFilters()" style="flex:1;">
+                        <option value="ALL">🌍 Все направления</option>
+                        <option value="Казахстан">🇰🇿 Казахстан</option>
+                        <option value="Узбекистан">🇺🇿 Узбекистан</option>
+                        <option value="Кыргызстан">🇰🇬 Кыргызстан</option>
+                        <option value="Грузия">🇬🇪 Грузия</option>
+                        <option value="Азербайджан">🇦🇿 Азербайджан</option>
+                        <option value="Армения">🇦🇲 Армения</option>
+                    </select>
+                </div>
             </div>
 
-            <!-- Фильтр по перевозчикам в сделках -->
+            <!-- Фильтр по конкретному перевозчику в сделках -->
             <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
                 <select id="adminCarrierSelect" onchange="renderAdminConfirmedDeals()">
                     <option value="ALL">Все перевозчики</option>
@@ -727,7 +746,9 @@
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
             document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
 
-            document.getElementById('adminSortBox').style.display = (tab !== 'confirmed') ? 'block' : 'none';
+            document.getElementById('adminControlsBox').style.display = 'block';
+            document.getElementById('adminCarrierDirSelect').style.display = (tab === 'carriers') ? 'block' : 'none';
+            document.getElementById('adminSortSelect').style.display = (tab !== 'confirmed') ? 'block' : 'none';
             document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') {
@@ -739,9 +760,10 @@
             }
         }
 
-        function applyAdminSort() {
+        function applyAdminFilters() {
             if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'exchange') renderAdminLoads();
+            else if (adminSubTab === 'confirmed') renderAdminConfirmedDeals();
         }
 
         async function loadAdminCarriers() {
@@ -758,12 +780,34 @@
         function renderAdminCarriers() {
             let body = document.getElementById('adminContentBody');
             let sortType = document.getElementById('adminSortSelect')?.value || 'name';
+            let dirFilter = document.getElementById('adminCarrierDirSelect')?.value || 'ALL';
+            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
+
             let list = [...allAdminCarriersArray];
 
+            // 1. Фильтр по направлению подписок
+            if (dirFilter !== 'ALL') {
+                list = list.filter(c => (c.subscriptions || '').includes(dirFilter));
+            }
+
+            // 2. Поиск по тексту
+            if (searchQuery) {
+                list = list.filter(c => {
+                    let haystack = `${c.company} ${c.name} ${c.phone} ${c.user_id} ${c.subscriptions}`.toLowerCase();
+                    return haystack.includes(searchQuery);
+                });
+            }
+
+            // 3. Сортировка
             if (sortType === 'name') {
                 list.sort((a, b) => (a.company || a.name).localeCompare(b.company || b.name));
             } else if (sortType === 'status') {
                 list.sort((a, b) => (a.status === 'ACTIVE' ? -1 : 1));
+            }
+
+            if (list.length === 0) {
+                body.innerHTML = '<div class="loader">Перевозчики по фильтру не найдены</div>';
+                return;
             }
 
             body.innerHTML = list.map(c => `
@@ -800,7 +844,20 @@
 
         function renderAdminLoads() {
             let body = document.getElementById('adminContentBody');
+            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let list = [...allAdminLoadsArray];
+
+            if (searchQuery) {
+                list = list.filter(l => {
+                    let haystack = `${l.route} ${l.date} ${l.price} ${l.cars} ${l.status} ${l.carrier_info}`.toLowerCase();
+                    return haystack.includes(searchQuery);
+                });
+            }
+
+            if (list.length === 0) {
+                body.innerHTML = '<div class="loader">Грузы по запросу не найдены</div>';
+                return;
+            }
 
             body.innerHTML = list.map(l => {
                 let isAct = (l.status === 'ACTIVE');
@@ -913,9 +970,14 @@
         function renderAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
             let selectedUser = document.getElementById('adminCarrierSelect')?.value || 'ALL';
+            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
 
             let filtered = allAdminDeals.filter(d => {
-                if (selectedUser !== 'ALL') return String(d.user_id) === String(selectedUser);
+                if (selectedUser !== 'ALL' && String(d.user_id) !== String(selectedUser)) return false;
+                if (searchQuery) {
+                    let haystack = `${d.deal_id} ${d.route} ${d.date} ${d.price} ${d.company} ${d.name} ${d.phone}`.toLowerCase();
+                    if (!haystack.includes(searchQuery)) return false;
+                }
                 return true;
             });
 
@@ -1036,6 +1098,7 @@
 
             document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'flex' : 'none';
             document.getElementById('sort-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
+            document.getElementById('search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
 
             document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
@@ -1153,7 +1216,17 @@
                     let res = await fetch(url);
                     let data = await res.json();
                     
-                    let sortedLoads = sortItems(data.loads || []);
+                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+                    let rawLoads = data.loads || [];
+
+                    if (searchQuery) {
+                        rawLoads = rawLoads.filter(l => {
+                            let haystack = `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment}`.toLowerCase();
+                            return haystack.includes(searchQuery);
+                        });
+                    }
+
+                    let sortedLoads = sortItems(rawLoads);
                     let newHash = JSON.stringify(sortedLoads);
                     if (isSilent && newHash === currentDataHash) {
                         return;
@@ -1237,6 +1310,15 @@
                         if (mySubTab === 'archive') return d.is_archived;
                         return !d.is_archived;
                     });
+
+                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+
+                    if (searchQuery) {
+                        filteredDeals = filteredDeals.filter(d => {
+                            let haystack = `${d.route} ${d.date} ${d.price} ${d.car_type} ${d.cargo_type} ${d.weight} ${d.details} ${d.missing_docs}`.toLowerCase();
+                            return haystack.includes(searchQuery);
+                        });
+                    }
 
                     let sortedDeals = sortItems(filteredDeals);
 
@@ -1348,7 +1430,7 @@
 
                     // Проверяем устройство: мобильное или компьютер
                     let platform = (tg.platform || '').toLowerCase();
-                    let isMobile = ['ios', 'android'].includes(platform) || (window.innerWidth <= 600 && !['tdesktop', 'macos', 'webk', 'weba'].includes(platform));
+                    let isMobile = ['ios', 'android', 'android_x'].includes(platform) || (window.innerWidth <= 600 && !['tdesktop', 'macos'].includes(platform));
 
                     // На смартфоне перекидываем прямо в чат с ботом, закрывая Web App
                     if (isMobile && tg && tg.close) {
