@@ -1636,10 +1636,12 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     else:
         cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
         
-    cursor.execute("""
-        INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (cargo_id, user_id, date_str, route_str, requested_cars, price_str, details_text))
+    # Создаем индивидуальную запись сделки на каждую забранную машину
+    for _ in range(requested_cars):
+        cursor.execute("""
+            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+        """, (cargo_id, user_id, date_str, route_str, price_str, details_text))
     
     conn.commit()
     conn.close()
@@ -1707,10 +1709,11 @@ async def admin_accept_bid(callback: types.CallbackQuery):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
             
-        cursor.execute("""
-            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (cargo_id, carrier_id, date_str, route_str, requested_qty, agreed_rate, details_str))
+        for _ in range(requested_qty):
+            cursor.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (cargo_id, carrier_id, date_str, route_str, agreed_rate, details_str))
         
         cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
@@ -1819,7 +1822,7 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
 
         cursor.execute("""
-            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+            
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (cargo_id, carrier_id, date_str, route_str, confirmed_qty, agreed_rate, details_str))
 
@@ -1906,10 +1909,11 @@ async def carrier_accept_counter(callback: types.CallbackQuery):
     
     if load_row:
         date_str, route_str, details_str = load_row[1], load_row[2], load_row[3]
-        cursor.execute("""
-            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (cargo_id, carrier_id, date_str, route_str, cars_qty, counter_rate, details_str))
+        for _ in range(requested_qty):
+            cursor.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (cargo_id, carrier_id, date_str, route_str, agreed_rate, details_str))
         cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
         conn.close()
@@ -2597,35 +2601,31 @@ async def my_loads_api(request):
 
     for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs = r
-        try:
-            qty = int(re.search(r'\d+', str(cars_count)).group(0))
-        except Exception:
-            qty = 1
 
         c_date = parse_cargo_date(date_str)
         is_today = (c_date and c_date == msk_today)
         is_archived = (c_date and msk_today > c_date)
 
-        for i in range(qty):
-            deals.append({
-                "id": f"deal_{deal_id}_{i}",
-                "deal_id": deal_id,
-                "load_id": load_id,
-                "date": date_str,
-                "route": route_str,
-                "price": price_str,
-                "status": "CONFIRMED",
-                "status_text": "✅ Подтвержден",
-                "details": details_str,
-                "car_type": car_type,
-                "cargo_type": cargo_type,
-                "weight": weight,
-                "is_today": is_today,
-                "is_archived": is_archived,
-                "docs_submitted": bool(docs_sub),
-                "docs_status": docs_stat,
-                "missing_docs": miss_docs
-            })
+        # Каждая запись сделки теперь строго уникальна (1 сделке = 1 авто)
+        deals.append({
+            "id": f"deal_{deal_id}",
+            "deal_id": deal_id,
+            "load_id": load_id,
+            "date": date_str,
+            "route": route_str,
+            "price": price_str,
+            "status": "CONFIRMED",
+            "status_text": "✅ Подтвержден",
+            "details": details_str,
+            "car_type": car_type,
+            "cargo_type": cargo_type,
+            "weight": weight,
+            "is_today": is_today,
+            "is_archived": is_archived,
+            "docs_submitted": bool(docs_sub),
+            "docs_status": docs_stat,
+            "missing_docs": miss_docs
+        })
             
     return web.json_response({"deals": deals})
 
@@ -2861,10 +2861,12 @@ async def book_load_api(request):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
 
-        cursor.execute("""
-            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (load_id, user_id, date_str, route_str, requested_cars, price_str, details_text))
+# Создаем индивидуальную запись сделки на каждую забранную машину
+        for _ in range(requested_cars):
+            cursor.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (load_id, user_id, date_str, route_str, price_str, details_text))
 
         conn.commit()
         conn.close()
