@@ -433,25 +433,6 @@
             flex-shrink: 0;
         }
 
-        .qty-picker {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-            background: var(--surface-solid);
-            padding: 8px 12px;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border);
-            box-shadow: var(--shadow-sm);
-        }
-
-        .qty-picker label {
-            font-size: 11px;
-            color: var(--text-muted);
-            font-weight: 600;
-            flex: 1;
-        }
-
         select, input[type="text"], input[type="password"], input[type="date"], textarea {
             width: 100%;
             background: var(--bg);
@@ -482,7 +463,6 @@
             color: var(--text);
         }
 
-        /* Исправление контраста выпадающего списка на ПК в тёмной теме */
         select option {
             background-color: var(--surface-solid);
             color: var(--text);
@@ -602,10 +582,6 @@
             margin-bottom: 10px;
         }
 
-        .badge-danger { background: var(--error-light); color: var(--error); }
-        .badge-success { background: var(--success-light); color: var(--success); }
-        .badge-warning { background: var(--warning-light); color: var(--warning); }
-        .badge-primary { background: var(--primary-light); color: var(--primary); }
         .badge-today { background: var(--primary-light); color: var(--primary); border: 1px solid var(--primary); }
 
         .admin-comment {
@@ -732,6 +708,35 @@
         .empty-illustration {
             width: 100%;
             height: 100%;
+            overflow: visible;
+        }
+
+        /* --- СТИЛИ ДИНО-АНИМАЦИИ ФУРЫ --- */
+        .animated-truck-body {
+            animation: truckBounce 0.55s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite alternate;
+        }
+
+        .animated-road {
+            animation: roadMove 0.6s linear infinite;
+        }
+
+        .animated-wheel {
+            animation: wheelSpin 0.55s linear infinite;
+        }
+
+        @keyframes truckBounce {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(-1.6px); }
+        }
+
+        @keyframes roadMove {
+            from { stroke-dashoffset: 0; }
+            to { stroke-dashoffset: -10; }
+        }
+
+        @keyframes wheelSpin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
 
         .empty-title {
@@ -1286,25 +1291,42 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Минималистичный векторный европоезд (2 колеса тягач, 3 прицеп)
+        // Векторная еврофура с динамической анимацией подвески, вращением колёс и бегущей дорогой
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
                     <svg viewBox="0 0 100 50" class="empty-illustration">
                         <g fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="6" y="10" width="56" height="26" rx="2" fill="var(--primary-light)" />
-                            <path d="M62 16 h16 l7 7 v13 h-23 v-20 z" fill="var(--surface-solid)" />
-                            <path d="M67 19 h9 l4 4 h-13 z" fill="var(--primary-light)" stroke-width="1.2" />
-                            <line x1="84" y1="32" x2="84" y2="35" stroke="var(--primary)" stroke-width="2" />
+                            <!-- Анимированное бегущее полотно дороги -->
+                            <line x1="0" y1="44" x2="100" y2="44" class="animated-road" stroke="var(--border)" stroke-width="1.8" stroke-dasharray="6 4" />
+
+                            <!-- Анимированный корпус фуры (мягкая вибрация подвески) -->
+                            <g class="animated-truck-body">
+                                <rect x="6" y="10" width="56" height="26" rx="2" fill="var(--primary-light)" />
+                                <path d="M62 16 h16 l7 7 v13 h-23 v-20 z" fill="var(--surface-solid)" />
+                                <path d="M67 19 h9 l4 4 h-13 z" fill="var(--primary-light)" stroke-width="1.2" />
+                                <line x1="84" y1="32" x2="84" y2="35" stroke="var(--primary)" stroke-width="2" />
+                            </g>
+
+                            <!-- Анимированные крутящиеся колёса -->
+                            <!-- Колёса тягача -->
+                            <g class="animated-wheel" style="transform-origin: 68px 38px;">
+                                <circle cx="68" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 79px 38px;">
+                                <circle cx="79" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            </g>
                             
-                            <circle cx="68" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
-                            <circle cx="79" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
-                            
-                            <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
-                            <circle cx="28" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
-                            <circle cx="38" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
-                            
-                            <line x1="2" y1="44" x2="98" y2="44" stroke="var(--border)" stroke-width="1.5" />
+                            <!-- Колёса прицепа -->
+                            <g class="animated-wheel" style="transform-origin: 18px 38px;">
+                                <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 28px 38px;">
+                                <circle cx="28" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 38px 38px;">
+                                <circle cx="38" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            </g>
                         </g>
                     </svg>
                 </div>
