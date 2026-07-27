@@ -485,7 +485,7 @@
 
         .t-head {
             display: grid;
-            grid-template-columns: 60px 1fr 80px 85px 20px;
+            grid-template-columns: 58px 1fr 85px 75px 20px;
             background: var(--bg);
             padding: 10px 12px;
             font-size: 10px;
@@ -502,7 +502,7 @@
 
         .t-row {
             display: grid;
-            grid-template-columns: 60px 1fr 80px 85px 20px;
+            grid-template-columns: 58px 1fr 85px 75px 20px;
             padding: 11px 12px;
             border-bottom: 1px solid var(--border);
             border-left: 3px solid transparent;
@@ -700,8 +700,8 @@
         }
 
         .empty-illustration-container {
-            width: 100px;
-            height: 50px;
+            width: 110px;
+            height: 55px;
             margin-bottom: 14px;
         }
 
@@ -711,32 +711,32 @@
             overflow: visible;
         }
 
-        /* --- СТИЛИ ДИНО-АНИМАЦИИ ФУРЫ --- */
+        /* --- РЕАЛИСТИЧНАЯ АНИМАЦИЯ ЕВРОФУРЫ ВПЕРЕД --- */
         .animated-truck-body {
-            animation: truckBounce 0.55s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite alternate;
+            animation: truckBounce 1.4s ease-in-out infinite alternate;
         }
 
         .animated-road {
-            animation: roadMove 0.6s linear infinite;
+            animation: roadMove 1.4s linear infinite;
         }
 
         .animated-wheel {
-            animation: wheelSpin 0.55s linear infinite;
+            animation: wheelSpin 1.8s linear infinite;
         }
 
         @keyframes truckBounce {
             0% { transform: translateY(0); }
-            100% { transform: translateY(-1.6px); }
+            100% { transform: translateY(-1.2px); }
         }
 
         @keyframes roadMove {
             from { stroke-dashoffset: 0; }
-            to { stroke-dashoffset: -10; }
+            to { stroke-dashoffset: 10; } /* Сдвиг полотна дороги влево => движение фуры ВПЕРЕД */
         }
 
         @keyframes wheelSpin {
             from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+            to { transform: rotate(360deg); } /* Плавное вращение по часовой стрелке */
         }
 
         .empty-title {
@@ -1291,41 +1291,56 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Векторная еврофура с динамической анимацией подвески, вращением колёс и бегущей дорогой
+        // Векторная еврофура с плавным движением ВПЕРЕД и реалистичным силуэтом
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
                     <svg viewBox="0 0 100 50" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <!-- Анимированное бегущее полотно дороги -->
-                            <line x1="0" y1="44" x2="100" y2="44" class="animated-road" stroke="var(--border)" stroke-width="1.8" stroke-dasharray="6 4" />
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                            <!-- Бегущее полотно дороги (сдвиг влево => фура едет ВПЕРЕД) -->
+                            <line x1="0" y1="44" x2="100" y2="44" class="animated-road" stroke="var(--border)" stroke-width="1.6" stroke-dasharray="6 4" />
 
-                            <!-- Анимированный корпус фуры (мягкая вибрация подвески) -->
+                            <!-- Корпус фуры (плавный лёгкий подскок подвески) -->
                             <g class="animated-truck-body">
-                                <rect x="6" y="10" width="56" height="26" rx="2" fill="var(--primary-light)" />
-                                <path d="M62 16 h16 l7 7 v13 h-23 v-20 z" fill="var(--surface-solid)" />
-                                <path d="M67 19 h9 l4 4 h-13 z" fill="var(--primary-light)" stroke-width="1.2" />
-                                <line x1="84" y1="32" x2="84" y2="35" stroke="var(--primary)" stroke-width="2" />
+                                <!-- Полуприцеп (евротент) -->
+                                <rect x="4" y="11" width="56" height="24" rx="2" fill="var(--primary-light)" />
+                                <!-- Боковая защита / подкат полуприцепа -->
+                                <rect x="14" y="35" width="22" height="2" fill="var(--surface-solid)" stroke-width="1" />
+                                
+                                <!-- Евротягач (кабина с аэродинамическим спойлером) -->
+                                <path d="M 58 35 L 58 20 L 62 13 Q 64 10 70 10 L 80 10 Q 85 10 86 14 L 88 28 L 88 35 Q 88 37 86 37 L 58 37 Z" fill="var(--surface-solid)" />
+                                <!-- Лобовое / боковое окно -->
+                                <path d="M 70 13 L 81 13 Q 84 13 85 16 L 86 23 L 70 23 Z" fill="var(--primary-light)" stroke-width="1.2" />
+                                <!-- Передняя фара -->
+                                <line x1="86" y1="31" x2="88" y2="31" stroke="var(--primary)" stroke-width="2" />
+                                <!-- Боковое зеркало -->
+                                <path d="M 87 16 L 89 16 L 89 20" stroke="var(--primary)" stroke-width="1.2" />
                             </g>
 
-                            <!-- Анимированные крутящиеся колёса -->
-                            <!-- Колёса тягача -->
-                            <g class="animated-wheel" style="transform-origin: 68px 38px;">
-                                <circle cx="68" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            <!-- Колёса с естественным медленным вращением по часовой стрелке -->
+                            <!-- Тягач: Рулевая ось -->
+                            <g class="animated-wheel" style="transform-origin: 80px 38px;">
+                                <circle cx="80" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
+                                <circle cx="80" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 79px 38px;">
-                                <circle cx="79" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            <!-- Тягач: Ведущая ось -->
+                            <g class="animated-wheel" style="transform-origin: 65px 38px;">
+                                <circle cx="65" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
+                                <circle cx="65" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
                             </g>
                             
-                            <!-- Колёса прицепа -->
+                            <!-- Полуприцеп: 3 оси -->
                             <g class="animated-wheel" style="transform-origin: 18px 38px;">
-                                <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                                <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
+                                <circle cx="18" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 28px 38px;">
-                                <circle cx="28" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            <g class="animated-wheel" style="transform-origin: 27px 38px;">
+                                <circle cx="27" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
+                                <circle cx="27" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 38px 38px;">
-                                <circle cx="38" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 2"/>
+                            <g class="animated-wheel" style="transform-origin: 36px 38px;">
+                                <circle cx="36" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
+                                <circle cx="36" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
                             </g>
                         </g>
                     </svg>
@@ -1760,7 +1775,7 @@
             const tableHeader = document.getElementById('tableHeader');
             if (tab === 'my') {
                 tableHeader.className = 't-head';
-                tableHeader.innerHTML = `<div>Дата</div><div>Маршрут</div><div style="text-align: right;">Ставка</div><div style="text-align: center;">Номер ТС</div><div></div>`;
+                tableHeader.innerHTML = `<div>Дата</div><div>Маршрут</div><div style="text-align: center;">Номер ТС</div><div style="text-align: right;">Ставка</div><div></div>`;
             } else {
                 tableHeader.className = 't-head catalog-head';
                 tableHeader.innerHTML = `<div>Дата</div><div>Маршрут</div><div style="text-align: right;">Ставка</div><div></div>`;
@@ -2059,8 +2074,8 @@
                         <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
                             <div class="col-route">${d.route}</div>
-                            <div class="col-price">${d.price}</div>
                             <div class="col-truck">${plateDisplay}</div>
+                            <div class="col-price">${d.price}</div>
                             <div class="col-arrow">
                                 <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
                             </div>
