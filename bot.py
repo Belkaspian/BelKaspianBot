@@ -190,7 +190,9 @@ def init_db():
         "ALTER TABLE bids ADD COLUMN comment TEXT",
         "ALTER TABLE bids ADD COLUMN counter_rate TEXT",
         "ALTER TABLE loads ADD COLUMN expires_at TEXT",
-        "ALTER TABLE confirmed_deals ADD COLUMN docs_submitted INTEGER DEFAULT 0"
+        "ALTER TABLE confirmed_deals ADD COLUMN docs_submitted INTEGER DEFAULT 0",
+        "ALTER TABLE confirmed_deals ADD COLUMN docs_status TEXT DEFAULT 'NONE'",
+        "ALTER TABLE confirmed_deals ADD COLUMN missing_docs TEXT DEFAULT ''"
     ]
     for migration in migrations:
         try:
@@ -639,10 +641,11 @@ from typing import Optional
 # ==================== СХЕМЫ PYDANTIC И ИИ-АГЕНТ ====================
 
 class VehicleDetails(BaseModel):
-    brand_model: Optional[str] = Field(default="Не распознан", description="Марка и модель ТС")
+    brand: Optional[str] = Field(default="Не распознан", description="ТОЛЬКО марка ТС БЕЗ модели! Внимательно проверяй орфографию (например: WIELTON, SCHMITZ, KRONE, KÖGEL, KÄSSBOHRER, DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ, SITRAK, MAZ, KAMAZ)")
+    model: Optional[str] = Field(default="", description="ТОЛЬКО модель ТС без марки (например: XF 105, FH13, NS34, S.KO)")
     plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
-    vin: Optional[str] = Field(default="Не распознан", description="VIN номер")
-    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации ТС")
+    vin: Optional[str] = Field(default="Не распознан", description="VIN номер (17 символов)")
+    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Узбекистан, Казахстан, Беларусь, Россия)")
 
 class DocumentDetails(BaseModel):
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
@@ -715,15 +718,14 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
-        "1. Распознай данные с фото/документов.\n"
-        "2. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и определи категорию (category): "
-        "'passport_front', 'passport_back', 'license_front', 'license_back', "
-        "'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "3. ПРИОРИТЕТ ЯЗЫКА: НЕ переводи на русский! Пиши текст так, как на документе: "
-        "если есть русские буквы — на русском, если нет — на латинице/английском, если нет латиницы — на языке оригинала.\n"
-        "4. ОРГАНЫ ВЫДАЧИ: Пиши строго как в документе (РБ паспорт — 'СТАРОДОРОЖСКИЙ РОВД...', РБ ID — 'Код органа выдачи: XXX', "
-        "Казахстан — 'МВД РК', Узбекистан — 'MIA 123456', Кыргызстан — 'MIA'/'PSC', Азербайджан — 'MINISTRY OF INTERNAL AFFAIRS').\n"
-        "5. ТЕЛЕФОНЫ: Российский номер (+7...) всегда первым."
+        "1. Распознавай данные с 100% точностью!\n"
+        "2. Марки ТС: строго разделяй марку (brand) и модель (model). Внимательно проверяй орфографию! "
+        "Примеры марок прицепов: WIELTON (СТРОГО WIELTON, не Welton!), SCHMITZ CARGOBULL, KRONE, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ. "
+        "Примеры марок тягачей: DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
+        "3. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
+        "4. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
+        "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
+        "5. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -776,13 +778,17 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
             # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
             if is_polyethylene:
+                # ДЛЯ ПОЛИЭТИЛЕНА: Берём ТОЛЬКО марку (без модели!)
+                truck_brand = (t.get('brand') or t.get('brand_model') or 'Не распознан').strip()
+                trailer_brand = (tr.get('brand') or tr.get('brand_model') or 'Не распознан').strip()
+
                 formatted_output = (
-                    f"ТС (марка, г/н, страна регистрации): {t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, {t.get('country') or 'Не распознана'}\n"
-                    f"Прицеп (марка, г/н, страна регистрации): {tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}\n"
+                    f"ТС (марка, г/н, страна регистрации): {truck_brand}, {t.get('plate') or 'Не распознан'}, {t.get('country') or 'Не распознана'}\n"
+                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand}, {tr.get('plate') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}\n"
                     f"ФИО водителя: {d.get('full_name') or 'Не распознан'}\n"
                     f"Тел (росс): {d.get('phones') or text_notes or 'Не указан'}\n"
-                    f"Водительское удостоверение (№, когда и кем выдано): № {l.get('number') or 'Не распознан'} от {l.get('issue_date') or 'Не распознана'}г. {l.get('authority') or ''} {l.get('country') or ''}\n"
-                    f"Паспорт (серия, №, когда и кем выдан): № {p.get('number') or 'Не распознан'} выдан {p.get('issue_date') or 'Не распознана'}г. {p.get('authority') or ''} {p.get('country') or ''}"
+                    f"Водительское удостоверение (№, когда и кем выдано): № {l.get('number') or 'Не распознан'} от {l.get('issue_date') or 'Не распознана'}г. {l.get('country') or 'Не распознана'}\n"
+                    f"Паспорт (серия, №, когда и кем выдан): № {p.get('number') or 'Не распознан'} выдан {p.get('issue_date') or 'Не распознана'}г. {p.get('authority') or 'Не распознан'}"
                 )
             else:
                 truck_str = f"{t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
@@ -874,8 +880,29 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         return None
 
 
+def crop_document_margins(img: Image.Image) -> Image.Image:
+    """Обрезает лишний стол/фон вокруг фотографий документов."""
+    try:
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        from PIL import ImageChops
+        # Сравниваем изображение с угловым фоном для выявления лишних полей
+        bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
+        diff = ImageChops.difference(img, bg)
+        diff = ImageChops.add(diff, diff, 2.0, -100)
+        bbox = diff.getbbox()
+        if bbox:
+            w, h = img.size
+            bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            # Обрезаем только если документ занимает разумную область и не сжимается слишком сильно
+            if bw > w * 0.4 and bh > h * 0.4:
+                return img.crop(bbox)
+    except Exception:
+        pass
+    return img
+
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Создает PDF только из изображений с правильным поворотом."""
+    """Создает PDF из фотографий: правильно поворачивает и обрезает лишний стол/фон."""
     buffer = io.BytesIO()
     images = []
 
@@ -888,10 +915,11 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
 
             img = Image.open(buf)
             img = ImageOps.exif_transpose(img)
-            
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
+            # Для фото документов вырезаем лишний фон
+            img = crop_document_margins(img)
             images.append(img)
         except Exception as e:
             logging.error(f"Error converting file {pid} for PDF: {e}")
@@ -1257,14 +1285,11 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не прислали ни одного фото/файла или телефона.")
         return
 
-    # Фиксируем отправку документов строго для текущей сделки пользователя
+# Проверяем, не полиэтилен ли это
+    is_polyethylene = False
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("UPDATE confirmed_deals SET docs_submitted = 1 WHERE id = ? AND user_id = ?", (deal_id, user_id))
-        
-        # Проверяем, не полиэтилен ли это
-        is_polyethylene = False
         cursor.execute("""
             SELECT l.cargo_type, l.details, l.text 
             FROM confirmed_deals cd 
@@ -1276,13 +1301,53 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             cargo_info = f"{row[0] or ''} {row[1] or ''} {row[2] or ''}".lower()
             if "полиэтилен" in cargo_info or "polyethylene" in cargo_info:
                 is_polyethylene = True
-        conn.commit()
         conn.close()
-    else:
-        is_polyethylene = False
 
     # Gemini распознает и сортирует данные
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
+
+    # Проверяем полноту внесенных данных
+    missing_items = []
+    d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
+    t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
+    tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+    p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
+    l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
+
+    if not p_data.get("number") or p_data.get("number") == "Не распознан":
+        missing_items.append("Паспорт водителя")
+    if not l_data.get("number") or l_data.get("number") == "Не распознан":
+        missing_items.append("Водительское удостоверение")
+    if not t_data.get("plate") or t_data.get("plate") == "Не распознан":
+        missing_items.append("Техпаспорт тягача")
+    if not tr_data.get("plate") or tr_data.get("plate") == "Не распознан":
+        missing_items.append("Техпаспорт прицепа")
+    
+    phone_val = d_data.get("phones") or notes
+    if not phone_val or phone_val == "Не указан":
+        missing_items.append("Номер телефона")
+
+    if not missing_items:
+        docs_status = "FULL"
+        missing_docs_str = ""
+    elif len(missing_items) < 5:
+        docs_status = "PARTIAL"
+        missing_docs_str = ", ".join(missing_items)
+    else:
+        docs_status = "NONE"
+        missing_docs_str = ""
+
+    # Фиксируем отправку и статус строго для ТЕКУЩЕЙ конкретной сделки
+    if deal_id:
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE confirmed_deals 
+            SET docs_submitted = 1, docs_status = ?, missing_docs = ? 
+            WHERE id = ? AND user_id = ?
+        """, (docs_status, missing_docs_str, deal_id, user_id))
+        conn.commit()
+        conn.close()
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
     admin_msg = (
@@ -3905,7 +3970,9 @@ async def my_loads_api(request):
                COALESCE(l.car_type, 'Тент/реф'),
                COALESCE(l.cargo_type, 'ТНП'),
                COALESCE(l.weight, 'до 22т'),
-               COALESCE(cd.docs_submitted, 0)
+               COALESCE(cd.docs_submitted, 0),
+               COALESCE(cd.docs_status, 'NONE'),
+               COALESCE(cd.missing_docs, '')
         FROM confirmed_deals cd
         LEFT JOIN loads l ON cd.load_id = l.load_id
         WHERE cd.user_id = ?
@@ -3972,9 +4039,21 @@ async def my_loads_api(request):
         is_today = (c_date and c_date == msk_today)
         is_archived = (c_date and msk_today > c_date)
 
+        for r in confirmed_rows:
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs = r
+        try:
+            qty = int(re.search(r'\d+', str(cars_count)).group(0))
+        except Exception:
+            qty = 1
+
+        c_date = parse_cargo_date(date_str)
+        is_today = (c_date and c_date == msk_today)
+        is_archived = (c_date and msk_today > c_date)
+
         for i in range(qty):
             deals.append({
                 "id": f"deal_{deal_id}_{i}",
+                "deal_id": deal_id,
                 "load_id": load_id,
                 "date": date_str,
                 "route": route_str,
@@ -3987,7 +4066,9 @@ async def my_loads_api(request):
                 "weight": weight,
                 "is_today": is_today,
                 "is_archived": is_archived,
-                "docs_submitted": bool(docs_sub)
+                "docs_submitted": bool(docs_sub),
+                "docs_status": docs_stat,
+                "missing_docs": miss_docs
             })
             
     return web.json_response({"deals": deals})
