@@ -8,8 +8,9 @@ import json
 import base64
 import io
 import traceback
+from typing import Optional
 from pydantic import BaseModel, Field
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 from datetime import datetime, date, timedelta, timezone
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
@@ -84,9 +85,19 @@ CHANNELS = {
 }
 
 CHANNEL_TO_DIRECTION = {v: k for k, v in CHANNELS.items()}
-
 PENDING_COUNTER_OFFERS = {}
 
+# Пользователи, имеющие спец-доступ к «Преобразовать данные»
+ALLOWED_CONVERT_USERS = {"del1nkvent", "daniil_belkaspian"}
+
+def is_convert_allowed(user: types.User) -> bool:
+    if not user:
+        return False
+    if user.username and user.username.lower() in ALLOWED_CONVERT_USERS:
+        return True
+    if ADMIN_ID and str(user.id) == str(ADMIN_ID):
+        return True
+    return False
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -143,7 +154,11 @@ def init_db():
             cars INTEGER,
             price TEXT,
             details TEXT,
-            docs_submitted INTEGER DEFAULT 0
+            docs_submitted INTEGER DEFAULT 0,
+            docs_status TEXT DEFAULT 'NONE',
+            missing_docs TEXT DEFAULT '',
+            last_truck_plate TEXT DEFAULT '',
+            last_driver_name TEXT DEFAULT ''
         )
     """)
 
@@ -198,7 +213,9 @@ def init_db():
         "ALTER TABLE loads ADD COLUMN expires_at TEXT",
         "ALTER TABLE confirmed_deals ADD COLUMN docs_submitted INTEGER DEFAULT 0",
         "ALTER TABLE confirmed_deals ADD COLUMN docs_status TEXT DEFAULT 'NONE'",
-        "ALTER TABLE confirmed_deals ADD COLUMN missing_docs TEXT DEFAULT ''"
+        "ALTER TABLE confirmed_deals ADD COLUMN missing_docs TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN last_truck_plate TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN last_driver_name TEXT DEFAULT ''"
     ]
     for migration in migrations:
         try:
@@ -237,29 +254,48 @@ class DealStates(StatesGroup):
 class DocUploadStates(StatesGroup):
     waiting_for_docs = State()
 
+class DocConvertStates(StatesGroup):
+    waiting_for_files = State()
+
+class ScanStates(StatesGroup):
+    waiting_for_photo = State()
+
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
 
 class AdminCounterStates(StatesGroup):
     waiting_for_counter_rate = State()
 
-class AdminPassState(StatesGroup):
-    waiting_for_new_pass = State()
-
 
 # ==================== ВАЛЮТЫ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
-def get_main_reply_markup():
+def extract_surname_and_name(full_name: str) -> str:
+    """Извлекает строго Фамилию и Имя из полного имени (без отчества)."""
+    if not full_name or full_name.lower().strip() in ["не распознан", "не указан"]:
+        return "Не распознан"
+    parts = full_name.strip().split()
+    if len(parts) >= 2:
+        return f"{parts[0]} {parts[1]}"
+    return parts[0] if parts else "Не распознан"
+
+def get_main_reply_markup(user: Optional[types.User] = None):
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="📱 Вызвать меню"))
+    if user and is_convert_allowed(user):
+        builder.add(types.KeyboardButton(text="🔄 Преобразовать данные"))
+    builder.add(types.KeyboardButton(text="📸 Сделать скан"))
+    builder.adjust(1, 2)
     return builder.as_markup(resize_keyboard=True)
 
-def get_chat_menu_inline_markup():
+def get_chat_menu_inline_markup(user: Optional[types.User] = None):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🌍 Выбор направлений", callback_data="menu_directions"))
     builder.row(types.InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile"))
     builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="menu_active"))
     builder.row(types.InlineKeyboardButton(text="🚚 Забранные грузы", callback_data="menu_my_deals"))
+    if user and is_convert_allowed(user):
+        builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
+    builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
     return builder.as_markup()
 
 def normalize_currency(curr_str: str) -> str:
@@ -275,11 +311,6 @@ def normalize_currency(curr_str: str) -> str:
     elif c in ['тенге', 'тг', 'kzt']:
         return "KZT"
     return "USD"
-
-def is_auction_price(price_str: str) -> bool:
-    if not price_str:
-        return True
-    return 'торг' in str(price_str).lower()
 
 def extract_price(text: str) -> str:
     if not text:
@@ -317,7 +348,6 @@ def extract_price(text: str) -> str:
         if not digits_only:
             continue
         num_val = int(digits_only)
-        
         if 1000 <= num_val <= 9999:
             return f"{num_raw.strip()} USD"
         elif num_val >= 10000:
@@ -347,7 +377,6 @@ def extract_time_limit(text: str):
                 parts = raw_time.split(':')
                 hours, minutes = int(parts[0]), int(parts[1])
                 
-            # Проверяем валидность часов и минут, чтобы избежать ValueError при "до 25 тонн"
             if 0 <= hours <= 23 and 0 <= minutes <= 59:
                 time_formatted = f"{hours:02d}:{minutes:02d}"
                 msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -431,14 +460,11 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Жесткое отсечение стоимости и валют в конце маршрута
     price_strip_pattern = re.compile(
         r'[,;\s]+(?:\d[\d\s\.,]*)?\s*(?:RUB|USD|EUR|KZT|UZS|сум|сумм|руб|рублей|р|долл|доллар|долларов|usd|\$|€|евро|eur|тенге|kzt|тг|торг|торги)\b.*$',
         re.IGNORECASE
     )
     route_str = price_strip_pattern.sub('', route_str)
-    
-    # Удаляем висячие числа и лишние запятые в конце маршрута
     route_str = re.sub(r'[,;\s]+\d[\d\s\.,]*$', '', route_str).strip()
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
@@ -647,48 +673,87 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         pass
 
 
-# ==================== ИИ GEMINI С ИСПОЛЬЗОВАНИЕМ GOOGLE-GENAI SDK И ГЕНЕРАЦИЯ PDF ====================
-
-from typing import Optional
-
-# ==================== СХЕМЫ PYDANTIC И ИИ-АГЕНТ ====================
+# ==================== ИИ GEMINI & ОБРАБОТКА ИЗОБРАЖЕНИЙ / СКАНОВ ====================
 
 class VehicleDetails(BaseModel):
-    brand: Optional[str] = Field(default="Не распознан", description="ТОЛЬКО марка ТС БЕЗ модели! Внимательно проверяй орфографию (например: WIELTON, SCHMITZ, KRONE, KÖGEL, KÄSSBOHRER, DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ, SITRAK, MAZ, KAMAZ)")
-    model: Optional[str] = Field(default="", description="ТОЛЬКО модель ТС без марки (например: XF 105, FH13, NS34, S.KO)")
+    brand: Optional[str] = Field(default="Не распознан", description="ТОЛЬКО марка ТС БЕЗ модели! (например: WIELTON, SCHMITZ, KRONE, KÖGEL, DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ)")
+    model: Optional[str] = Field(default="", description="ТОЛЬКО модель ТС без марки")
     plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
     vin: Optional[str] = Field(default="Не распознан", description="VIN номер (17 символов)")
-    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Узбекистан, Казахстан, Беларусь, Россия)")
+    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации СТРОГО НА РУССКОМ ЯЗЫКЕ")
 
 class DocumentDetails(BaseModel):
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
-    expiry_date: Optional[str] = Field(default="Не указана", description="Дата окончания / срок действия документа (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)")
-    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа в оригинальном написании с документа")
-    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи документа СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия)")
+    expiry_date: Optional[str] = Field(default="Не указана", description="Дата окончания / срок действия документа")
+    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа")
+    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи СТРОГО НА РУССКОМ ЯЗЫКЕ")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя в оригинальном написании (не переводить)")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя в оригинальном написании")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения водителя")
-    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов (+7... первым, остальные через '/')")
+    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов")
     passport: Optional[DocumentDetails] = None
     license: Optional[DocumentDetails] = None
 
 class ImageClassification(BaseModel):
     image_index: int = Field(description="Порядковый номер изображения или страницы PDF, начиная с 0")
-    category: str = Field(
-        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
-    )
+    category: str = Field(description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'")
 
 class FullCargoSubmission(BaseModel):
     truck: Optional[VehicleDetails] = None
     trailer: Optional[VehicleDetails] = None
     driver: Optional[DriverDetails] = None
     image_roles: Optional[list[ImageClassification]] = None
-    
+
+def crop_document_margins(img: Image.Image) -> Image.Image:
+    """Ообрезает лишний стол/фон вокруг фотографий документов."""
+    try:
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        from PIL import ImageChops
+        bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
+        diff = ImageChops.difference(img, bg)
+        diff = ImageChops.add(diff, diff, 2.0, -100)
+        bbox = diff.getbbox()
+        if bbox:
+            w, h = img.size
+            bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            if bw > w * 0.4 and bh > h * 0.4:
+                return img.crop(bbox)
+    except Exception:
+        pass
+    return img
+
+def enhance_image_to_scan(image_bytes: bytes) -> bytes:
+    """Преобразует фото документа в плоский контрастный скан (без изменения текста/печатей)."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        # Обрезка лишних полей
+        img = crop_document_margins(img)
+
+        # Повышение контрастности и чёткости для получения эффекта скана
+        enhancer_contrast = ImageEnhance.Contrast(img)
+        img = enhancer_contrast.enhance(1.35)
+
+        enhancer_sharpness = ImageEnhance.Sharpness(img)
+        img = enhancer_sharpness.enhance(1.4)
+
+        enhancer_brightness = ImageEnhance.Brightness(img)
+        img = enhancer_brightness.enhance(1.05)
+
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=92)
+        return output.getvalue()
+    except Exception as e:
+        logging.error(f"Error enhancing image to scan: {e}")
+        return image_bytes
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
-    """Распознает документы через Gemini и возвращает структурированный словарь + отсортированные файлы."""
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -704,7 +769,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         return fallback_text, all_files, {}
 
     contents = []
-
     if text_notes:
         contents.append(f"Заметки и номера от водителя: {text_notes}")
 
@@ -733,16 +797,11 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
         "1. Распознавай данные с 100% точностью!\n"
-        "2. Марки ТС: В свидетельствах о регистрации ТС (техпаспортах) обязательно проверяй графу 2 ('Марка, модель' / 'RUSUMI / MODELI'). "
+        "2. Марки ТС: В свидетельствах о регистрации ТС обязательно проверяй графу 'Марка, модель'. "
         "Строго разделяй марку (brand) и модель (model).\n"
-        "Примеры марок прицепов: KRONE, WIELTON (СТРОГО WIELTON, не Welton!), SCHMITZ CARGOBULL, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ.\n"
-        "Примеры марок тягачей: MAN, DAF, VOLVO, SCANIA, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
-        "3. Номера телефонов: Если в заметках/тексте от водителя передан номер телефона — ОБЯЗАТЕЛЬНО внеси его в поле 'phones' водителя.\n"
-        "4. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
-        "5. Даты окончания документов: Обязательно извлекай expiry_date (срок действия / дата окончания) для паспорта и водительских прав при наличии.\n"
-        "6. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
-        "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "7. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
+        "3. Номера телефонов: Внеси в поле 'phones'.\n"
+        "4. Страны регистрации и выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
+        "5. Для КАЖДОГО фото укажи image_index (0, 1, 2...) и категорию ('passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other')."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -754,8 +813,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     response = None
     models_to_try = [
-        "gemini-3.6-flash",
-        "gemini-3.0-flash",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash"
@@ -784,7 +841,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     if response and response.text:
         try:
-            import json
             raw_json = json.loads(response.text)
             
             t = raw_json.get("truck") or {}
@@ -793,15 +849,12 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
             p = d.get("passport") or {}
             l = d.get("license") or {}
 
-            # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
-            # Обработка номеров телефонов с приоритетом заметок водителя
             raw_phones = (d.get("phones") or "").strip()
             if not raw_phones or raw_phones.lower() in ["не указан", "не распознан"]:
                 phones_str = text_notes.strip() if text_notes else "Не указан"
             else:
                 phones_str = raw_phones
 
-            # Функция сборки марки и модели ТС
             def build_brand_str(v_dict, show_model=True):
                 b = (v_dict.get('brand') or v_dict.get('brand_model') or '').strip()
                 m = (v_dict.get('model') or '').strip()
@@ -813,7 +866,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                     return f"{b} {m}"
                 return b
 
-            # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
             if is_polyethylene:
                 truck_brand = build_brand_str(t, show_model=False)
                 trailer_brand = build_brand_str(tr, show_model=False)
@@ -842,16 +894,11 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                     f"Водительское: {license_str}"
                 )
 
-            # ----- СОРТИРОВКА ФОТО/СТРАНИЦ ПО ВАШЕМУ ПОРЯДКУ -----
             priority_map = {
-                "passport_front": 1,
-                "passport_back": 2,
-                "license_front": 3,
-                "license_back": 4,
-                "truck_front": 5,
-                "trailer_front": 6,
-                "truck_back": 7,
-                "trailer_back": 8,
+                "passport_front": 1, "passport_back": 2,
+                "license_front": 3, "license_back": 4,
+                "truck_front": 5, "trailer_front": 6,
+                "truck_back": 7, "trailer_back": 8,
                 "other": 99
             }
 
@@ -870,9 +917,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     return fallback_text, all_files, {}
 
-
 async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
-    """Сортирует страницы внутри исходного PDF по правильному порядку."""
     try:
         from pypdf import PdfReader, PdfWriter
         file_info = await bot.get_file(doc_file_id)
@@ -914,30 +959,7 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         logging.error(f"Error sorting PDF pages: {e}")
         return None
 
-
-def crop_document_margins(img: Image.Image) -> Image.Image:
-    """Обрезает лишний стол/фон вокруг фотографий документов."""
-    try:
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        from PIL import ImageChops
-        # Сравниваем изображение с угловым фоном для выявления лишних полей
-        bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
-        diff = ImageChops.difference(img, bg)
-        diff = ImageChops.add(diff, diff, 2.0, -100)
-        bbox = diff.getbbox()
-        if bbox:
-            w, h = img.size
-            bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            # Обрезаем только если документ занимает разумную область и не сжимается слишком сильно
-            if bw > w * 0.4 and bh > h * 0.4:
-                return img.crop(bbox)
-    except Exception:
-        pass
-    return img
-
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Создает PDF из фотографий: правильно поворачивает и обрезает лишний стол/фон."""
     buffer = io.BytesIO()
     images = []
 
@@ -953,7 +975,6 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
-            # Для фото документов вырезаем лишний фон
             img = crop_document_margins(img)
             images.append(img)
         except Exception as e:
@@ -971,7 +992,7 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
     return buffer
 
 
-# ==================== АВТО-ОЧИСТКА ГРУЗОВ (ТОЛЬКО ПО ТАЙМЕРУ МСК) ====================
+# ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ТАЙМЕРУ МСК ====================
 async def auto_clean_expired_cargos():
     while True:
         try:
@@ -1029,7 +1050,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
         
     conn.close()
-
     await send_welcome_message(message)
 
 async def send_welcome_message(message: types.Message):
@@ -1044,14 +1064,14 @@ async def send_welcome_message(message: types.Message):
 
     await message.answer(
         "Если вы хотите продолжить просто в самом чате — такая возможность тоже есть:",
-        reply_markup=get_chat_menu_inline_markup()
+        reply_markup=get_chat_menu_inline_markup(message.from_user)
     )
 
 @dp.message(F.text == "📱 Вызвать меню")
 @dp.message(F.state == None)
 async def cmd_show_menu_button(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("📋 **Главное меню:**", reply_markup=get_chat_menu_inline_markup(), parse_mode="Markdown")
+    await message.answer("📋 **Главное меню:**", reply_markup=get_chat_menu_inline_markup(message.from_user), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "menu_directions")
 async def callback_menu_directions(callback: types.CallbackQuery):
@@ -1221,7 +1241,7 @@ async def show_profile_menu(event):
 async def callback_back_to_main(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "📋 **Главное меню:**",
-        reply_markup=get_chat_menu_inline_markup(),
+        reply_markup=get_chat_menu_inline_markup(callback.from_user),
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -1281,7 +1301,178 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     await show_profile_menu(message)
 
 
-# ==================== ХЭНДЛЕРЫ ПОДАЧИ ДОКУМЕНТОВ ДЛЯ ИИ ====================
+# ==================== СДЕЛАТЬ СКАН (СКАНЕР) ====================
+
+@dp.message(F.text == "📸 Сделать скан")
+@dp.callback_query(F.data == "menu_make_scan")
+async def cmd_make_scan_start(event: types.Message | types.CallbackQuery, state: FSMContext):
+    await state.set_state(ScanStates.waiting_for_photo)
+    prompt = (
+        "📸 **Режим «Сделать скан»**\n\n"
+        "Отправьте фотографию документа в этот чат.\n"
+        "Система обложит грани, выровняет перспективу, оптимизирует контрастность и чёткость снимка.\n\n"
+        "⚠️ *Все тексты, подписи и печати сохраняются без изменений.*"
+    )
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="❌ Отмена"))
+
+    if isinstance(event, types.CallbackQuery):
+        await event.message.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
+        await event.answer()
+    else:
+        await event.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
+
+@dp.message(ScanStates.waiting_for_photo, F.text == "❌ Отмена")
+async def cancel_make_scan(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Сканирование отменено.", reply_markup=get_main_reply_markup(message.from_user))
+
+@dp.message(ScanStates.waiting_for_photo, F.photo)
+async def process_scan_photo(message: types.Message, state: FSMContext):
+    status_msg = await message.answer("🔄 Обработка фото и создание скана...")
+    try:
+        photo = message.photo[-1]
+        file_info = await bot.get_file(photo.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        orig_bytes = buf.getvalue()
+
+        enhanced_bytes = await asyncio.to_thread(enhance_image_to_scan, orig_bytes)
+
+        doc_file = types.BufferedInputFile(enhanced_bytes, filename="Document_Scan.jpg")
+        await message.answer_document(document=doc_file, caption="✅ Скан документа готов!")
+        await status_msg.delete()
+    except Exception as e:
+        logging.error(f"Error making scan: {e}")
+        await message.answer("❌ Ошибка при обработке скана.")
+
+    await state.clear()
+    await message.answer("Готово!", reply_markup=get_main_reply_markup(message.from_user))
+
+
+# ==================== ПРЕОБРАЗОВАТЬ ДАННЫЕ (БЕЗ ПРИВЯЗКИ К ГРУЗУ) ====================
+
+@dp.message(F.text == "🔄 Преобразовать данные")
+@dp.callback_query(F.data == "menu_convert_standalone")
+async def cmd_convert_data_start(event: types.Message | types.CallbackQuery, state: FSMContext):
+    user = event.from_user
+    if not is_convert_allowed(user):
+        if isinstance(event, types.CallbackQuery):
+            await event.answer("⚠️ Доступ ограничен.", show_alert=True)
+        else:
+            await event.answer("⚠️ Функция доступна только уполномоченным пользователям.")
+        return
+
+    await state.set_state(DocConvertStates.waiting_for_files)
+    await state.update_data(photos=[], documents=[], text_notes="")
+
+    prompt = (
+        "🔄 **Преобразование данных (автономно)**\n\n"
+        "Присылайте фото документов, PDF-файлы или текстовые заметки.\n"
+        "Когда все файлы будут загружены, нажмите **«✅ Завершить и отправить»**.\n"
+        "ИИ распознает данные, сгенерирует 1 готовый PDF и отправит в канал логистов."
+    )
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="✅ Завершить и отправить"))
+    builder.add(types.KeyboardButton(text="❌ Отмена"))
+    builder.adjust(1, 1)
+
+    if isinstance(event, types.CallbackQuery):
+        await event.message.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
+        await event.answer()
+    else:
+        await event.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
+
+@dp.message(DocConvertStates.waiting_for_files, F.text == "❌ Отмена")
+async def handle_convert_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Преобразование отменено.", reply_markup=get_main_reply_markup(message.from_user))
+
+@dp.message(DocConvertStates.waiting_for_files, F.photo)
+async def handle_convert_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+
+@dp.message(DocConvertStates.waiting_for_files, F.document)
+async def handle_convert_doc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    documents = data.get("documents", [])
+    documents.append(message.document.file_id)
+    await state.update_data(documents=documents)
+
+@dp.message(DocConvertStates.waiting_for_files, F.text == "✅ Завершить и отправить")
+async def handle_convert_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    documents = data.get("documents", [])
+    notes = data.get("text_notes", "")
+
+    if not photos and not documents and not notes:
+        await message.answer("⚠️ Вы не прислали ни одного фото/файла или заметки.")
+        return
+
+    status_msg = await message.answer("🔄 ИИ распознает документы и собирает PDF...")
+
+    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False)
+
+    d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
+    t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
+    tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+
+    driver_name = (d_data.get("full_name") or "Водитель").strip().upper()
+    truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
+    trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
+
+    clean_name = re.sub(r'[^\w\s-]', '', driver_name)
+    clean_truck = re.sub(r'[^\w]', '', truck_plate)
+    clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
+
+    pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
+    user_info = format_carrier_info(message.from_user.id, message.from_user.username, message.from_user.full_name)
+
+    admin_msg = (
+        f"📄 **ПРЕОБРАЗОВАННЫЕ ДАННЫЕ ДОКУМЕНТОВ**\n\n"
+        f"{user_info}\n\n"
+        f"{ai_formatted_data}"
+    )
+
+    try:
+        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+
+        if documents:
+            sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
+            if sorted_pdf_buf:
+                pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
+            else:
+                for doc_id in documents:
+                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption="Документ")
+        elif photos:
+            pdf_buf = await create_pdf_report_with_images("Автономная проверка", "Сегодня", "-", user_info, ai_formatted_data, sorted_files)
+            pdf_bytes = pdf_buf.getvalue()
+            if pdf_bytes:
+                pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
+
+        await status_msg.delete()
+        await message.answer("✅ Данные преобразованы и отправлены в канал!", reply_markup=get_main_reply_markup(message.from_user))
+    except Exception as e:
+        logging.error(f"Error sending converted docs: {e}")
+        await message.answer("❌ Ошибка при отправке результатов.")
+
+    await state.clear()
+
+@dp.message(DocConvertStates.waiting_for_files, F.text)
+async def handle_convert_text_notes(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    old_notes = data.get("text_notes", "")
+    new_notes = (old_notes + "\n" + message.text).strip()
+    await state.update_data(text_notes=new_notes)
+
+
+# ==================== ХЭНДЛЕРЫ ПОДАЧИ / ЗАМЕНЫ ДОКУМЕНТОВ ====================
 
 @dp.message(DocUploadStates.waiting_for_docs, F.photo)
 async def handle_doc_photo(message: types.Message, state: FSMContext):
@@ -1300,32 +1491,7 @@ async def handle_doc_document(message: types.Message, state: FSMContext):
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
 async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Подача данных на загрузку отменена.", reply_markup=get_main_reply_markup())
-
-def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
-    """Возвращает True, если документ просрочен или до конца осталось менее threshold_days дней."""
-    if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
-        return False
-    
-    match = re.search(r'(\d{1,2})[\./-](\d{1,2})[\./-](\d{2,4})', str(expiry_str))
-    if not match:
-        match_iso = re.search(r'(\d{4})[\./-](\d{1,2})[\./-](\d{1,2})', str(expiry_str))
-        if match_iso:
-            year, month, day = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
-        else:
-            return False
-    else:
-        day, month, year_raw = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        year = year_raw + 2000 if year_raw < 100 else year_raw
-
-    try:
-        exp_date = date(year, month, day)
-        today = datetime.now(timezone.utc).date()
-        cutoff_date = today + timedelta(days=threshold_days)
-        return exp_date <= cutoff_date
-    except ValueError:
-        return False
-
+    await message.answer("❌ Подача данных на загрузку отменена.", reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
 async def handle_doc_finish(message: types.Message, state: FSMContext):
@@ -1345,111 +1511,82 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не прислали ни одного фото/файла или телефона.")
         return
 
-    # Проверяем, не полиэтилен ли это
     is_polyethylene = False
+    was_previously_submitted = False
+    prev_truck_plate = ""
+    prev_driver_short_name = ""
+
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT l.cargo_type, l.details, l.text 
+            SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
+                   l.cargo_type, l.details, l.text 
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ?
         """, (deal_id,))
         row = cursor.fetchone()
         if row:
-            cargo_info = f"{row[0] or ''} {row[1] or ''} {row[2] or ''}".lower()
+            was_previously_submitted = bool(row[0])
+            prev_truck_plate = row[1] or ""
+            prev_driver_short_name = row[2] or ""
+            cargo_info = f"{row[3] or ''} {row[4] or ''} {row[5] or ''}".lower()
             if "полиэтилен" in cargo_info or "polyethylene" in cargo_info:
                 is_polyethylene = True
         conn.close()
 
-    # Gemini распознает и сортирует данные
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
 
-    # Проверяем полноту и валидность внесенных данных
-    missing_items = []
-    d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
-    tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
-    p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
-    l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
+    d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
 
-    # Проверка Паспорта
-    p_num = p_data.get("number")
-    p_exp = p_data.get("expiry_date")
-    if not p_num or p_num == "Не распознан":
-        missing_items.append("Паспорт водителя")
-    elif is_doc_expired_or_expiring_soon(p_exp, 15):
-        missing_items.append("Паспорт водителя (просрочен/истекает)")
+    new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
+    full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
+    new_driver_short_name = extract_surname_and_name(full_driver_name)
 
-    # Проверка Водительского удостоверения
-    l_num = l_data.get("number")
-    l_exp = l_data.get("expiry_date")
-    if not l_num or l_num == "Не распознан":
-        missing_items.append("Водительское удостоверение")
-    elif is_doc_expired_or_expiring_soon(l_exp, 15):
-        missing_items.append("Водительское удостоверение (просрочено/истекает)")
-
-    # Проверка техпаспортов
-    if not t_data.get("plate") or t_data.get("plate") == "Не распознан":
-        missing_items.append("Техпаспорт тягача")
-    if not tr_data.get("plate") or tr_data.get("plate") == "Не распознан":
-        missing_items.append("Техпаспорт прицепа")
-    
-    # Проверка телефона
-    phone_val = d_data.get("phones") or notes
-    if not phone_val or phone_val == "Не указан":
-        missing_items.append("Номер телефона")
-
-    if not missing_items:
-        docs_status = "FULL"
-        missing_docs_str = ""
-    elif len(missing_items) < 5:
-        docs_status = "PARTIAL"
-        missing_docs_str = ", ".join(missing_items)
-    else:
-        docs_status = "NONE"
-        missing_docs_str = ""
-
-    # Фиксируем отправку и статус строго для ТЕКУЩЕЙ конкретной сделки
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE confirmed_deals 
-            SET docs_submitted = 1, docs_status = ?, missing_docs = ? 
+            SET docs_submitted = 1, docs_status = 'FULL', 
+                last_truck_plate = ?, last_driver_name = ? 
             WHERE id = ? AND user_id = ?
-        """, (docs_status, missing_docs_str, deal_id, user_id))
+        """, (new_truck_plate, new_driver_short_name, deal_id, user_id))
         conn.commit()
         conn.close()
 
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
+    if was_previously_submitted:
+        header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ"
+        changes_summary = (
+            f"\n🔄 **Детали замены:**\n"
+            f"- **Номер авто:** было `{prev_truck_plate or '—'}` ➔ стало `{new_truck_plate}`\n"
+            f"- **Водитель (Фамилия Имя):** было `{prev_driver_short_name or '—'}` ➔ стало `{new_driver_short_name}`\n"
+        )
+    else:
+        header_title = "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
+        changes_summary = ""
+
     admin_msg = (
+        f"**{header_title}**\n\n"
         f"📅 {date_str} | 📍 {route_str}\n"
         f"💰 {price_str}\n\n"
-        f"{carrier_text}\n\n"
+        f"{carrier_text}\n"
+        f"{changes_summary}\n"
         f"{ai_formatted_data}"
     )
 
-    # Генерация наименования файла: (Фамилия Имя водителя - ГосТягач/ГосПрицеп.pdf)
-    driver_name = (d_data.get("full_name") or "Водитель").strip().upper()
-    truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
-    trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
-
-    clean_name = re.sub(r'[^\w\s-]', '', driver_name)
-    clean_truck = re.sub(r'[^\w]', '', truck_plate)
-    clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
-
-    pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
-    clean_route_short = route_str.replace(' → ', '-').replace(' -> ', '-').strip()
-    file_caption = f"{date_str} {clean_route_short}"
+    clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
+    clean_truck = re.sub(r'[^\w]', '', new_truck_plate)
+    pdf_filename = f"{clean_name} - {clean_truck}.pdf"
+    file_caption = f"{date_str} {route_str}"
 
     try:
-        # 1. Отправляем текстовый отчет логисту
         await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        # 2. Если исходно выслали PDF
         if documents:
             sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
             if sorted_pdf_buf:
@@ -1458,24 +1595,18 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             else:
                 for doc_id in documents:
                     await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption=file_caption)
-
-        # 3. Если выслали фото — собираем отсортированный PDF
         elif photos:
             pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
             pdf_bytes = pdf_buf.getvalue()
             if pdf_bytes:
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-                await bot.send_document(
-                    chat_id=DOCS_CHANNEL_ID, 
-                    document=pdf_file, 
-                    caption=file_caption
-                )
-
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
     except Exception as e:
         logging.error(f"Error forwarding docs to admin channel: {e}", exc_info=True)
 
     await state.clear()
-    await message.answer("✅ Данные переданы логисту.", reply_markup=get_main_reply_markup())
+    msg_ack = "✅ Данные успешно заменены и переданы логисту!" if was_previously_submitted else "✅ Данные переданы логисту!"
+    await message.answer(msg_ack, reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text)
 async def handle_doc_text_notes(message: types.Message, state: FSMContext):
@@ -1582,13 +1713,12 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    
     cursor.execute("SELECT cars_count, text, price, date, route, details, status FROM loads WHERE load_id = ?", (cargo_id,))
     load_row = cursor.fetchone()
     
     if not load_row:
         conn.close()
-        await message.answer("Груз не найден или уже закрыт.", reply_markup=get_main_reply_markup())
+        await message.answer("Груз не найден или уже закрыт.", reply_markup=get_main_reply_markup(message.from_user))
         await state.clear()
         return
         
@@ -1596,7 +1726,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     
     if status in ['CLOSED', 'EXPIRED']:
         conn.close()
-        await message.answer("Этот груз уже закрыт или истек его срок.", reply_markup=get_main_reply_markup())
+        await message.answer("Этот груз уже закрыт или истек его срок.", reply_markup=get_main_reply_markup(message.from_user))
         await state.clear()
         return
 
@@ -1641,7 +1771,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             pass
 
         await state.clear()
-        await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup())
+        await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup(message.from_user))
         return
 
     if current_cars > requested_cars:
@@ -1650,7 +1780,6 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     else:
         cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
         
-    # Создаем индивидуальную запись сделки на каждую забранную машину
     for _ in range(requested_cars):
         cursor.execute("""
             INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
@@ -1675,7 +1804,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         pass
         
     await state.clear()
-    await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup())
+    await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
 
 
 # ==================== ОБРАБОТКА СТАВОК ЛОГИСТОМ В ТЕЛЕГРАМ ====================
@@ -1776,7 +1905,6 @@ async def admin_partial_bid(callback: types.CallbackQuery):
         return
         
     cargo_id, carrier_id, max_requested, agreed_rate = bid
-    
     cursor.execute("SELECT cars_count FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
@@ -1816,7 +1944,6 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
         return
         
     cargo_id, carrier_id, agreed_rate = bid
-
     cursor.execute("SELECT cars_count, date, route, details, price, status FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
 
@@ -1836,7 +1963,7 @@ async def admin_process_partial_confirm(callback: types.CallbackQuery):
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (cargo_id,))
 
         cursor.execute("""
-            
+            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (cargo_id, carrier_id, date_str, route_str, confirmed_qty, agreed_rate, details_str))
 
@@ -1923,11 +2050,11 @@ async def carrier_accept_counter(callback: types.CallbackQuery):
     
     if load_row:
         date_str, route_str, details_str = load_row[1], load_row[2], load_row[3]
-        for _ in range(requested_qty):
+        for _ in range(cars_qty):
             cursor.execute("""
                 INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
                 VALUES (?, ?, ?, ?, 1, ?, ?)
-            """, (cargo_id, carrier_id, date_str, route_str, agreed_rate, details_str))
+            """, (cargo_id, carrier_id, date_str, route_str, counter_rate, details_str))
         cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
         conn.close()
@@ -1966,7 +2093,6 @@ async def admin_decline_bid(callback: types.CallbackQuery):
         
     cargo_id, carrier_id, rate = bid
     cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
-    
     cursor.execute("SELECT route FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.commit()
@@ -2020,6 +2146,8 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
         builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
         builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
+        builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
+        builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
         builder.row(types.InlineKeyboardButton(text="🔐 Сменить пароль Web App", callback_data="adm_change_pass"))
         await event.answer("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
         return
@@ -2187,7 +2315,7 @@ async def admin_save_edited_cargo(message: types.Message, state: FSMContext):
     conn.close()
     
     await state.clear()
-    await message.answer("✅ Груз обновлен!", reply_markup=get_main_reply_markup())
+    await message.answer("✅ Груз обновлен!", reply_markup=get_main_reply_markup(message.from_user))
     await update_cargo_messages_for_all_users(cargo_id)
 
 @dp.callback_query(F.data == "adm_menu_back")
@@ -2196,6 +2324,8 @@ async def admin_menu_back(callback: types.CallbackQuery):
     builder.row(types.InlineKeyboardButton(text="📦 Актуальные грузы", callback_data="adm_menu_active"))
     builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
     builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
+    builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
+    builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
     builder.row(types.InlineKeyboardButton(text="🔐 Сменить пароль Web App", callback_data="adm_change_pass"))
     await callback.message.edit_text("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
@@ -2475,6 +2605,7 @@ async def handle_channel_post(message: types.Message):
                 await send_cargo_to_user(u_id, cargo_id)
                 await asyncio.sleep(0.05)
 
+
 # ==================== WEB APP БЭКЕНД ====================
 
 async def get_loads_api(request):
@@ -2508,7 +2639,6 @@ async def get_loads_api(request):
         query += " AND (destination_country LIKE ? OR route LIKE ?)"
         params.extend([f"%{country}%", f"%{country}%"])
     else:
-        # Для вкладки "Все направления" показываем ТОЛЬКО грузы по подпискам пользователя
         if user_subs:
             sub_conditions = []
             for sub in user_subs:
@@ -2517,7 +2647,6 @@ async def get_loads_api(request):
                 params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
             query += " AND (" + " OR ".join(sub_conditions) + ")"
         else:
-            # Если подписок нет — не показываем ничего
             conn.close()
             return web.json_response({"loads": []})
         
@@ -2632,7 +2761,6 @@ async def my_loads_api(request):
         is_today = (c_date and c_date == msk_today)
         is_archived = (c_date and msk_today > c_date)
 
-        # Каждая запись сделки теперь строго уникальна (1 сделке = 1 авто)
         deals.append({
             "id": f"deal_{deal_id}",
             "deal_id": deal_id,
@@ -2773,13 +2901,14 @@ async def submit_docs_prompt_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT date, route, price FROM confirmed_deals WHERE id = ? AND user_id = ?", (clean_deal_id, user_id))
+        cursor.execute("SELECT date, route, price, docs_submitted FROM confirmed_deals WHERE id = ? AND user_id = ?", (clean_deal_id, user_id))
         deal = cursor.fetchone()
         conn.close()
 
         date_str = deal[0] if deal else "Ближайшая"
         route_str = deal[1] if deal else "Маршрут"
         price_str = deal[2] if deal else "Ставка"
+        is_replacement = bool(deal[3]) if deal else False
 
         state_ctx = dp.fsm.get_context(bot, user_id, user_id)
         await state_ctx.set_state(DocUploadStates.waiting_for_docs)
@@ -2793,7 +2922,9 @@ async def submit_docs_prompt_api(request):
             text_notes=""
         )
 
+        title_header = "🔄 **Замена данных по грузу**" if is_replacement else "📄 **Подача данных по грузу**"
         prompt_text = (
+            f"{title_header}\n\n"
             f"📍 {route_str} ({date_str})\n"
             f"💰 Ставка: {price_str}\n\n"
             f"Пожалуйста, отправьте в этот чат фото или PDF-файлы документов.\n"
@@ -2887,7 +3018,6 @@ async def book_load_api(request):
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
 
-# Создаем индивидуальную запись сделки на каждую забранную машину
         for _ in range(requested_cars):
             cursor.execute("""
                 INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
@@ -3229,7 +3359,6 @@ async def admin_cancel_deal_api(request):
 
 async def serve_index(request):
     try:
-        # Указываем точный путь к файлу внутри папки static
         base_dir = os.path.dirname(os.path.abspath(__file__))
         index_path = os.path.join(base_dir, "static", "index.html")
         
@@ -3283,7 +3412,7 @@ async def serve_directions(request):
     return web.Response(text=DIRECTIONS_HTML, content_type='text/html')
 
 
-# ==================== СЕРВЕР И САМОПИНГ (ЗАЩИТА ОТ СПЯЩЕГО РЕЖИМА) ====================
+# ==================== СЕРВЕР И САМОПИНГ ====================
 async def handle_ping(request):
     return web.Response(text="Bot is running!", status=200)
 
@@ -3331,7 +3460,6 @@ async def web_server():
     app.router.add_post("/api/book/{id}", book_load_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
 
-    # Админ бэкенд роуты
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
     app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
