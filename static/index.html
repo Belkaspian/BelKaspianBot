@@ -491,6 +491,7 @@
             flex: 1;
         }
 
+        /* ЭЛЕМЕНТЫ ВВОДА И СЕЛЕКТЫ С ПОЛНОЙ ПОДДЕРЖКОЙ ТЁМНОЙ ТЕМЫ */
         select, input[type="text"], input[type="password"], input[type="date"], textarea {
             width: 100%;
             background: var(--bg);
@@ -511,12 +512,25 @@
 
         select {
             appearance: none;
+            -webkit-appearance: none;
             background-image: url("data:image/svg+xml;utf8,<svg fill='%2364748b' height='16' viewBox='0 0 24 24' width='16' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>");
             background-repeat: no-repeat;
             background-position: right 10px center;
             padding-right: 28px;
             border: none;
             background-color: transparent;
+            color: var(--text);
+        }
+
+        /* Фикс белого фона выпадающего списка на ПК / Мобильных в тёмной теме */
+        select option {
+            background-color: var(--surface-solid);
+            color: var(--text);
+        }
+
+        [data-theme="dark"] select option {
+            background-color: #1e293b;
+            color: #f8fafc;
         }
 
         /* Таблица & Карточки */
@@ -766,8 +780,8 @@
         }
 
         .empty-illustration-container {
-            width: 90px;
-            height: 60px;
+            width: 110px;
+            height: 65px;
             margin-bottom: 16px;
             animation: emptyFloat 3s ease-in-out infinite;
         }
@@ -1177,46 +1191,6 @@
         </div>
     </div>
 
-    <!-- Модалка: Фиксация выгрузки -->
-    <div class="modal-overlay" id="unloadModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Фиксация выгрузки товара</div>
-                <div class="modal-close" onclick="closeModal('unloadModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="unloadDealId" />
-            <div class="form-group">
-                <label>Дата фактической выгрузки</label>
-                <input type="date" id="unloadDate" />
-            </div>
-            <div class="form-group">
-                <label>Документы (ТТН, CMR, Акт)</label>
-                <div class="dropzone" id="unloadDropzone" onclick="document.getElementById('unloadFiles').click()">
-                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                    <div style="font-weight: 600;">Выбрать файлы для загрузки</div>
-                    <div style="font-size: 11px; color: var(--text-muted);">PDF, JPG, PNG до 10MB</div>
-                </div>
-                <input type="file" id="unloadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleFileSelect(event)" />
-            </div>
-
-            <div class="file-preview-list" id="filePreviewList"></div>
-
-            <div class="form-group">
-                <label>Заметки / Номер ТТН</label>
-                <textarea id="unloadNotes" placeholder="ТТН №123456..."></textarea>
-            </div>
-
-            <div class="buttons">
-                <button class="btn btn-success" onclick="submitUnloadData()">
-                    <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                    Подтвердить выгрузку
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- Модалка: Редактирование Груза (Админка) -->
     <div class="modal-overlay" id="adminEditLoadModal">
         <div class="modal-card">
@@ -1359,7 +1333,6 @@
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
-        let selectedFiles = [];
 
         let sortAscending = false;
         let adminSortAscending = false;
@@ -1372,7 +1345,7 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Синтез микро-звуков через Web Audio API (Мгновенный отклик, без сторонних файлов)
+        // Синтез микро-звуков через Web Audio API
         let audioCtx = null;
         function getAudioContext() {
             if (!audioCtx) {
@@ -1430,7 +1403,6 @@
                 }
             } catch(e) {}
 
-            // Нативная тактильная отдача Telegram
             if (tg.HapticFeedback) {
                 if (type === 'click' || type === 'pop') tg.HapticFeedback.impactOccurred('light');
                 else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
@@ -1438,20 +1410,33 @@
             }
         }
 
-        // Векторная иллюстрация грузовика для пустых состояний
+        // ОБНОВЛЕННАЯ ВЕКТОРНАЯ ИЛЛЮСТРАЦИЯ ЕВРОФУРЫ ДЛЯ ПУСТОГО СОСТОЯНИЯ
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 90 60" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="8" y="16" width="46" height="26" rx="2" fill="var(--primary-light)" />
-                            <path d="M54 26h18l6 8v14H54V26z" fill="var(--surface-solid)" />
-                            <path d="M60 29h10l4 5h-14v-5z" fill="var(--primary-light)" />
-                            <circle cx="20" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
-                            <circle cx="32" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
-                            <circle cx="66" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
-                            <line x1="4" y1="51" x2="86" y2="51" stroke="var(--border)" stroke-width="2" />
-                            <path d="M78 22c2-2 4-2 6 0M80 18c3-3 7-3 10 0" stroke="var(--text-muted)" stroke-width="1.8"/>
+                    <svg viewBox="0 0 100 60" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <!-- Полуприцеп -->
+                            <rect x="5" y="15" width="56" height="27" rx="3" fill="var(--primary-light)" />
+                            <line x1="12" y1="15" x2="12" y2="42" stroke="var(--border)" stroke-width="1.5" />
+                            <line x1="5" y1="28" x2="61" y2="28" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 2" />
+                            
+                            <!-- Кабина Тягача (ровная, евро-стиль) -->
+                            <path d="M61 21 h16 l8 8 v13 h-24 v-21 z" fill="var(--surface-solid)" />
+                            <!-- Лобовое и боковое стекло -->
+                            <path d="M66 24 h10 l5 5 h-15 z" fill="var(--primary-light)" />
+                            
+                            <!-- Бампер и фары -->
+                            <line x1="85" y1="36" x2="85" y2="42" stroke="var(--primary)" stroke-width="2" />
+                            
+                            <!-- Колёса -->
+                            <circle cx="16" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
+                            <circle cx="27" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
+                            <circle cx="48" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
+                            <circle cx="73" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
+                            
+                            <!-- Линия дороги -->
+                            <line x1="2" y1="49" x2="98" y2="49" stroke="var(--border)" stroke-width="2" />
                         </g>
                     </svg>
                 </div>
@@ -2056,6 +2041,30 @@
             return list;
         }
 
+        async function triggerSubmitDocsPrompt(dealId, event) {
+            if (event) event.stopPropagation();
+            playUiSound('pop');
+            let userId = getUserId();
+            if (!userId) return showToast('Ошибка определения пользователя', 'error');
+
+            try {
+                let res = await fetch('/api/submit_docs_prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, deal_id: dealId })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Инструкция отправлена в чат бота', 'success');
+                    try { tg.close(); } catch(e) {}
+                } else {
+                    showToast(data.error || 'Ошибка отправки', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка подключения', 'error');
+            }
+        }
+
         async function loadData(isSilent = false) {
             if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка данных...</div>';
             let userId = getUserId();
@@ -2178,7 +2187,12 @@
                         return;
                     }
 
-                    tbody.innerHTML = sortedDeals.map(d => `
+                    tbody.innerHTML = sortedDeals.map(d => {
+                        let isDocsSubmitted = Boolean(d.docs_submitted);
+                        let docBtnText = isDocsSubmitted ? '🔄 Заменить данные' : '📄 Подать данные';
+                        let docBtnClass = isDocsSubmitted ? 'btn-warning' : 'btn-primary';
+
+                        return `
                         <div class="t-row" id="row-${d.id}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
                             <div class="col-route">${d.route}</div>
@@ -2193,15 +2207,15 @@
                                 <div class="info-item"><span>Маршрут</span><b>${d.route}</b></div>
                                 <div class="info-item"><span>Груз</span><b>${d.cargo_type || 'ТНП'}</b></div>
                             </div>
-                            ${mySubTab === 'transit' ? `
+                            ${(mySubTab === 'transit' || mySubTab === 'active') ? `
                                 <div class="buttons" style="margin-top:10px;">
-                                    <button class="btn btn-primary" onclick="openUnloadModal('${d.deal_id || d.id}')">
-                                        Отметить выгрузку
+                                    <button class="btn ${docBtnClass}" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
+                                        ${docBtnText}
                                     </button>
                                 </div>
                             ` : ''}
                         </div>
-                    `).join('');
+                    `}).join('');
 
                     if (openDetailsId) {
                         let openEl = document.getElementById(openDetailsId);
@@ -2287,71 +2301,6 @@
                 }
             } catch(e) {
                 showToast('Ошибка сети', 'error');
-            }
-        }
-
-        function openUnloadModal(dealId) {
-            playUiSound('pop');
-            document.getElementById('unloadDealId').value = dealId;
-            document.getElementById('unloadDate').valueAsDate = new Date();
-            selectedFiles = [];
-            renderFilePreview();
-            document.getElementById('unloadModal').classList.add('active');
-        }
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files);
-            selectedFiles = selectedFiles.concat(files);
-            playUiSound('pop');
-            renderFilePreview();
-            showToast(`Прикреплено файлов: ${files.length}`, 'info');
-        }
-
-        function renderFilePreview() {
-            const list = document.getElementById('filePreviewList');
-            list.innerHTML = selectedFiles.map((f, idx) => `
-                <div class="file-item">
-                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
-                    <span style="color:var(--error); cursor:pointer;" onclick="removeFile(${idx})">Удалить</span>
-                </div>
-            `).join('');
-        }
-
-        function removeFile(idx) {
-            playUiSound('click');
-            selectedFiles.splice(idx, 1);
-            renderFilePreview();
-        }
-
-        async function submitUnloadData() {
-            const dealId = document.getElementById('unloadDealId').value;
-            const date = document.getElementById('unloadDate').value;
-            const notes = document.getElementById('unloadNotes').value;
-
-            if (!date) return showToast('Укажите дату выгрузки', 'error');
-
-            const formData = new FormData();
-            formData.append('deal_id', dealId);
-            formData.append('unload_date', date);
-            formData.append('notes', notes);
-            selectedFiles.forEach(f => formData.append('files', f));
-
-            try {
-                let res = await fetch('/api/my_loads/unload', {
-                    method: 'POST',
-                    body: formData
-                });
-                if (res.ok) {
-                    showToast('Рейс выгружен, документы загружены', 'success');
-                    closeModal('unloadModal');
-                    loadData(false);
-                } else {
-                    showToast('Ошибка сохранения', 'error');
-                }
-            } catch(e) {
-                showToast('Данные выгрузки сохранены', 'success');
-                closeModal('unloadModal');
-                loadData(false);
             }
         }
 
