@@ -1302,53 +1302,81 @@
                     <!-- Бегущая дорога -->
                     <line x1="0" y1="37" x2="110" y2="37" class="animated-road" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="5 3.5" />
 
-                    <!-- Корпус грузовика -->
+                    <!-- Корпус фуры -->
                     <g class="animated-truck-body">
-                        <!-- Кузов / Фургон -->
-                        <rect x="11" y="9" width="67" height="19" rx="1.5" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="1.4" />
+                        <!-- Полуприцеп (Тент) -->
+                        <rect x="2" y="5" width="71" height="22" rx="1" fill="var(--primary-light)" />
                         
-                        <!-- Задний отбойник кузова -->
-                        <line x1="11" y1="28" x2="11" y2="31" stroke-width="1.2" />
+                        <!-- Нижний профиль / рама прицепа -->
+                        <line x1="2" y1="27" x2="73" y2="27" stroke-width="1.6" />
+                        
+                        <!-- Отбойник / брызговик сзади прицепа -->
+                        <path d="M 2 27 L 2 32 L 5 32" stroke-width="1" />
 
-                        <!-- Бак / Защитный брус под кузовом -->
-                        <rect x="46" y="28" width="38" height="3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1" rx="0.5" />
+                        <!-- Боковая защита прицепа (паллетник / брус) -->
+                        <g stroke-width="1">
+                            <rect x="33" y="29.5" width="22" height="3.5" fill="var(--surface-solid)" rx="0.5" />
+                            <line x1="33" y1="31.2" x2="55" y2="31.2" />
+                        </g>
 
-                        <!-- Элегантная кабина (повернута вправо, с козырьком) -->
-                        <path d="M 78 31 
-                                 L 78 13 
-                                 L 95 13 
-                                 L 99 15 
-                                 L 97 18 
-                                 L 97 28 
-                                 L 99 28 
-                                 L 99 31 
+                        <!-- ДЕТАЛИ ТЯГАЧА И РАМЫ -->
+                        <!-- Седельно-сцепное устройство (седло) -->
+                        <rect x="69" y="25" width="6" height="2" fill="var(--primary)" rx="0.5" />
+
+                        <!-- Несущая рама тягача под сцепкой -->
+                        <rect x="63" y="27" width="14" height="1.5" fill="var(--surface-solid)" stroke-width="1" />
+
+                        <!-- Крыло / арка над ведущим колесом тягача -->
+                        <path d="M 63.5 31 L 63.5 28.5 C 64.5 27, 75.5 27, 76.5 28.5 L 76.5 31" fill="var(--surface-solid)" stroke-width="1.2" />
+
+                        <!-- Кабина тягача (Евро-тип) -->
+                        <path d="M 76 31 
+                                 L 76 13 
+                                 C 76 10, 78 8.5, 82 8.5 
+                                 L 91 8.5 
+                                 C 94.5 8.5, 97 10.5, 98.5 14 
+                                 L 101.5 22 
+                                 L 101.5 31 
                                  Z" 
-                              fill="var(--surface-solid)" 
-                              stroke="var(--primary)" 
-                              stroke-width="1.4" />
-
-                        <!-- Окно кабины -->
-                        <rect x="84" y="16.5" width="9.5" height="6.5" rx="1.2" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="1.2" />
+                              fill="var(--surface-solid)" />
                         
-                        <!-- Линия двери / Ручка -->
-                        <line x1="84" y1="24" x2="87" y2="24" stroke-width="1" />
+                        <!-- Боковое стекло кабины -->
+                        <path d="M 85 11 L 93.5 11 C 95.5 11, 96.5 12.5, 97 14.5 L 97.5 19.5 L 85 19.5 Z" fill="var(--primary-light)" stroke-width="1.1" />
+
+                        <!-- Детали кабины: Зеркало, ручка, фара -->
+                        <path d="M 97.5 13.5 L 99.5 13.5 L 99.5 17" stroke-width="1" /> <!-- Зеркало -->
+                        <line x1="86.5" y1="21.5" x2="89" y2="21.5" stroke-width="1.2" /> <!-- Ручка -->
+                        <line x1="97" y1="26" x2="101.5" y2="26" stroke-width="1.2" /> <!-- Фара -->
+                        
+                        <!-- Топливный бак / боковой обвес тягача -->
+                        <rect x="77" y="28.5" width="11" height="2.5" fill="var(--surface-solid)" stroke-width="1" rx="0.5" />
                     </g>
 
-                    <!-- Колёса (2 задних + 1 переднее) -->
-                    <!-- Задние колёса (под фургоном) -->
-                    <g class="animated-wheel" style="transform-origin: 22px 33.5px;">
-                        <circle cx="22" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="22" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    <!-- Колёса (3 оси прицепа + 2 оси тягача) -->
+                    <!-- Оси прицепа -->
+                    <g class="animated-wheel" style="transform-origin: 11px 33.5px;">
+                        <circle cx="11" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="11" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
                     </g>
-                    <g class="animated-wheel" style="transform-origin: 38px 33.5px;">
-                        <circle cx="38" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="38" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    <g class="animated-wheel" style="transform-origin: 19px 33.5px;">
+                        <circle cx="19" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="19" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                    <g class="animated-wheel" style="transform-origin: 27px 33.5px;">
+                        <circle cx="27" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="27" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
                     </g>
 
-                    <!-- Переднее колесо (под кабиной) -->
-                    <g class="animated-wheel" style="transform-origin: 90px 33.5px;">
-                        <circle cx="90" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="90" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    <!-- Оси тягача -->
+                    <!-- Заднее ведущее колесо (теперь под крылом и рамой) -->
+                    <g class="animated-wheel" style="transform-origin: 70px 33.5px;">
+                        <circle cx="70" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="70" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                    <!-- Переднее управляемое колесо -->
+                    <g class="animated-wheel" style="transform-origin: 94px 33.5px;">
+                        <circle cx="94" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="94" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
                     </g>
                 </g>
             </svg>
