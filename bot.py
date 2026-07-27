@@ -20,7 +20,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types.web_app_info import WebAppInfo
 
-# Импорт официального библиотеки google-genai 
+# Импорт официального библиотеки google-genai
 try:
     from google import genai
     from google.genai import types as genai_types
