@@ -331,18 +331,23 @@ def extract_time_limit(text: str):
     match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
     if match:
         raw_time = match.group(1).replace('.', ':')
-        if ':' not in raw_time:
-            hours = int(raw_time)
-            minutes = 0
-        else:
-            parts = raw_time.split(':')
-            hours, minutes = int(parts[0]), int(parts[1])
-            
-        time_formatted = f"{hours:02d}:{minutes:02d}"
-        msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
-        expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
-        expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
-        return time_formatted, expire_str
+        try:
+            if ':' not in raw_time:
+                hours = int(raw_time)
+                minutes = 0
+            else:
+                parts = raw_time.split(':')
+                hours, minutes = int(parts[0]), int(parts[1])
+                
+            # Проверяем валидность часов и минут, чтобы избежать ValueError при "до 25 тонн"
+            if 0 <= hours <= 23 and 0 <= minutes <= 59:
+                time_formatted = f"{hours:02d}:{minutes:02d}"
+                msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+                expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+                expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+                return time_formatted, expire_str
+        except (ValueError, TypeError):
+            pass
         
     return None, None
 
@@ -629,126 +634,9 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
 
 # ==================== ИИ GEMINI С ИСПОЛЬЗОВАНИЕМ GOOGLE-GENAI SDK И ГЕНЕРАЦИЯ PDF ====================
 
-class VehicleDetails(BaseModel):
-    brand_model: str = Field(default="Не распознан", description="Марка и модель (например: DAF XF 105)")
-    plate: str = Field(default="Не распознан", description="Гос. номер (например: 1234 AB-7 или 777AAA01)")
-    vin: str = Field(default="Не распознан", description="VIN номер (17 символов)")
-    country: str = Field(default="Не распознана", description="Страна регистрации ТС")
-
-class DocumentDetails(BaseModel):
-    number: str = Field(default="Не распознан", description="Номер документа")
-    issue_date: str = Field(default="Не распознана", description="Дата выдачи (ГГГГ-ММ-ДД или ДД.ММ.ГГГГ)")
-    authority: str = Field(
-        default="Не распознан", 
-        description=(
-            "Орган выдачи документа. Приоритет — РУССКИЙ ЯЗЫК. "
-            "Для паспортов РБ — точное название (напр. СТАРОДОРОЖСКИЙ РОВД МИНСКОЙ ОБЛАСТИ). "
-            "Для ID-карт РБ — 'Код органа выдачи: XXX'. "
-            "Для Казахстана — 'МВД РК' или 'МВД РЕСПУБЛИКИ КАЗАХСТАН'. "
-            "Для Узбекистана — 'MIA XXXXXX'. "
-            "Для Кыргызстана — 'MIA' или 'PSC'. "
-            "Для Азербайджана — 'MINISTRY OF INTERNAL AFFAIRS'."
-        )
-    )
-    country: str = Field(default="Не распознана", description="Страна выдачи документа на русском языке")
-
-class DriverDetails(BaseModel):
-    full_name: str = Field(default="Не распознан", description="ФИО водителя. ПРИОРИТЕТ — РУССКИЙ ЯЗЫК (Кириллица). Если нет — латиница.")
-    birth_date: str = Field(default="Не распознана", description="Дата рождения водителя")
-    phones: str = Field(
-        default="Не указан", 
-        description="Номера телефонов водителя (только цифры и '+'). Российский номер (+7...) ВСЕГДА ПЕРВЫМ, остальные через слеш '/'"
-    )
-    passport: DocumentDetails = Field(default_factory=DocumentDetails)
-    license: DocumentDetails = Field(default_factory=DocumentDetails)
-
-class FullCargoSubmission(BaseModel):
-    truck: VehicleDetails = Field(default_factory=VehicleDetails)
-    trailer: VehicleDetails = Field(default_factory=VehicleDetails)
-    driver: DriverDetails = Field(default_factory=DriverDetails)
-
-# ==================== СХЕМЫ, ИИ-АГЕНТ И СОРТИРОВКА ФОТО ====================
-
-class VehicleDetails(BaseModel):
-    brand_model: str = Field(default="Не распознан", description="Марка и модель (например: DAF XF 105)")
-    plate: str = Field(default="Не распознан", description="Гос. номер (например: 1234 AB-7 или 777AAA01)")
-    vin: str = Field(default="Не распознан", description="VIN номер (17 символов)")
-    country: str = Field(default="Не распознана", description="Страна регистрации ТС")
-
-class DocumentDetails(BaseModel):
-    number: str = Field(default="Не распознан", description="Номер документа")
-    issue_date: str = Field(default="Не распознана", description="Дата выдачи")
-    authority: str = Field(default="Не распознан", description="Орган выдачи документа (Приоритет - русский язык)")
-    country: str = Field(default="Не распознана", description="Страна выдачи документа")
-
-class DriverDetails(BaseModel):
-    full_name: str = Field(default="Не распознан", description="ФИО водителя (Приоритет - русский язык)")
-    birth_date: str = Field(default="Не распознана", description="Дата рождения водителя")
-    phones: str = Field(default="Не указан", description="Номера телефонов (+7... первым, остальные через '/')")
-    passport: DocumentDetails = Field(default_factory=DocumentDetails)
-    license: DocumentDetails = Field(default_factory=DocumentDetails)
-
-class ImageClassification(BaseModel):
-    image_index: int = Field(description="Порядковый номер загруженного изображения, начиная с 0")
-    category: str = Field(
-        description=(
-            "Категория и сторона фото: "
-            "'passport_front' (Паспорт/ID лицевая), "
-            "'passport_back' (Паспорт/ID обратная), "
-            "'license_front' (Водительское лицевая), "
-            "'license_back' (Водительское обратная), "
-            "'truck_front' (Техпаспорт тягача лицевая), "
-            "'trailer_front' (Техпаспорт прицепа лицевая), "
-            "'truck_back' (Техпаспорт тягача обратная), "
-            "'trailer_back' (Техпаспорт прицепа обратная), "
-            "'other' (неизвестно/другое)"
-        )
-    )
-
-class FullCargoSubmission(BaseModel):
-    truck: VehicleDetails = Field(default_factory=VehicleDetails)
-    trailer: VehicleDetails = Field(default_factory=VehicleDetails)
-    driver: DriverDetails = Field(default_factory=DriverDetails)
-    image_roles: list[ImageClassification] = Field(default_factory=list, description="Классификация каждого фото")
-
-
-# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
-
-class VehicleDetails(BaseModel):
-    brand_model: str = Field(description="Марка и модель ТС (например: DAF XF 105)")
-    plate: str = Field(description="Гос. номер ТС")
-    vin: str = Field(description="VIN номер (17 символов)")
-    country: str = Field(description="Страна регистрации ТС")
-
-class DocumentDetails(BaseModel):
-    number: str = Field(description="Номер документа")
-    issue_date: str = Field(description="Дата выдачи")
-    authority: str = Field(description="Орган выдачи документа (Приоритет - русский язык)")
-    country: str = Field(description="Страна выдачи документа")
-
-class DriverDetails(BaseModel):
-    full_name: str = Field(description="ФИО водителя (Приоритет - русский язык)")
-    birth_date: str = Field(description="Дата рождения водителя")
-    phones: str = Field(description="Номера телефонов (+7... первым, остальные через '/')")
-    passport: DocumentDetails
-    license: DocumentDetails
-
-class ImageClassification(BaseModel):
-    image_index: int = Field(description="Порядковый номер изображения, начиная с 0")
-    category: str = Field(
-        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
-    )
-
-class FullCargoSubmission(BaseModel):
-    truck: VehicleDetails
-    trailer: VehicleDetails
-    driver: DriverDetails
-    image_roles: list[ImageClassification]
-
-
 from typing import Optional
 
-# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
+# ==================== СХЕМЫ PYDANTIC И ИИ-АГЕНТ ====================
 
 class VehicleDetails(BaseModel):
     brand_model: Optional[str] = Field(default="Не распознан", description="Марка и модель ТС")
@@ -759,49 +647,13 @@ class VehicleDetails(BaseModel):
 class DocumentDetails(BaseModel):
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
-    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа (Приоритет - русский язык)")
+    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи документа в оригинальном написании")
     country: Optional[str] = Field(default="Не распознана", description="Страна выдачи документа")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя (Приоритет - русский язык)")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя в оригинальном написании (не переводить)")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения водителя")
     phones: Optional[str] = Field(default="Не указан", description="Номера телефонов (+7... первым, остальные через '/')")
-    passport: Optional[DocumentDetails] = None
-    license: Optional[DocumentDetails] = None
-
-class ImageClassification(BaseModel):
-    image_index: int = Field(description="Порядковый номер изображения, начиная с 0")
-    category: str = Field(
-        description="Категория: 'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'"
-    )
-
-class FullCargoSubmission(BaseModel):
-    truck: Optional[VehicleDetails] = None
-    trailer: Optional[VehicleDetails] = None
-    driver: Optional[DriverDetails] = None
-    image_roles: Optional[list[ImageClassification]] = None
-
-
-from typing import Optional
-
-# ==================== СХЕМЫ, ИИ-АГЕНТ И ГЕНЕРАЦИЯ PDF ====================
-
-class VehicleDetails(BaseModel):
-    brand_model: Optional[str] = Field(description="Марка и модель ТС")
-    plate: Optional[str] = Field(description="Гос. номер ТС")
-    vin: Optional[str] = Field(description="VIN номер")
-    country: Optional[str] = Field(description="Страна регистрации ТС")
-
-class DocumentDetails(BaseModel):
-    number: Optional[str] = Field(description="Номер документа")
-    issue_date: Optional[str] = Field(description="Дата выдачи")
-    authority: Optional[str] = Field(description="Орган выдачи документа в оригинальном написании")
-    country: Optional[str] = Field(description="Страна выдачи документа")
-
-class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(description="ФИО водителя. ВНИМАНИЕ: НЕ переводи на русский! Используй написание с документа (русский -> латиница -> оригинальный язык)")
-    birth_date: Optional[str] = Field(description="Дата рождения водителя")
-    phones: Optional[str] = Field(description="Номера телефонов (+7... первым, остальные через '/')")
     passport: Optional[DocumentDetails] = None
     license: Optional[DocumentDetails] = None
 
@@ -816,7 +668,7 @@ class FullCargoSubmission(BaseModel):
     trailer: Optional[VehicleDetails] = None
     driver: Optional[DriverDetails] = None
     image_roles: Optional[list[ImageClassification]] = None
-
+    
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
     """Распознает документы через Gemini и возвращает структурированный словарь + отсортированные файлы."""
@@ -884,6 +736,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     response = None
     models_to_try = [
         "gemini-3.6-flash",
+        "gemini-3.0-flash",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash"
@@ -998,11 +851,13 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         }
 
         page_priorities = {}
-        for role in (raw_json.get("image_roles") or []):
-            idx = role.get("image_index")
-            cat = role.get("category", "other")
-            if idx is not None and 0 <= idx < total_pages:
-                page_priorities[idx] = priority_map.get(cat, 99)
+        image_roles = raw_json.get("image_roles") if isinstance(raw_json, dict) else []
+        for role in (image_roles or []):
+            if isinstance(role, dict):
+                idx = role.get("image_index")
+                cat = role.get("category", "other")
+                if idx is not None and 0 <= idx < total_pages:
+                    page_priorities[idx] = priority_map.get(cat, 99)
 
         sorted_indices = sorted(range(total_pages), key=lambda i: page_priorities.get(i, 99))
 
