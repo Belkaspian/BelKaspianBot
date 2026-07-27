@@ -57,7 +57,7 @@ if GEMINI_API_KEY and HAS_GENAI:
     except Exception as e:
         logging.error(f"❌ Ошибка инициализации Gemini Client: {e}")
 else:
-    logging.warning("⚠️ GEMINI_API_KEY не установлен или google-genai не импортирован. ИИ отключен.")
+    logging.warning("⚠️ GEMINI_API_KEY не установлен или google-genai не импортирован.")
 
 ADMIN_CHANNEL_ID_RAW = os.getenv("ADMIN_CHANNEL_ID", "-1004271518848")
 try:
@@ -96,6 +96,26 @@ def is_convert_allowed(user: types.User) -> bool:
     if ADMIN_ID and str(user.id) == str(ADMIN_ID):
         return True
     return False
+
+# ==================== ОПРЕДЕЛЕНИЕ ТИПА ФАЙЛА ПО MAGIC BYTES ====================
+def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
+    """Точное определение MIME-типа файла по его сигнатуре (Magic Bytes)"""
+    if file_bytes.startswith(b'%PDF'):
+        return "application/pdf"
+    elif file_bytes.startswith(b'\x89PNG'):
+        return "image/png"
+    elif file_bytes.startswith(b'\xff\xd8'):
+        return "image/jpeg"
+    elif file_bytes.startswith(b'RIFF') and file_bytes[8:12] == b'WEBP':
+        return "image/webp"
+
+    if file_path:
+        fp = file_path.lower()
+        if fp.endswith('.pdf'): return "application/pdf"
+        if fp.endswith('.png'): return "image/png"
+        if fp.endswith('.webp'): return "image/webp"
+
+    return "image/jpeg"
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -677,7 +697,6 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
     except Exception:
         pass
 
-
 # ==================== ИИ GEMINI & СКАНЕР ДОКУМЕНТОВ ====================
 
 class VehicleDetails(BaseModel):
@@ -697,7 +716,7 @@ class DocumentDetails(BaseModel):
 class DriverDetails(BaseModel):
     full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
-    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов")
+    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
     passport: Optional[DocumentDetails] = None
     license: Optional[DocumentDetails] = None
 
@@ -768,12 +787,12 @@ def four_point_transform(image, pts):
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
     return warped
 
-def enhance_image_to_scan(image_bytes: bytes) -> bytes:
+async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
     """
-    Профессиональный сканер документов:
-    1. Поиск контуров и перспективное выравнивание (4-point transform).
-    2. Фоновое удаление теней и бликов (Illumination Correction).
-    3. Повышение резкости (Unsharp Mask) и контраста текстов/печатей.
+    ИИ-Агент сканера документов:
+    1. Использовать Gemini Vision для точного определения 4 углов документа (даже под углом/смятый).
+    2. Выполнить обрезку и перспективное выравнивание (four_point_transform).
+    3. Повысить чёткость текста, убрать тени, выровнять фоновое освещение.
     """
     try:
         import cv2
@@ -785,51 +804,98 @@ def enhance_image_to_scan(image_bytes: bytes) -> bytes:
             return image_bytes
 
         orig_h, orig_w = img.shape[:2]
+        corners = None
 
-        # --- ШАГ 1: ПОИСК КОНТУРА И ПЕРСПЕКТИВНОЕ ВЫРАВНИВАНИЕ ---
-        ratio = orig_h / 800.0
-        small_h = 800
-        small_w = int(orig_w / ratio)
-        resized = cv2.resize(img, (small_w, small_h))
+        # ШАГ 1: ИИ-АГЕНТ ДЛЯ ОПРЕДЕЛЕНИЯ 4 УГЛОВ ДОКУМЕНТА
+        if GEMINI_API_KEY and gemini_client and HAS_GENAI:
+            try:
+                models_to_try = [
+                    "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"
+                ]
+                
+                scan_prompt = (
+                    "Ты — ИИ‑агент, определяющий границы документа на изображении. "
+                    "Определи 4 реальных угла листа документа (верхний-левый, верхний-правый, нижний-правый, нижний-левый). "
+                    "Верни строго JSON со списком углов: {\"corners\": [[y1, x1], [y2, x2], [y3, x3], [y4, x4]]}, "
+                    "где координаты y и x нормированы от 0 до 1000."
+                )
 
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+                part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+                config = genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.0
+                )
 
-        edged = cv2.Canny(blur, 30, 150)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+                response = None
+                for m_name in models_to_try:
+                    try:
+                        if hasattr(gemini_client, 'aio'):
+                            response = await gemini_client.aio.models.generate_content(
+                                model=m_name, contents=[part, scan_prompt], config=config
+                            )
+                        else:
+                            response = await asyncio.to_thread(
+                                gemini_client.models.generate_content,
+                                model=m_name, contents=[part, scan_prompt], config=config
+                            )
+                        if response and response.text:
+                            break
+                    except Exception:
+                        pass
 
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+                if response and response.text:
+                    raw_text = response.text.strip()
+                    match_json = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    if match_json:
+                        parsed = json.loads(match_json.group(0))
+                        c_list = parsed.get("corners")
+                        if c_list and len(c_list) == 4:
+                            pts_px = []
+                            for point in c_list:
+                                y_px = float(point[0]) * orig_h / 1000.0
+                                x_px = float(point[1]) * orig_w / 1000.0
+                                pts_px.append([x_px, y_px])
+                            corners = np.array(pts_px, dtype="float32")
+            except Exception as e_ai:
+                logging.warning(f"Scan AI Agent corner detection error: {e_ai}")
 
-        doc_cnt = None
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < (small_w * small_h * 0.12):
-                continue
+        # ШАГ 2: ВЫРАВНИВАНИЕ ПЕРСПЕКТИВЫ (РЕЗЕРВНЫЙ ПОИСК КОНТУРА, ЕСЛИ ИИ НЕ ВЕРНУЛ ТОЧКИ)
+        if corners is not None:
+            warped = four_point_transform(img, corners)
+        else:
+            ratio = orig_h / 800.0
+            small_h = 800
+            small_w = int(orig_w / ratio)
+            resized = cv2.resize(img, (small_w, small_h))
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            edged = cv2.Canny(blur, 30, 150)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
 
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4:
-                doc_cnt = approx
-                break
-            elif len(approx) > 4:
-                hull = cv2.convexHull(c)
-                hull_peri = cv2.arcLength(hull, True)
-                hull_approx = cv2.approxPolyDP(hull, 0.03 * hull_peri, True)
-                if len(hull_approx) == 4:
-                    doc_cnt = hull_approx
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+            doc_cnt = None
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area < (small_w * small_h * 0.10):
+                    continue
+                peri = cv2.arcLength(c, True)
+                approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+                if len(approx) == 4:
+                    doc_cnt = approx
                     break
 
-        if doc_cnt is not None:
-            pts = doc_cnt.reshape(4, 2) * ratio
-            warped = four_point_transform(img, pts)
-        else:
-            crop_y = int(orig_h * 0.02)
-            crop_x = int(orig_w * 0.02)
-            warped = img[crop_y:orig_h-crop_y, crop_x:orig_w-crop_x]
+            if doc_cnt is not None:
+                pts = doc_cnt.reshape(4, 2) * ratio
+                warped = four_point_transform(img, pts)
+            else:
+                crop_y = int(orig_h * 0.02)
+                crop_x = int(orig_w * 0.02)
+                warped = img[crop_y:orig_h-crop_y, crop_x:orig_w-crop_x]
 
-        # --- ШАГ 2: УДАЛЕНИЕ ТЕНЕЙ И ВЫРАВНИВАНИЕ ФОНА ---
+        # ШАГ 3: ОБРАБОТКА ИЗОБРАЖЕНИЯ (MAGIC COLOR SCAN, УДАЛЕНИЕ ТЕНЕЙ, ПОВЫШЕНИЕ РЕЗКОСТИ)
         rgb_planes = cv2.split(warped)
         result_planes = []
 
@@ -842,13 +908,14 @@ def enhance_image_to_scan(image_bytes: bytes) -> bytes:
 
         scanned_color = cv2.merge(result_planes)
 
-        # --- ШАГ 3: ПОВЫШЕНИЕ РЕЗКОСТИ И ЧЁТКОСТИ ТЕКСТА ---
+        # Повышение резкости текста (Unsharp Mask)
         gaussian_blur = cv2.GaussianBlur(scanned_color, (0, 0), 3)
         sharpened = cv2.addWeighted(scanned_color, 1.6, gaussian_blur, -0.6, 0)
 
+        # Локальный контраст (CLAHE)
         lab = cv2.cvtColor(sharpened, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
         cl = clahe.apply(l)
         final_lab = cv2.merge((cl, a, b))
         final_scanned = cv2.cvtColor(final_lab, cv2.COLOR_LAB2BGR)
@@ -857,21 +924,25 @@ def enhance_image_to_scan(image_bytes: bytes) -> bytes:
         return encoded_img.tobytes()
 
     except Exception as e:
-        logging.error(f"Error in OpenCV scan enhancement: {e}")
-        try:
-            pil_img = Image.open(io.BytesIO(image_bytes))
-            pil_img = ImageOps.exif_transpose(pil_img)
-            if pil_img.mode != 'RGB':
-                pil_img = pil_img.convert('RGB')
-            enhancer_c = ImageEnhance.Contrast(pil_img)
-            pil_img = enhancer_c.enhance(1.6)
-            enhancer_s = ImageEnhance.Sharpness(pil_img)
-            pil_img = enhancer_s.enhance(2.0)
-            out = io.BytesIO()
-            pil_img.save(out, format="JPEG", quality=92)
-            return out.getvalue()
-        except Exception:
-            return image_bytes
+        logging.error(f"Error in scan_document_with_ai_agent: {e}")
+        return image_bytes
+
+def get_category_priority(cat_str: str) -> int:
+    """Возвращает числовой приоритет сортировки документов:
+    1: Паспорт
+    2: Водительские права
+    3: Техпаспорт тягача
+    4: Техпаспорт прицепа
+    5: Прочие документы
+    """
+    s = str(cat_str).lower().strip()
+    if 'passport_front' in s or 'паспорт_лиц' in s: return 10
+    if 'passport' in s or 'паспорт' in s: return 15
+    if 'license_front' in s or 'права_лиц' in s: return 20
+    if 'license' in s or 'права' in s or 'водительск' in s: return 25
+    if 'truck' in s or 'тягач' in s or 'стс_тягач' in s: return 30
+    if 'trailer' in s or 'прицеп' in s or 'стс_прицеп' in s: return 40
+    return 90
 
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
     fallback_text = (
@@ -890,8 +961,13 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         return fallback_text, all_files, {}
 
     contents = []
-    if text_notes:
-        contents.append(f"Заметки и номера от водителя: {text_notes}")
+    # Добавляем текстовый промпт прямо в массив contents для принудительного распознавания изображений
+    user_instruction = (
+        "Внимательно изучи все прикреплённые документы и фотографии. "
+        "Определи и извлеки данные по водителям, паспортам, правам, тягачам и прицепам. "
+        f"Дополнительные примечания водителя: {text_notes or 'Нет'}"
+    )
+    contents.append(user_instruction)
 
     for file_id in all_files:
         try:
@@ -900,34 +976,29 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
             await bot.download_file(file_info.file_path, destination=buf)
             file_bytes = buf.getvalue()
 
-            mime_type = "image/jpeg"
-            if file_info.file_path:
-                fp_lower = file_info.file_path.lower()
-                if fp_lower.endswith('.png'):
-                    mime_type = "image/png"
-                elif fp_lower.endswith('.pdf'):
-                    mime_type = "application/pdf"
-
+            mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
             contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+            logging.info(f"📄 Добавлен файл для ИИ: {file_info.file_path}, mime: {mime_type}, размер: {len(file_bytes)} байт")
         except Exception as e:
             logging.error(f"Error downloading document for AI: {e}")
 
-    if not contents:
+    if len(contents) <= 1:
         return fallback_text, all_files, {}
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
         "1. Распознавай данные с 100% точностью!\n"
-        "2. Марки ТС: В свидетельствах о регистрации ТС обязательно проверяй графу 2 ('Марка, модель' / 'RUSUMI / MODELI'). "
+        "2. Внимательно извлекай данные из всех страниц присланных PDF-файлов и фотографий.\n"
+        "3. Марки ТС: В свидетельствах о регистрации ТС обязательно проверяй графу 2 ('Марка, модель' / 'RUSUMI / MODELI'). "
         "Строго разделяй марку (brand) и модель (model).\n"
         "Примеры марок прицепов: KRONE, WIELTON, SCHMITZ CARGOBULL, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ.\n"
         "Примеры марок тягачей: MAN, DAF, VOLVO, SCANIA, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
-        "3. Номера телефонов: Если в заметках/тексте от водителя передан номер телефона — ОБЯЗАТЕЛЬНО внеси его в поле 'phones' водителя.\n"
-        "4. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
-        "5. Даты окончания документов: Обязательно извлекай expiry_date (срок действия) для паспорта и водительских прав при наличии.\n"
-        "6. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
+        "4. Номера телефонов: Если в заметках от водителя ИЛИ на любых документах/печатях указан телефон — ОБЯЗАТЕЛЬНО внеси его в поле 'phones' водителя.\n"
+        "5. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
+        "6. Даты окончания документов: Обязательно извлекай expiry_date (срок действия) для паспорта и водительских прав при наличии.\n"
+        "7. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "7. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
+        "8. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -939,6 +1010,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     response = None
     models_to_try = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
         "gemini-1.5-pro"
@@ -960,15 +1032,14 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                     config=config
                 )
             if response and response.text:
-                logging.info(f"✅ Gemini ответил на модели {model_name}")
+                logging.info(f"✅ Gemini успешно обработал документы на модели: {model_name}")
                 break
         except Exception as e:
-            logging.warning(f"⚠️ Модель {model_name} недоступна: {e}")
+            logging.warning(f"⚠️ Модель {model_name} недоступна или выдала ошибку: {e}")
 
     if response and response.text:
         try:
             raw_text = response.text.strip()
-            # Очистка Markdown разметки ```json ... ``` для предотвращения JSONDecodeError
             if "```" in raw_text:
                 raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.MULTILINE)
                 raw_text = re.sub(r"\s*```$", "", raw_text, flags=re.MULTILINE)
@@ -1024,22 +1095,14 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                     f"Водительское: {license_str}"
                 )
 
-            priority_map = {
-                "passport_front": 1, "passport_back": 2,
-                "license_front": 3, "license_back": 4,
-                "truck_front": 5, "trailer_front": 6,
-                "truck_back": 7, "trailer_back": 8,
-                "other": 99
-            }
-
             classified_file_priority = {}
             for role in raw_json.get("image_roles") or []:
                 idx = role.get("image_index")
                 cat = role.get("category", "other")
                 if idx is not None and 0 <= idx < len(all_files):
-                    classified_file_priority[all_files[idx]] = priority_map.get(cat, 99)
+                    classified_file_priority[all_files[idx]] = get_category_priority(cat)
 
-            sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 99))
+            sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 90))
 
             return formatted_output, sorted_files, raw_json
         except Exception as e:
@@ -1058,14 +1121,6 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         reader = PdfReader(buf)
         total_pages = len(reader.pages)
 
-        priority_map = {
-            "passport_front": 1, "passport_back": 2,
-            "license_front": 3, "license_back": 4,
-            "truck_front": 5, "trailer_front": 6,
-            "truck_back": 7, "trailer_back": 8,
-            "other": 99
-        }
-
         page_priorities = {}
         image_roles = raw_json.get("image_roles") if isinstance(raw_json, dict) else []
         for role in (image_roles or []):
@@ -1073,9 +1128,9 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
                 idx = role.get("image_index")
                 cat = role.get("category", "other")
                 if idx is not None and 0 <= idx < total_pages:
-                    page_priorities[idx] = priority_map.get(cat, 99)
+                    page_priorities[idx] = get_category_priority(cat)
 
-        sorted_indices = sorted(range(total_pages), key=lambda i: page_priorities.get(i, 99))
+        sorted_indices = sorted(range(total_pages), key=lambda i: page_priorities.get(i, 90))
 
         writer = PdfWriter()
         for idx in sorted_indices:
@@ -1090,6 +1145,7 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         return None
 
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
+    """Генерация единого PDF с пред-обработкой и обрезкой ИИ-сканером каждого фото"""
     buffer = io.BytesIO()
     images = []
 
@@ -1098,16 +1154,19 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             file_info = await bot.get_file(pid)
             buf = io.BytesIO()
             await bot.download_file(file_info.file_path, destination=buf)
-            buf.seek(0)
+            raw_bytes = buf.getvalue()
 
-            img = Image.open(buf)
+            # Сканирование, выравнивание перспектив и увеличение чёткости текста ИИ-сканером
+            scanned_bytes = await scan_document_with_ai_agent(raw_bytes)
+
+            img = Image.open(io.BytesIO(scanned_bytes))
             img = ImageOps.exif_transpose(img)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
             images.append(img)
         except Exception as e:
-            logging.error(f"Error converting file {pid} for PDF: {e}")
+            logging.error(f"Error processing photo {pid} for PDF scan report: {e}")
 
     if images:
         images[0].save(
@@ -1436,7 +1495,7 @@ async def cmd_make_scan_start(event: types.Message | types.CallbackQuery, state:
     prompt = (
         "📸 **Режим «Сделать скан»**\n\n"
         "Отправьте фото документа в этот чат.\n"
-        "Система автоматически найдет границы, выровняет перспективу, уберет тени и повысит резкость текста.\n\n"
+        "ИИ-Агент автоматически найдет границы листа, выровняет перспективу, уберет тени и повысит чёткость текста.\n\n"
         "⚠️ *Все тексты, подписи и печати сохраняются в точности без изменений.*"
     )
     builder = ReplyKeyboardBuilder()
@@ -1455,7 +1514,7 @@ async def cancel_make_scan(message: types.Message, state: FSMContext):
 
 @dp.message(ScanStates.waiting_for_photo, F.photo)
 async def process_scan_photo(message: types.Message, state: FSMContext):
-    status_msg = await message.answer("🔄 Обработка фото, выравнивание перспектив и создание скана...")
+    status_msg = await message.answer("🔄 ИИ-Агент сканирует документ и выравнивает геометрию...")
     try:
         photo = message.photo[-1]
         file_info = await bot.get_file(photo.file_id)
@@ -1463,7 +1522,7 @@ async def process_scan_photo(message: types.Message, state: FSMContext):
         await bot.download_file(file_info.file_path, destination=buf)
         orig_bytes = buf.getvalue()
 
-        enhanced_bytes = await asyncio.to_thread(enhance_image_to_scan, orig_bytes)
+        enhanced_bytes = await scan_document_with_ai_agent(orig_bytes)
 
         doc_file = types.BufferedInputFile(enhanced_bytes, filename="Document_Scan.jpg")
         await message.answer_document(document=doc_file, caption="✅ Скан документа готов!")
@@ -1495,7 +1554,7 @@ async def cmd_convert_data_start(event: types.Message | types.CallbackQuery, sta
         "🔄 **Преобразование данных (автономно)**\n\n"
         "Присылайте фото документов, PDF-файлы или текстовые заметки.\n"
         "Когда все файлы будут загружены, нажмите **«✅ Завершить и отправить»**.\n"
-        "ИИ распознает данные, сгенерирует 1 готовый PDF и отправит в канал логистов."
+        "ИИ распознает данные, отсканирует и отсортирует страницы (Паспорт ➔ Права ➔ Тягач ➔ Прицеп), сгенерирует 1 готовый PDF и отправит в канал логистов."
     )
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="✅ Завершить и отправить"))
@@ -1538,7 +1597,7 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не прислали ни одного фото/файла или заметки.")
         return
 
-    status_msg = await message.answer("🔄 ИИ распознает документы и собирает PDF...")
+    status_msg = await message.answer("🔄 ИИ распознает документы, выполняет кадрирование сканов и сортирует страницы в PDF...")
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False)
 
