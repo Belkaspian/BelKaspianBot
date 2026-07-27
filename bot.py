@@ -2575,21 +2575,12 @@ async def my_loads_api(request):
                 "weight": weight,
                 "is_today": is_today,
                 "is_archived": is_archived,
-                "docs_submitted": False
+                "docs_submitted": False,
+                "docs_status": "NONE",
+                "missing_docs": ""
             })
 
     for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub = r
-        try:
-            qty = int(re.search(r'\d+', str(cars_count)).group(0))
-        except Exception:
-            qty = 1
-
-        c_date = parse_cargo_date(date_str)
-        is_today = (c_date and c_date == msk_today)
-        is_archived = (c_date and msk_today > c_date)
-
-        for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs = r
         try:
             qty = int(re.search(r'\d+', str(cars_count)).group(0))
