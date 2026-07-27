@@ -65,6 +65,12 @@ try:
 except ValueError:
     ADMIN_CHANNEL_ID = -1004271518848
 
+DOCS_CHANNEL_ID_RAW = os.getenv("DOCS_CHANNEL_ID", "-1003928614238")
+try:
+    DOCS_CHANNEL_ID = int(DOCS_CHANNEL_ID_RAW)
+except ValueError:
+    DOCS_CHANNEL_ID = -1003928614238
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -1433,17 +1439,17 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
 
     try:
         # 1. Отправляем текстовый отчет логисту
-        await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
         # 2. Если исходно выслали PDF
         if documents:
             sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
             if sorted_pdf_buf:
                 pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
-                await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=pdf_file, caption=file_caption)
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
             else:
                 for doc_id in documents:
-                    await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=doc_id, caption=file_caption)
+                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption=file_caption)
 
         # 3. Если выслали фото — собираем отсортированный PDF
         elif photos:
@@ -1452,7 +1458,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             if pdf_bytes:
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(
-                    chat_id=ADMIN_CHANNEL_ID, 
+                    chat_id=DOCS_CHANNEL_ID, 
                     document=pdf_file, 
                     caption=file_caption
                 )
