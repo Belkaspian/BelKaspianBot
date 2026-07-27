@@ -720,14 +720,16 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
         "1. Распознавай данные с 100% точностью!\n"
-        "2. Марки ТС: строго разделяй марку (brand) и модель (model). Внимательно проверяй орфографию! "
-        "Примеры марок прицепов: WIELTON (СТРОГО WIELTON, не Welton!), SCHMITZ CARGOBULL, KRONE, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ. "
-        "Примеры марок тягачей: DAF, VOLVO, SCANIA, MAN, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
-        "3. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
-        "4. Даты окончания документов: Обязательно извлекай expiry_date (срок действия / дата окончания) для паспорта и водительских прав при наличии.\n"
-        "5. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
+        "2. Марки ТС: В свидетельствах о регистрации ТС (техпаспортах) обязательно проверяй графу 2 ('Марка, модель' / 'RUSUMI / MODELI'). "
+        "Строго разделяй марку (brand) и модель (model).\n"
+        "Примеры марок прицепов: KRONE, WIELTON (СТРОГО WIELTON, не Welton!), SCHMITZ CARGOBULL, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ.\n"
+        "Примеры марок тягачей: MAN, DAF, VOLVO, SCANIA, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
+        "3. Номера телефонов: Если в заметках/тексте от водителя передан номер телефона — ОБЯЗАТЕЛЬНО внеси его в поле 'phones' водителя.\n"
+        "4. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
+        "5. Даты окончания документов: Обязательно извлекай expiry_date (срок действия / дата окончания) для паспорта и водительских прав при наличии.\n"
+        "6. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
         "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "6. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
+        "7. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -779,26 +781,44 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
             l = d.get("license") or {}
 
             # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
+            # Обработка номеров телефонов с приоритетом заметок водителя
+            raw_phones = (d.get("phones") or "").strip()
+            if not raw_phones or raw_phones.lower() in ["не указан", "не распознан"]:
+                phones_str = text_notes.strip() if text_notes else "Не указан"
+            else:
+                phones_str = raw_phones
+
+            # Функция сборки марки и модели ТС
+            def build_brand_str(v_dict, show_model=True):
+                b = (v_dict.get('brand') or v_dict.get('brand_model') or '').strip()
+                m = (v_dict.get('model') or '').strip()
+                if not b and not m:
+                    return 'Не распознан'
+                if not b:
+                    return m
+                if show_model and m and m.lower() not in b.lower():
+                    return f"{b} {m}"
+                return b
+
+            # Форматирование текста под категорию груза (Полиэтилен vs Обычный)
             if is_polyethylene:
-                # ДЛЯ ПОЛИЭТИЛЕНА: Берём ТОЛЬКО марку (без модели!)
-                truck_brand = (t.get('brand') or t.get('brand_model') or 'Не распознан').strip()
-                trailer_brand = (tr.get('brand') or tr.get('brand_model') or 'Не распознан').strip()
+                truck_brand = build_brand_str(t, show_model=False)
+                trailer_brand = build_brand_str(tr, show_model=False)
 
                 formatted_output = (
                     f"ТС (марка, г/н, страна регистрации): {truck_brand}, {t.get('plate') or 'Не распознан'}, {t.get('country') or 'Не распознана'}\n"
                     f"Прицеп (марка, г/н, страна регистрации): {trailer_brand}, {tr.get('plate') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}\n"
                     f"ФИО водителя: {d.get('full_name') or 'Не распознан'}\n"
-                    f"Тел (росс): {d.get('phones') or text_notes or 'Не указан'}\n"
+                    f"Тел (росс): {phones_str}\n"
                     f"Водительское удостоверение (№, когда и кем выдано): № {l.get('number') or 'Не распознан'} от {l.get('issue_date') or 'Не распознана'}г. {l.get('country') or 'Не распознана'}\n"
                     f"Паспорт (серия, №, когда и кем выдан): № {p.get('number') or 'Не распознан'} выдан {p.get('issue_date') or 'Не распознана'}г. {p.get('authority') or 'Не распознан'}"
                 )
             else:
-                truck_str = f"{t.get('brand_model') or 'Не распознан'}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
-                trailer_str = f"{tr.get('brand_model') or 'Не распознан'}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
+                truck_str = f"{build_brand_str(t, show_model=True)}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
+                trailer_str = f"{build_brand_str(tr, show_model=True)}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
                 driver_str = f"{d.get('full_name') or 'Не распознан'}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
-                phones_str = d.get("phones") or text_notes or "Не указан"
-                passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}, {p.get('country') or 'Не распознана'}"
-                license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('authority') or 'Не распознан'}, {l.get('country') or 'Не распознана'}"
+                passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}"
+                license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('country') or 'Не распознана'}"
 
                 formatted_output = (
                     f"Тягач: {truck_str}\n"
