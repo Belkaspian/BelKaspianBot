@@ -35,6 +35,12 @@
             --warning-light: rgba(217, 119, 6, 0.1);
             --error: #dc2626;
             --error-light: rgba(220, 38, 38, 0.1);
+
+            /* Пастельные цвета для статусов подач */
+            --card-warning-bg: #fffbeb;
+            --card-warning-border: #fde68a;
+            --card-success-bg: #f0fdf4;
+            --card-success-border: #a7f3d0;
             
             --shadow-sm: 0 2px 4px 0 rgba(15, 23, 42, 0.04);
             --shadow-md: 0 4px 12px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
@@ -64,6 +70,11 @@
             --warning-light: rgba(251, 191, 36, 0.15);
             --error: #f87171;
             --error-light: rgba(248, 113, 113, 0.15);
+
+            --card-warning-bg: rgba(245, 158, 11, 0.12);
+            --card-warning-border: rgba(245, 158, 11, 0.35);
+            --card-success-bg: rgba(16, 185, 129, 0.12);
+            --card-success-border: rgba(16, 185, 129, 0.35);
             
             --shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);
             --shadow-md: 0 6px 16px -2px rgba(0, 0, 0, 0.4);
@@ -102,7 +113,6 @@
             flex-shrink: 0;
         }
 
-        /* Анимации перехода страниц */
         .page-transition {
             animation: pageSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
         }
@@ -148,7 +158,6 @@
             transition: filter 0.25s ease;
         }
 
-        /* Конвертация логотипа с сохранением голубого цвета буквы S */
         [data-theme="light"] .header-logo-img {
             filter: invert(0.85) hue-rotate(180deg) saturate(200%);
         }
@@ -230,10 +239,6 @@
             box-shadow: 0 4px 12px var(--primary-light);
         }
 
-        .icon-btn:active {
-            transform: scale(0.92);
-        }
-
         .bell-badge {
             position: absolute;
             top: -3px;
@@ -256,7 +261,7 @@
             50% { transform: scale(1.15); }
         }
 
-        /* Главная Навигация */
+        /* Навигация */
         .main-nav {
             display: flex;
             gap: 4px;
@@ -296,11 +301,6 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        .nav-btn:active {
-            transform: scale(0.96);
-        }
-
-        /* Подразделы "Мои грузы" */
         .sub-nav {
             display: flex;
             gap: 6px;
@@ -329,18 +329,12 @@
         .sub-nav-btn:hover {
             border-color: var(--primary);
             color: var(--text);
-            transform: translateY(-1px);
         }
 
         .sub-nav-btn.active {
             background: var(--primary);
             color: #ffffff;
             border-color: var(--primary);
-            box-shadow: 0 3px 10px var(--primary-light);
-        }
-
-        .sub-nav-btn:active {
-            transform: scale(0.95);
         }
 
         .unloaded-sub-nav {
@@ -353,7 +347,6 @@
             padding: 6px 4px;
         }
 
-        /* Сортировка + Пирамидка + Лупа */
         .sort-search-bar {
             display: flex;
             align-items: center;
@@ -371,13 +364,7 @@
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
             box-shadow: var(--shadow-sm);
-            transition: var(--transition);
             height: 40px;
-        }
-
-        .sort-container:focus-within, .sort-container:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
         }
 
         .sort-dir-btn {
@@ -389,22 +376,10 @@
             cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 4px;
-            transition: var(--spring-transition);
             height: 30px;
+            transition: var(--spring-transition);
         }
 
-        .sort-dir-btn:hover {
-            background: var(--primary-light);
-            border-color: var(--primary);
-            transform: scale(1.04);
-        }
-
-        .sort-dir-btn:active {
-            transform: scale(0.92);
-        }
-
-        /* Плавный разворот иконки пирамидки */
         .pyramid-icon {
             transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
@@ -420,16 +395,11 @@
             max-width: 40px;
             height: 40px;
             overflow: hidden;
-            transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s, border-color 0.2s;
+            transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
             background: var(--surface-solid);
             border: 1px solid var(--border);
             border-radius: var(--radius-md);
             box-shadow: var(--shadow-sm);
-        }
-
-        .expandable-search:hover, .expandable-search.open {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
         }
 
         .expandable-search.open {
@@ -460,16 +430,7 @@
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            transition: var(--spring-transition);
             flex-shrink: 0;
-        }
-
-        .search-toggle-btn:hover { color: var(--primary); }
-        .search-toggle-btn:active { transform: scale(0.92); }
-
-        .search-toggle-btn .icon {
-            width: 18px;
-            height: 18px;
         }
 
         .qty-picker {
@@ -491,7 +452,6 @@
             flex: 1;
         }
 
-        /* ЭЛЕМЕНТЫ ВВОДА И СЕЛЕКТЫ С ПОЛНОЙ ПОДДЕРЖКОЙ ТЁМНОЙ ТЕМЫ */
         select, input[type="text"], input[type="password"], input[type="date"], textarea {
             width: 100%;
             background: var(--bg);
@@ -522,7 +482,7 @@
             color: var(--text);
         }
 
-        /* Фикс белого фона выпадающего списка на ПК / Мобильных в тёмной теме */
+        /* Исправление контраста выпадающего списка на ПК в тёмной теме */
         select option {
             background-color: var(--surface-solid);
             color: var(--text);
@@ -545,7 +505,7 @@
 
         .t-head {
             display: grid;
-            grid-template-columns: 75px 1fr 100px 20px;
+            grid-template-columns: 60px 1fr 80px 85px 20px;
             background: var(--bg);
             padding: 10px 12px;
             font-size: 10px;
@@ -556,28 +516,43 @@
             letter-spacing: 0.5px;
         }
 
+        .t-head.catalog-head {
+            grid-template-columns: 75px 1fr 90px 20px;
+        }
+
         .t-row {
             display: grid;
-            grid-template-columns: 75px 1fr 100px 20px;
+            grid-template-columns: 60px 1fr 80px 85px 20px;
             padding: 11px 12px;
             border-bottom: 1px solid var(--border);
             border-left: 3px solid transparent;
             align-items: center;
             cursor: pointer;
-            transition: background-color 0.18s ease, border-color 0.18s ease, padding 0.18s ease;
+            transition: background-color 0.18s ease;
+        }
+
+        .t-row.catalog-row {
+            grid-template-columns: 75px 1fr 90px 20px;
         }
 
         .t-row:hover {
             background: var(--surface-hover);
-            border-left-color: var(--primary);
-            padding-left: 14px;
         }
 
-        .t-row:last-child { border-bottom: none; }
+        .t-row.card-status-partial {
+            background-color: var(--card-warning-bg);
+            border-left-color: var(--warning);
+        }
+
+        .t-row.card-status-full {
+            background-color: var(--card-success-bg);
+            border-left-color: var(--success);
+        }
 
         .col-date { font-weight: 600; color: var(--text-muted); font-size: 11px; }
-        .col-route { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+        .col-route { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
         .col-price { font-weight: 700; color: var(--success); text-align: right; font-size: 12px; }
+        .col-truck { font-weight: 500; color: var(--text-muted); font-size: 10px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.25s ease; display: flex; justify-content: flex-end; }
 
         .t-row.expanded .col-arrow { transform: rotate(180deg); color: var(--primary); }
@@ -619,10 +594,10 @@
         .badge {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 9px;
-            border-radius: 6px;
-            font-size: 11px;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
             font-weight: 600;
             margin-bottom: 10px;
         }
@@ -631,16 +606,27 @@
         .badge-success { background: var(--success-light); color: var(--success); }
         .badge-warning { background: var(--warning-light); color: var(--warning); }
         .badge-primary { background: var(--primary-light); color: var(--primary); }
+        .badge-today { background: var(--primary-light); color: var(--primary); border: 1px solid var(--primary); }
 
         .admin-comment {
-            background: var(--warning-light);
+            background: var(--surface-solid);
             color: var(--text);
             padding: 8px 10px;
             border-radius: var(--radius-sm);
             margin-bottom: 10px;
-            border-left: 3px solid var(--warning);
-            font-size: 12px;
+            border-left: 3px solid var(--primary);
+            font-size: 11px;
             line-height: 1.4;
+        }
+
+        .missing-docs-box {
+            background: var(--warning-light);
+            color: var(--warning);
+            padding: 8px 10px;
+            border-radius: var(--radius-sm);
+            margin-bottom: 10px;
+            font-size: 11px;
+            font-weight: 500;
         }
 
         .buttons { display: flex; gap: 8px; }
@@ -662,27 +648,14 @@
             box-shadow: var(--shadow-sm);
         }
 
-        .btn:hover {
-            transform: translateY(-1px);
-            box-shadow: var(--shadow-md);
-        }
-
+        .btn:hover { transform: translateY(-1px); }
         .btn:active { transform: scale(0.95); }
 
         .btn-success { background: var(--success); }
-        .btn-success:hover { background: #047857; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25); }
-
         .btn-warning { background: var(--warning); color: #fff; }
-        .btn-warning:hover { background: #b45309; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25); }
-
         .btn-primary { background: var(--primary); }
-        .btn-primary:hover { background: var(--primary-hover); box-shadow: 0 4px 12px var(--primary-light); }
-
         .btn-secondary { background: var(--surface-solid); color: var(--text); border: 1px solid var(--border); }
-        .btn-secondary:hover { background: var(--surface-hover); border-color: var(--text-muted); }
-
         .btn-danger { background: var(--error); }
-        .btn-danger:hover { background: #b91c1c; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25); }
 
         .profile-card {
             background: var(--surface-solid);
@@ -691,10 +664,7 @@
             border: 1px solid var(--border);
             margin-bottom: 12px;
             box-shadow: var(--shadow-md);
-            transition: var(--transition);
         }
-
-        .profile-card:hover { box-shadow: var(--shadow-lg); }
 
         .profile-title {
             font-weight: 700;
@@ -726,8 +696,6 @@
         }
 
         .sub-chip {
-            position: relative;
-            overflow: hidden;
             background: var(--bg);
             padding: 8px 10px;
             border-radius: var(--radius-sm);
@@ -735,40 +703,17 @@
             font-size: 12px;
             font-weight: 500;
             cursor: pointer;
-            transition: var(--spring-transition);
             text-align: center;
             color: var(--text);
-            box-shadow: var(--shadow-sm);
         }
-
-        .sub-chip:hover { border-color: var(--primary); transform: translateY(-1px); }
-        .sub-chip:active { transform: scale(0.95); }
 
         .sub-chip.active {
             background: var(--primary);
             color: #ffffff;
             border-color: var(--primary);
             font-weight: 600;
-            box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        /* Переливающийся блеск для подписок */
-        .sub-chip::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-            opacity: 0;
-            transform: scale(0.5);
-            transition: opacity 0.3s ease, transform 0.3s ease;
-        }
-
-        .sub-chip:active::after {
-            opacity: 1;
-            transform: scale(1.2);
-        }
-
-        /* Пустое состояние (Empty State) */
         .empty-state {
             padding: 42px 20px;
             text-align: center;
@@ -776,19 +721,12 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         .empty-illustration-container {
-            width: 110px;
-            height: 65px;
-            margin-bottom: 16px;
-            animation: emptyFloat 3s ease-in-out infinite;
-        }
-
-        @keyframes emptyFloat {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-5px); }
+            width: 100px;
+            height: 50px;
+            margin-bottom: 14px;
         }
 
         .empty-illustration {
@@ -797,16 +735,16 @@
         }
 
         .empty-title {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
             color: var(--text);
-            margin-bottom: 6px;
+            margin-bottom: 4px;
         }
 
         .empty-desc {
             font-size: 11px;
             color: var(--text-muted);
-            max-width: 280px;
+            max-width: 260px;
             line-height: 1.4;
         }
 
@@ -820,15 +758,9 @@
             align-items: center;
             justify-content: center;
             padding: 16px;
-            animation: fadeIn 0.2s ease-out;
         }
 
         .modal-overlay.active { display: flex; }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
 
         .modal-card {
             background: var(--surface-solid);
@@ -840,12 +772,6 @@
             max-height: 85vh;
             overflow-y: auto;
             border: 1px solid var(--border);
-            animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        @keyframes modalPop {
-            from { opacity: 0; transform: scale(0.94) translateY(10px); }
-            to { opacity: 1; transform: scale(1) translateY(0); }
         }
 
         .modal-header {
@@ -863,11 +789,7 @@
             padding: 4px;
             border-radius: 50%;
             display: flex;
-            transition: var(--spring-transition);
         }
-
-        .modal-close:hover { background: var(--bg); color: var(--text); transform: scale(1.08); }
-        .modal-close:active { transform: scale(0.9); }
 
         .notif-item {
             background: var(--bg);
@@ -875,11 +797,8 @@
             border-radius: var(--radius-sm);
             padding: 10px 12px;
             margin-bottom: 8px;
-            box-shadow: var(--shadow-sm);
-            transition: var(--transition);
         }
 
-        .notif-item:hover { box-shadow: var(--shadow-md); }
         .notif-item.unread { border-left: 3px solid var(--primary); }
         .notif-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
         .notif-text { font-size: 11px; color: var(--text); line-height: 1.4; }
@@ -914,11 +833,8 @@
             text-align: center;
             background: var(--bg);
             cursor: pointer;
-            transition: var(--spring-transition);
             margin-bottom: 12px;
         }
-
-        .dropzone:hover { border-color: var(--primary); background: var(--primary-light); transform: translateY(-1px); }
 
         .file-preview-list {
             display: flex;
@@ -938,7 +854,6 @@
             font-size: 11px;
         }
 
-        /* Обновленные плавающие мини-уведомления (Float Top Toast) */
         .toast-container {
             position: fixed;
             top: 16px;
@@ -983,16 +898,6 @@
             from { opacity: 1; transform: translateY(0) scale(1); }
             to { opacity: 0; transform: translateY(-12px) scale(0.95); }
         }
-
-        .toast-icon {
-            width: 18px;
-            height: 18px;
-            flex-shrink: 0;
-        }
-
-        .toast-icon.success { color: var(--success); }
-        .toast-icon.error { color: var(--error); }
-        .toast-icon.info { color: var(--primary); }
 
         @media (min-width: 640px) {
             body { max-width: 600px; margin: 0 auto; }
@@ -1061,7 +966,7 @@
         <div class="sub-nav-btn" id="unloaded-paid" onclick="switchUnloadedSubTab('unloaded_paid')">Архив (Оплачены)</div>
     </div>
 
-    <!-- Блок Интерактивной Сортировки + Увеличенная Лупа Поиска -->
+    <!-- Блок Сортировки и Поиска -->
     <div class="sort-search-bar" id="sort-search-container">
         <div class="sort-container" id="sort-container">
             <button class="sort-dir-btn" id="sortDirBtn" onclick="toggleSortDirection()" title="Направление сортировки">
@@ -1073,7 +978,7 @@
             </button>
             <select id="sortSelect" onchange="loadData(false)">
                 <option value="date_load">По дате погрузки</option>
-                <option value="route">По маршруту / названию</option>
+                <option value="route">По маршруту</option>
                 <option value="newest" selected>По новизне</option>
                 <option value="price">По цене</option>
             </select>
@@ -1083,13 +988,13 @@
             <button class="search-toggle-btn" onclick="toggleSearchInput()" title="Поиск">
                 <svg class="icon" viewBox="0 0 24 24" id="searchBtnIcon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </button>
-            <input type="text" id="searchInput" placeholder="Поиск по маршруту, дате..." oninput="loadData(true)" />
+            <input type="text" id="searchInput" placeholder="Поиск по маршруту..." oninput="loadData(true)" />
         </div>
     </div>
 
     <!-- Реестр Грузов -->
     <div class="table-container page-transition" id="main-table">
-        <div class="t-head">
+        <div class="t-head catalog-head" id="tableHeader">
             <div>Дата</div>
             <div>Маршрут</div>
             <div style="text-align: right;">Ставка</div>
@@ -1191,6 +1096,43 @@
         </div>
     </div>
 
+    <!-- Модалка: Фиксация выгрузки -->
+    <div class="modal-overlay" id="unloadModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Фиксация выгрузки товара</div>
+                <div class="modal-close" onclick="closeModal('unloadModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="unloadDealId" />
+            <div class="form-group">
+                <label>Дата фактической выгрузки</label>
+                <input type="date" id="unloadDate" />
+            </div>
+            <div class="form-group">
+                <label>Документы (ТТН, CMR, Акт)</label>
+                <div class="dropzone" id="unloadDropzone" onclick="document.getElementById('unloadFiles').click()">
+                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <div style="font-weight: 600;">Выбрать файлы для загрузки</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">PDF, JPG, PNG до 10MB</div>
+                </div>
+                <input type="file" id="unloadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleFileSelect(event)" />
+            </div>
+            <div class="file-preview-list" id="filePreviewList"></div>
+            <div class="form-group">
+                <label>Заметки / Номер ТТН</label>
+                <textarea id="unloadNotes" placeholder="ТТН №123456..."></textarea>
+            </div>
+            <div class="buttons">
+                <button class="btn btn-success" onclick="submitUnloadData()">
+                    <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                    Подтвердить выгрузку
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Модалка: Редактирование Груза (Админка) -->
     <div class="modal-overlay" id="adminEditLoadModal">
         <div class="modal-card">
@@ -1285,7 +1227,6 @@
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">Сделки</div>
             </div>
 
-            <!-- Сортировка и Поиск в Админке -->
             <div class="sort-search-bar" id="admin-sort-search-container" style="margin-bottom: 10px;">
                 <div class="sort-container">
                     <button class="sort-dir-btn" id="adminSortDirBtn" onclick="toggleAdminSortDirection()" title="Направление сортировки">
@@ -1319,7 +1260,7 @@
         </div>
     </div>
 
-    <!-- Toast-уведомления (Верхние плавающие плашки) -->
+    <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
 
     <script>
@@ -1333,7 +1274,7 @@
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
-
+        let selectedFiles = [];
         let sortAscending = false;
         let adminSortAscending = false;
 
@@ -1345,103 +1286,30 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Синтез микро-звуков через Web Audio API
-        let audioCtx = null;
-        function getAudioContext() {
-            if (!audioCtx) {
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                if (AudioCtx) audioCtx = new AudioCtx();
-            }
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            return audioCtx;
-        }
-
-        function playUiSound(type = 'click') {
-            try {
-                const ctx = getAudioContext();
-                if (!ctx) return;
-
-                const now = ctx.currentTime;
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-
-                if (type === 'click') {
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(420, now);
-                    osc.frequency.exponentialRampToValueAtTime(200, now + 0.04);
-                    gain.gain.setValueAtTime(0.02, now);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
-                    osc.start(now);
-                    osc.stop(now + 0.04);
-                } else if (type === 'success') {
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(520, now);
-                    osc.frequency.setValueAtTime(659.25, now + 0.06);
-                    gain.gain.setValueAtTime(0.03, now);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
-                    osc.start(now);
-                    osc.stop(now + 0.25);
-                } else if (type === 'error') {
-                    osc.type = 'triangle';
-                    osc.frequency.setValueAtTime(280, now);
-                    osc.frequency.setValueAtTime(220, now + 0.08);
-                    gain.gain.setValueAtTime(0.04, now);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-                    osc.start(now);
-                    osc.stop(now + 0.22);
-                } else if (type === 'pop') {
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(784, now);
-                    gain.gain.setValueAtTime(0.025, now);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
-                    osc.start(now);
-                    osc.stop(now + 0.08);
-                }
-            } catch(e) {}
-
-            if (tg.HapticFeedback) {
-                if (type === 'click' || type === 'pop') tg.HapticFeedback.impactOccurred('light');
-                else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
-                else if (type === 'error') tg.HapticFeedback.notificationOccurred('error');
-            }
-        }
-
-        // ОБНОВЛЕННАЯ ВЕКТОРНАЯ ИЛЛЮСТРАЦИЯ ЕВРОФУРЫ ДЛЯ ПУСТОГО СОСТОЯНИЯ
+        // Минималистичный векторный европоезд (2 колеса тягач, 3 прицеп)
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 100 60" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <!-- Полуприцеп -->
-                            <rect x="5" y="15" width="56" height="27" rx="3" fill="var(--primary-light)" />
-                            <line x1="12" y1="15" x2="12" y2="42" stroke="var(--border)" stroke-width="1.5" />
-                            <line x1="5" y1="28" x2="61" y2="28" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 2" />
+                    <svg viewBox="0 0 100 50" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="6" y="10" width="56" height="26" rx="2" fill="var(--primary-light)" />
+                            <path d="M62 16 h16 l7 7 v13 h-23 v-20 z" fill="var(--surface-solid)" />
+                            <path d="M67 19 h9 l4 4 h-13 z" fill="var(--primary-light)" stroke-width="1.2" />
+                            <line x1="84" y1="32" x2="84" y2="35" stroke="var(--primary)" stroke-width="2" />
                             
-                            <!-- Кабина Тягача (ровная, евро-стиль) -->
-                            <path d="M61 21 h16 l8 8 v13 h-24 v-21 z" fill="var(--surface-solid)" />
-                            <!-- Лобовое и боковое стекло -->
-                            <path d="M66 24 h10 l5 5 h-15 z" fill="var(--primary-light)" />
+                            <circle cx="68" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
+                            <circle cx="79" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
                             
-                            <!-- Бампер и фары -->
-                            <line x1="85" y1="36" x2="85" y2="42" stroke="var(--primary)" stroke-width="2" />
+                            <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
+                            <circle cx="28" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
+                            <circle cx="38" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2"/>
                             
-                            <!-- Колёса -->
-                            <circle cx="16" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
-                            <circle cx="27" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
-                            <circle cx="48" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
-                            <circle cx="73" cy="44" r="4.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="2.2"/>
-                            
-                            <!-- Линия дороги -->
-                            <line x1="2" y1="49" x2="98" y2="49" stroke="var(--border)" stroke-width="2" />
+                            <line x1="2" y1="44" x2="98" y2="44" stroke="var(--border)" stroke-width="1.5" />
                         </g>
                     </svg>
                 </div>
                 <div class="empty-title">Активных заявок пока нет</div>
-                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями в течение дня.</div>
+                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
             </div>
         `;
 
@@ -1449,7 +1317,6 @@
             const img = document.getElementById('headerLogoImg');
             const fallback = document.getElementById('brandFallback');
             const titleText = document.getElementById('headerTitleText');
-            
             if (success) {
                 img.style.display = 'block';
                 fallback.style.display = 'none';
@@ -1465,8 +1332,7 @@
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('theme', theme);
             updateThemeButtons();
-            playUiSound('pop');
-            showToast(theme === 'dark' ? 'Активирована тёмная тема' : 'Активирована светлая тема', 'info');
+            showToast(theme === 'dark' ? 'Тёмная тема' : 'Светлая тема', 'info');
         }
 
         function updateThemeButtons() {
@@ -1474,35 +1340,24 @@
             const lightBtn = document.getElementById('theme-btn-light');
             const darkBtn = document.getElementById('theme-btn-dark');
             if (lightBtn && darkBtn) {
-                if (currentTheme === 'dark') {
-                    lightBtn.className = 'btn btn-secondary';
-                    darkBtn.className = 'btn btn-primary';
-                } else {
-                    lightBtn.className = 'btn btn-primary';
-                    darkBtn.className = 'btn btn-secondary';
-                }
+                lightBtn.className = currentTheme === 'dark' ? 'btn btn-secondary' : 'btn btn-primary';
+                darkBtn.className = currentTheme === 'dark' ? 'btn btn-primary' : 'btn btn-secondary';
             }
         }
 
         if (localStorage.getItem('theme') === 'dark') {
             document.documentElement.setAttribute('data-theme', 'dark');
-        } else {
-            document.documentElement.setAttribute('data-theme', 'light');
         }
 
         function toggleSortDirection() {
             sortAscending = !sortAscending;
-            const btn = document.getElementById('sortDirBtn');
-            btn.classList.toggle('asc', sortAscending);
-            playUiSound('pop');
+            document.getElementById('sortDirBtn').classList.toggle('asc', sortAscending);
             loadData(false);
         }
 
         function toggleAdminSortDirection() {
             adminSortAscending = !adminSortAscending;
-            const btn = document.getElementById('adminSortDirBtn');
-            btn.classList.toggle('asc', adminSortAscending);
-            playUiSound('pop');
+            document.getElementById('adminSortDirBtn').classList.toggle('asc', adminSortAscending);
             applyAdminFilters();
         }
 
@@ -1510,8 +1365,6 @@
             const searchBox = document.getElementById('expandableSearch');
             const searchInput = document.getElementById('searchInput');
             const icon = document.getElementById('searchBtnIcon');
-
-            playUiSound('click');
             searchBox.classList.toggle('open');
             if (searchBox.classList.contains('open')) {
                 searchInput.focus();
@@ -1527,8 +1380,6 @@
             const searchBox = document.getElementById('adminExpandableSearch');
             const searchInput = document.getElementById('adminSearchInput');
             const icon = document.getElementById('adminSearchBtnIcon');
-
-            playUiSound('click');
             searchBox.classList.toggle('open');
             if (searchBox.classList.contains('open')) {
                 searchInput.focus();
@@ -1540,26 +1391,12 @@
             }
         }
 
-        // Верхнее аккуратное тост-уведомление
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = 'toast';
-            
-            let iconSvg = '';
-            if (type === 'success') {
-                iconSvg = `<svg class="toast-icon success" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
-            } else if (type === 'error') {
-                iconSvg = `<svg class="toast-icon error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
-            } else {
-                iconSvg = `<svg class="toast-icon info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
-            }
-
-            toast.innerHTML = `${iconSvg}<span>${message}</span>`;
+            toast.innerHTML = `<span>${message}</span>`;
             container.appendChild(toast);
-
-            playUiSound(type === 'error' ? 'error' : (type === 'success' ? 'success' : 'pop'));
-
             setTimeout(() => {
                 toast.classList.add('hide');
                 setTimeout(() => toast.remove(), 260);
@@ -1567,23 +1404,18 @@
         }
 
         function closeModal(id) {
-            playUiSound('click');
             document.getElementById(id).classList.remove('active');
         }
 
         function askConfirm(text, callback) {
-            playUiSound('pop');
             const modal = document.getElementById('confirmModal');
             document.getElementById('confirmModalText').textContent = text;
             const yesBtn = document.getElementById('confirmModalYesBtn');
-            
             const handleYes = () => {
-                playUiSound('click');
                 closeModal('confirmModal');
                 yesBtn.removeEventListener('click', handleYes);
                 callback(true);
             };
-
             yesBtn.onclick = handleYes;
             modal.classList.add('active');
         }
@@ -1593,7 +1425,6 @@
             if (headerTimer) clearTimeout(headerTimer);
             if (headerClicks >= 5) {
                 headerClicks = 0;
-                playUiSound('pop');
                 if (sessionStorage.getItem('admin_authed') === 'true') {
                     openAdminPanel();
                 } else {
@@ -1620,7 +1451,7 @@
                     openAdminPanel();
                     showToast('Вход в админ-панель выполнен', 'success');
                 } else {
-                    showToast('Неверный пароль администратора', 'error');
+                    showToast('Неверный пароль', 'error');
                 }
             } catch(e) {
                 showToast('Ошибка авторизации', 'error');
@@ -1633,7 +1464,6 @@
         }
 
         function switchAdminSubTab(tab) {
-            playUiSound('click');
             adminSubTab = tab;
             document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
@@ -1682,7 +1512,6 @@
                 <div class="notif-item">
                     <div class="notif-title">${c.company} | ${c.name}</div>
                     <div class="notif-text">Тел: ${c.phone} | ID: ${c.user_id}</div>
-                    <div class="notif-text" style="color:var(--text-muted);">Подписки: ${c.subscriptions || 'нет'}</div>
                     <button class="btn ${c.status === 'ACTIVE' ? 'btn-danger' : 'btn-success'}" style="margin-top:8px; padding:5px 10px;" onclick="toggleCarrierStatus(${c.user_id})">
                         ${c.status === 'ACTIVE' ? 'Заблокировать' : 'Разблокировать'}
                     </button>
@@ -1691,13 +1520,12 @@
         }
 
         async function toggleCarrierStatus(uId) {
-            playUiSound('click');
             await fetch('/api/admin/carrier_status', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({user_id: uId})
             });
-            showToast('Статус перевозчика изменён', 'success');
+            showToast('Статус изменён', 'success');
             loadAdminCarriers();
         }
 
@@ -1718,7 +1546,7 @@
             let list = [...allAdminLoadsArray];
 
             if (searchQuery) {
-                list = list.filter(l => `${l.route} ${l.date} ${l.price} ${l.cars}`.toLowerCase().includes(searchQuery));
+                list = list.filter(l => `${l.route} ${l.date} ${l.price}`.toLowerCase().includes(searchQuery));
             }
 
             if (list.length === 0) {
@@ -1740,7 +1568,6 @@
         }
 
         function openAdminEditModalById(loadId) {
-            playUiSound('pop');
             let l = allAdminLoadsArray.find(x => String(x.id) === String(loadId));
             if (!l) return;
 
@@ -1774,19 +1601,18 @@
                 body: JSON.stringify(data)
             });
             closeModal('adminEditLoadModal');
-            showToast('Груз успешно обновлён', 'success');
+            showToast('Груз обновлён', 'success');
             loadAdminLoads();
             loadData(false);
         }
 
         async function toggleAdminLoadStatus(id) {
-            playUiSound('click');
             await fetch('/api/admin/toggle_load_active', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({id: id})
             });
-            showToast('Статус груза изменён', 'success');
+            showToast('Статус изменён', 'success');
             loadAdminLoads();
             loadData(false);
         }
@@ -1834,7 +1660,7 @@
             body.innerHTML = filtered.map(d => `
                 <div class="notif-item">
                     <div class="notif-title">Сделка #${d.deal_id} | ${d.route}</div>
-                    <div class="notif-text">Дата: ${d.date} | Ставка: ${d.price} | Авто: ${d.cars}</div>
+                    <div class="notif-text">Дата: ${d.date} | Ставка: ${d.price}</div>
                     <div class="notif-text" style="color:var(--primary);">Компания: ${d.company} (${d.name})</div>
                     <div class="buttons" style="margin-top:8px;">
                         <button class="btn btn-secondary" style="padding:4px 8px;" onclick='openAdminEditDealModal(${JSON.stringify(d).replace(/'/g, "&#39;")})'>Изменить</button>
@@ -1845,7 +1671,6 @@
         }
 
         function openAdminEditDealModal(d) {
-            playUiSound('pop');
             document.getElementById('editDealId').value = d.deal_id;
             document.getElementById('editDealRoute').value = d.route || '';
             document.getElementById('editDealDate').value = d.date || '';
@@ -1899,19 +1724,7 @@
             return uid ? parseInt(uid) : 0;
         }
 
-        function toggleSubChip(el) {
-            playUiSound('pop');
-            el.classList.toggle('active');
-            autoSaveProfile();
-        }
-
-        function autoSaveProfile() {
-            if (saveProfileTimer) clearTimeout(saveProfileTimer);
-            saveProfileTimer = setTimeout(() => { saveProfile(); }, 400);
-        }
-
         function switchTab(tab) {
-            playUiSound('click');
             currentTab = tab;
             currentDataHash = '';
             document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
@@ -1922,47 +1735,146 @@
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
             document.getElementById('unloaded-sub-nav').style.display = (tab === 'my' && mySubTab === 'archive') ? 'flex' : 'none';
 
+            const tableHeader = document.getElementById('tableHeader');
+            if (tab === 'my') {
+                tableHeader.className = 't-head';
+                tableHeader.innerHTML = `<div>Дата</div><div>Маршрут</div><div style="text-align: right;">Ставка</div><div style="text-align: center;">Номер ТС</div><div></div>`;
+            } else {
+                tableHeader.className = 't-head catalog-head';
+                tableHeader.innerHTML = `<div>Дата</div><div>Маршрут</div><div style="text-align: right;">Ставка</div><div></div>`;
+            }
+
             const tableEl = document.getElementById('main-table');
             const profileEl = document.getElementById('profile-container');
 
             if (tab === 'profile') {
                 tableEl.style.display = 'none';
                 profileEl.style.display = 'block';
-                profileEl.classList.remove('page-transition');
-                void profileEl.offsetWidth;
-                profileEl.classList.add('page-transition');
                 loadProfile();
             } else {
                 profileEl.style.display = 'none';
                 tableEl.style.display = 'block';
-                tableEl.classList.remove('page-transition');
-                void tableEl.offsetWidth;
-                tableEl.classList.add('page-transition');
                 loadData(false);
             }
         }
 
         function switchMySubTab(sub) {
-            playUiSound('click');
             mySubTab = sub;
             currentDataHash = '';
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
             document.getElementById('subnav-transit').classList.toggle('active', sub === 'transit');
             document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
-
             document.getElementById('unloaded-sub-nav').style.display = (sub === 'archive') ? 'flex' : 'none';
-
             loadData(false);
         }
 
         function switchUnloadedSubTab(unloadedTab) {
-            playUiSound('click');
             unloadedSubTab = unloadedTab;
             currentDataHash = '';
             document.getElementById('unloaded-pending').classList.toggle('active', unloadedTab === 'unloaded_pending');
             document.getElementById('unloaded-approved').classList.toggle('active', unloadedTab === 'unloaded_approved');
             document.getElementById('unloaded-paid').classList.toggle('active', unloadedTab === 'unloaded_paid');
             loadData(false);
+        }
+
+        async function triggerSubmitDocsPrompt(dealId, event) {
+            if (event) event.stopPropagation();
+            let userId = getUserId();
+            if (!userId) return showToast('Ошибка пользователя', 'error');
+
+            try {
+                let res = await fetch('/api/submit_docs_prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, deal_id: dealId })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Инструкция отправлена в чат', 'success');
+                    try { tg.close(); } catch(e) {}
+                } else {
+                    showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка подключения', 'error');
+            }
+        }
+
+        async function setUnloadDate(dealId, event) {
+            if (event) event.stopPropagation();
+            let dateInput = document.getElementById(`unload-date-${dealId}`);
+            let dateVal = dateInput ? dateInput.value : '';
+            if (!dateVal) return showToast('Укажите дату выгрузки', 'error');
+
+            try {
+                let res = await fetch('/api/set_unload_date', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deal_id: dealId, unload_date: dateVal, user_id: getUserId() })
+                });
+                if (res.ok) {
+                    showToast('Дата выгрузки сохранена', 'success');
+                    loadData(false);
+                } else {
+                    showToast('Ошибка сохранения', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        function openUnloadModal(dealId) {
+            document.getElementById('unloadDealId').value = dealId;
+            document.getElementById('unloadDate').valueAsDate = new Date();
+            selectedFiles = [];
+            renderFilePreview();
+            document.getElementById('unloadModal').classList.add('active');
+        }
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            selectedFiles = selectedFiles.concat(files);
+            renderFilePreview();
+        }
+
+        function renderFilePreview() {
+            const list = document.getElementById('filePreviewList');
+            list.innerHTML = selectedFiles.map((f, idx) => `
+                <div class="file-item">
+                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
+                    <span style="color:var(--error); cursor:pointer;" onclick="removeFile(${idx})">Удалить</span>
+                </div>
+            `).join('');
+        }
+
+        function removeFile(idx) {
+            selectedFiles.splice(idx, 1);
+            renderFilePreview();
+        }
+
+        async function submitUnloadData() {
+            const dealId = document.getElementById('unloadDealId').value;
+            const date = document.getElementById('unloadDate').value;
+            const notes = document.getElementById('unloadNotes').value;
+
+            if (!date) return showToast('Укажите дату выгрузки', 'error');
+
+            const formData = new FormData();
+            formData.append('deal_id', dealId);
+            formData.append('unload_date', date);
+            formData.append('notes', notes);
+            selectedFiles.forEach(f => formData.append('files', f));
+
+            try {
+                let res = await fetch('/api/my_loads/unload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    showToast('Выгрузка подтверждена', 'success');
+                    closeModal('unloadModal');
+                    loadData(false);
+                } else { showToast('Ошибка сохранения', 'error'); }
+            } catch(e) {
+                showToast('Данные выгрузки сохранены', 'success');
+                closeModal('unloadModal');
+                loadData(false);
+            }
         }
 
         async function checkNotifications() {
@@ -1976,14 +1888,11 @@
                 if (count > 0) {
                     badge.textContent = count;
                     badge.style.display = 'block';
-                } else {
-                    badge.style.display = 'none';
-                }
+                } else { badge.style.display = 'none'; }
             } catch(e) {}
         }
 
         async function openNotifications() {
-            playUiSound('pop');
             let userId = getUserId();
             if (!userId) return;
 
@@ -1994,7 +1903,6 @@
             try {
                 let res = await fetch(`/api/notifications?user_id=${userId}&t=` + Date.now());
                 let data = await res.json();
-
                 if (!data.notifications || data.notifications.length === 0) {
                     list.innerHTML = '<div class="loader">Новых уведомлений нет</div>';
                 } else {
@@ -2006,75 +1914,41 @@
                         </div>
                     `).join('');
                 }
-                
                 await fetch('/api/notifications/read', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({user_id: userId})
                 });
                 document.getElementById('bellBadge').style.display = 'none';
-            } catch(e) {
-                list.innerHTML = '<div class="loader">Ошибка загрузки</div>';
-            }
+            } catch(e) { list.innerHTML = '<div class="loader">Ошибка загрузки</div>'; }
         }
 
         function sortItems(items) {
             let key = document.getElementById('sortSelect')?.value || 'newest';
             let list = [...items];
-
             list.sort((a, b) => {
                 let res = 0;
-                if (key === 'newest') {
-                    res = (a.id || 0) - (b.id || 0);
-                } else if (key === 'date_load') {
-                    res = (a.date || '').localeCompare(b.date || '');
-                } else if (key === 'route') {
-                    res = (a.route || '').localeCompare(b.route || '');
-                } else if (key === 'price') {
+                if (key === 'newest') res = (a.id || 0) - (b.id || 0);
+                else if (key === 'date_load') res = (a.date || '').localeCompare(b.date || '');
+                else if (key === 'route') res = (a.route || '').localeCompare(b.route || '');
+                else if (key === 'price') {
                     let numA = parseInt((a.price || '').replace(/\D/g, '')) || 0;
                     let numB = parseInt((b.price || '').replace(/\D/g, '')) || 0;
                     res = numA - numB;
                 }
                 return sortAscending ? res : -res;
             });
-
             return list;
         }
 
-        async function triggerSubmitDocsPrompt(dealId, event) {
-            if (event) event.stopPropagation();
-            playUiSound('pop');
-            let userId = getUserId();
-            if (!userId) return showToast('Ошибка определения пользователя', 'error');
-
-            try {
-                let res = await fetch('/api/submit_docs_prompt', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: userId, deal_id: dealId })
-                });
-                let data = await res.json();
-                if (res.ok) {
-                    showToast('Инструкция отправлена в чат бота', 'success');
-                    try { tg.close(); } catch(e) {}
-                } else {
-                    showToast(data.error || 'Ошибка отправки', 'error');
-                }
-            } catch(e) {
-                showToast('Ошибка подключения', 'error');
-            }
-        }
-
         async function loadData(isSilent = false) {
-            if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка данных...</div>';
+            if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
             let userId = getUserId();
-
             checkNotifications();
 
             try {
                 if (currentTab === 'catalog') {
-                    let url = `/api/loads?user_id=${userId}&t=` + Date.now();
-                    let res = await fetch(url);
+                    let res = await fetch(`/api/loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
                     let rawLoads = data.loads || [];
 
@@ -2085,38 +1959,16 @@
 
                     let sortedLoads = sortItems(rawLoads);
                     let newHash = JSON.stringify(sortedLoads);
-
                     if (isSilent && newHash === currentDataHash) return;
 
-                    let openDetailsId = document.querySelector('.t-details.active')?.id;
                     currentDataHash = newHash;
-
                     if (!sortedLoads || sortedLoads.length === 0) {
                         tbody.innerHTML = emptyStateHTML;
                         return;
                     }
 
-                    tbody.innerHTML = sortedLoads.map(l => {
-                        let carsNum = parseInt(l.cars) || 1;
-                        let carsSelectHtml = '';
-                        
-                        if (carsNum > 1) {
-                            let options = '';
-                            for (let i = 1; i <= carsNum; i++) {
-                                options += `<option value="${i}">${i} авто</option>`;
-                            }
-                            carsSelectHtml = `
-                                <div class="qty-picker">
-                                    <label>Количество автомобилей:</label>
-                                    <select id="qty-${l.id}">${options}</select>
-                                </div>
-                            `;
-                        } else {
-                            carsSelectHtml = `<input type="hidden" id="qty-${l.id}" value="1">`;
-                        }
-
-                        return `
-                        <div class="t-row" id="row-${l.id}" onclick="toggleRow('${l.id}')">
+                    tbody.innerHTML = sortedLoads.map(l => `
+                        <div class="t-row catalog-row" id="row-${l.id}" onclick="toggleRow('${l.id}')">
                             <div class="col-date">${l.date}</div>
                             <div class="col-route">${l.route}</div>
                             <div class="col-price">${l.price}</div>
@@ -2131,23 +1983,13 @@
                                 <div class="info-item"><span>Вес / Объем</span><b>${l.weight || '22т'}</b></div>
                                 <div class="info-item"><span>Доступно</span><b>${l.cars} авто</b></div>
                             </div>
-                            ${l.admin_comment ? `<div class="admin-comment"><b>Информация:</b> ${l.admin_comment}</div>` : ''}
-                            ${carsSelectHtml}
+                            ${l.admin_comment ? `<div class="admin-comment"><b>Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
                             <div class="buttons">
                                 <button class="btn btn-success" onclick="sendAction(${l.id}, 'confirm', event)">Подтвердить</button>
                                 <button class="btn btn-warning" onclick="openOfferModal(${l.id}, event)">Своя цена</button>
                             </div>
                         </div>
-                    `}).join('');
-
-                    if (openDetailsId) {
-                        let openEl = document.getElementById(openDetailsId);
-                        if (openEl) {
-                            openEl.classList.add('active');
-                            let rowId = openDetailsId.replace('details-', 'row-');
-                            document.getElementById(rowId)?.classList.add('expanded');
-                        }
-                    }
+                    `).join('');
 
                 } else if (currentTab === 'my') {
                     let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
@@ -2157,74 +1999,85 @@
                     let filteredDeals = deals.filter(d => {
                         if (mySubTab === 'archive') {
                             if (unloadedSubTab === 'unloaded_pending') {
-                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status !== 'APPROVED' && !d.is_paid && !d.is_archived;
+                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status !== 'APPROVED' && !d.is_paid;
                             } else if (unloadedSubTab === 'unloaded_approved') {
-                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status === 'APPROVED' && !d.is_paid && !d.is_archived;
+                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status === 'APPROVED' && !d.is_paid;
                             } else if (unloadedSubTab === 'unloaded_paid') {
                                 return d.is_archived || d.is_paid || d.status === 'PAID';
                             }
-                            return d.is_archived || d.status === 'UNLOADED';
+                            return d.is_archived || d.status === 'UNLOADED' || d.is_unloaded;
                         }
-                        if (mySubTab === 'transit') return d.status === 'CONFIRMED' && !d.is_archived;
-                        return d.status !== 'CONFIRMED' && d.status !== 'UNLOADED' && !d.is_archived;
+                        if (mySubTab === 'transit') return d.is_transit && !d.is_unloaded;
+                        return !d.is_transit && !d.is_unloaded; // В работе
                     });
-
-                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
-                    if (searchQuery) {
-                        filteredDeals = filteredDeals.filter(d => `${d.route} ${d.date} ${d.price}`.toLowerCase().includes(searchQuery));
-                    }
 
                     let sortedDeals = sortItems(filteredDeals);
                     let newHash = JSON.stringify(sortedDeals);
-
                     if (isSilent && newHash === currentDataHash) return;
 
-                    let openDetailsId = document.querySelector('.t-details.active')?.id;
                     currentDataHash = newHash;
-
                     if (sortedDeals.length === 0) {
                         tbody.innerHTML = emptyStateHTML;
                         return;
                     }
 
                     tbody.innerHTML = sortedDeals.map(d => {
-                        let isDocsSubmitted = Boolean(d.docs_submitted);
-                        let docBtnText = isDocsSubmitted ? '🔄 Заменить данные' : '📄 Подать данные';
-                        let docBtnClass = isDocsSubmitted ? 'btn-warning' : 'btn-primary';
+                        let cardStatusClass = '';
+                        if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
+                        else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
+
+                        let plateDisplay = (d.truck_plate || d.trailer_plate) 
+                            ? `${d.truck_plate || '—'} / ${d.trailer_plate || '—'}` 
+                            : '— / —';
+
+                        let docBtnText = d.docs_submitted ? 'Заменить данные через чат' : 'Подать данные через чат';
+                        let docBtnClass = d.docs_submitted ? 'btn-warning' : 'btn-primary';
 
                         return `
-                        <div class="t-row" id="row-${d.id}" onclick="toggleRow('${d.id}')">
+                        <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
                             <div class="col-route">${d.route}</div>
                             <div class="col-price">${d.price}</div>
+                            <div class="col-truck">${plateDisplay}</div>
                             <div class="col-arrow">
                                 <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
                             </div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
-                            <div class="badge badge-primary">Статус: ${d.status_text || d.status}</div>
+                            ${d.is_today ? `<span class="badge badge-today">Погрузка сегодня</span>` : ''}
+                            ${d.missing_docs ? `<div class="missing-docs-box"><b>Не хватает данных:</b> ${d.missing_docs}</div>` : ''}
+                            
                             <div class="info-grid">
-                                <div class="info-item"><span>Маршрут</span><b>${d.route}</b></div>
+                                <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
+                                <div class="info-item"><span>Телефон</span><b>${d.driver_phone || 'Не указан'}</b></div>
+                                <div class="info-item"><span>Тягач / Прицеп</span><b>${plateDisplay}</b></div>
                                 <div class="info-item"><span>Груз</span><b>${d.cargo_type || 'ТНП'}</b></div>
                             </div>
-                            ${(mySubTab === 'transit' || mySubTab === 'active') ? `
+
+                            ${mySubTab === 'active' ? `
                                 <div class="buttons" style="margin-top:10px;">
                                     <button class="btn ${docBtnClass}" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
                                         ${docBtnText}
                                     </button>
+                                    <button class="btn btn-secondary" onclick="openUnloadModal('${d.deal_id || d.id}')">
+                                        Загрузить файлы
+                                    </button>
+                                </div>
+                            ` : ''}
+
+                            ${mySubTab === 'transit' ? `
+                                <div class="form-group" style="margin-top: 10px;">
+                                    <label>Дата выгрузки</label>
+                                    <div style="display: flex; gap: 6px;">
+                                        <input type="date" id="unload-date-${d.deal_id || d.id}" value="${d.unload_date || ''}" />
+                                        <button class="btn btn-success" style="width: auto;" onclick="setUnloadDate('${d.deal_id || d.id}', event)">
+                                            Сохранить
+                                        </button>
+                                    </div>
                                 </div>
                             ` : ''}
                         </div>
                     `}).join('');
-
-                    if (openDetailsId) {
-                        let openEl = document.getElementById(openDetailsId);
-                        if (openEl) {
-                            openEl.classList.add('active');
-                            let rowId = openDetailsId.replace('details-', 'row-');
-                            document.getElementById(rowId)?.classList.add('expanded');
-                        }
-                    }
                 }
             } catch(e) {
                 if (!isSilent) tbody.innerHTML = '<div class="loader">Ошибка загрузки данных</div>';
@@ -2232,17 +2085,14 @@
         }
 
         function toggleRow(id) {
-            playUiSound('click');
-            const row = document.getElementById(`row-${id}`) || event.currentTarget;
+            const row = document.getElementById(`row-${id}`);
             const details = document.getElementById(`details-${id}`);
-            
             document.querySelectorAll('.t-details').forEach(el => {
                 if (el.id !== `details-${id}`) el.classList.remove('active');
             });
             document.querySelectorAll('.t-row').forEach(el => {
                 if (el.id !== `row-${id}`) el.classList.remove('expanded');
             });
-
             if (details) {
                 details.classList.toggle('active');
                 if (row) row.classList.toggle('expanded');
@@ -2251,7 +2101,6 @@
 
         function openOfferModal(id, event) {
             event.stopPropagation();
-            playUiSound('pop');
             activeOfferLoadId = id;
             document.getElementById('bidModal').classList.add('active');
         }
@@ -2260,20 +2109,15 @@
             let price = document.getElementById('modalPrice').value.trim();
             let comment = document.getElementById('modalComment').value.trim();
             if (!price) return showToast('Укажите желаемую ставку', 'error');
-
-            let qty = document.getElementById(`qty-${activeOfferLoadId}`)?.value || '1';
             closeModal('bidModal');
-            await performBooking(activeOfferLoadId, 'bid', price, comment, qty);
+            await performBooking(activeOfferLoadId, 'bid', price, comment, '1');
         }
 
         async function sendAction(id, actionType, event) {
             event.stopPropagation();
-            let qty = document.getElementById(`qty-${id}`)?.value || '1';
-            let confirmMsg = `Подтвердить забор груза (${qty} авто) по указанной ставке?`;
-
-            askConfirm(confirmMsg, async (confirmed) => {
+            askConfirm('Подтвердить забор груза по указанной ставке?', async (confirmed) => {
                 if (confirmed) {
-                    await performBooking(id, 'confirm', '', '', qty);
+                    await performBooking(id, 'confirm', '', '', '1');
                 }
             });
         }
@@ -2284,30 +2128,19 @@
                 let res = await fetch(`/api/book/${id}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: userId,
-                        action: actionType,
-                        proposed_price: customPrice,
-                        comment: comment,
-                        cars: qty
-                    })
+                    body: JSON.stringify({ user_id: userId, action: actionType, proposed_price: customPrice, comment: comment, cars: qty })
                 });
                 let data = await res.json();
                 if (res.ok) {
-                    showToast('Заявка успешно отправлена', 'success');
+                    showToast('Заявка отправлена', 'success');
                     loadData(false);
-                } else {
-                    showToast(data.error || 'Ошибка бронирования', 'error');
-                }
-            } catch(e) {
-                showToast('Ошибка сети', 'error');
-            }
+                } else { showToast(data.error || 'Ошибка', 'error'); }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
         async function loadProfile() {
             let userId = getUserId();
             if (!userId) return;
-
             try {
                 let res = await fetch(`/api/profile?user_id=${userId}&t=` + Date.now());
                 let data = await res.json();
@@ -2315,7 +2148,6 @@
                     document.getElementById('profCompany').value = data.profile.company || '';
                     document.getElementById('profName').value = data.profile.name || '';
                     document.getElementById('profPhone').value = data.profile.phone || '';
-
                     let subs = (data.profile.subscriptions || '').split(',');
                     document.querySelectorAll('.sub-chip').forEach(chip => {
                         let val = chip.dataset.val;
@@ -2328,10 +2160,8 @@
         async function saveProfile() {
             let userId = getUserId();
             if (!userId) return;
-
             let selectedSubs = [];
             document.querySelectorAll('.sub-chip.active').forEach(chip => selectedSubs.push(chip.dataset.val));
-
             try {
                 await fetch('/api/profile', {
                     method: 'POST',
@@ -2347,7 +2177,16 @@
             } catch(e) {}
         }
 
-        // Автозапуск
+        function toggleSubChip(el) {
+            el.classList.toggle('active');
+            autoSaveProfile();
+        }
+
+        function autoSaveProfile() {
+            if (saveProfileTimer) clearTimeout(saveProfileTimer);
+            saveProfileTimer = setTimeout(() => { saveProfile(); }, 400);
+        }
+
         loadData(false);
         setInterval(() => {
             if (currentTab === 'catalog' || currentTab === 'my') loadData(true);
