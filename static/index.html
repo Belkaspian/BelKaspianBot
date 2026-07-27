@@ -700,9 +700,9 @@
         }
 
         .empty-illustration-container {
-            width: 110px;
-            height: 55px;
-            margin-bottom: 14px;
+            width: 140px;
+            height: 60px;
+            margin-bottom: 12px;
         }
 
         .empty-illustration {
@@ -711,32 +711,32 @@
             overflow: visible;
         }
 
-        /* --- РЕАЛИСТИЧНАЯ АНИМАЦИЯ ЕВРОФУРЫ ВПЕРЕД --- */
+        /* --- АНИМАЦИЯ ЕВРОФУРЫ ВПЕРЕД (ПЛАВНАЯ И ЕСТЕСТВЕННАЯ) --- */
         .animated-truck-body {
-            animation: truckBounce 1.4s ease-in-out infinite alternate;
+            animation: truckBounce 0.7s ease-in-out infinite alternate;
         }
 
         .animated-road {
-            animation: roadMove 1.4s linear infinite;
+            animation: roadMove 0.9s linear infinite;
         }
 
         .animated-wheel {
-            animation: wheelSpin 1.8s linear infinite;
+            animation: wheelSpin 0.9s linear infinite;
         }
 
         @keyframes truckBounce {
             0% { transform: translateY(0); }
-            100% { transform: translateY(-1.2px); }
+            100% { transform: translateY(-0.8px); }
         }
 
         @keyframes roadMove {
             from { stroke-dashoffset: 0; }
-            to { stroke-dashoffset: 10; } /* Сдвиг полотна дороги влево => движение фуры ВПЕРЕД */
+            to { stroke-dashoffset: 10; }
         }
 
         @keyframes wheelSpin {
             from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); } /* Плавное вращение по часовой стрелке */
+            to { transform: rotate(360deg); }
         }
 
         .empty-title {
@@ -1292,55 +1292,64 @@
         let allAdminDeals = [];
 
         // Векторная еврофура с плавным движением ВПЕРЕД и реалистичным силуэтом
+        // Минималистичная еврофура строго по скинутому референсу
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 100 50" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                            <!-- Бегущее полотно дороги (сдвиг влево => фура едет ВПЕРЕД) -->
-                            <line x1="0" y1="44" x2="100" y2="44" class="animated-road" stroke="var(--border)" stroke-width="1.6" stroke-dasharray="6 4" />
+                    <svg viewBox="0 0 110 42" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <!-- Бегущее полотно дороги -->
+                            <line x1="0" y1="38" x2="110" y2="38" class="animated-road" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="6 4" />
 
-                            <!-- Корпус фуры (плавный лёгкий подскок подвески) -->
+                            <!-- Корпус еврофуры по референсу -->
                             <g class="animated-truck-body">
-                                <!-- Полуприцеп (евротент) -->
-                                <rect x="4" y="11" width="56" height="24" rx="2" fill="var(--primary-light)" />
-                                <!-- Боковая защита / подкат полуприцепа -->
-                                <rect x="14" y="35" width="22" height="2" fill="var(--surface-solid)" stroke-width="1" />
+                                <!-- Полуприцеп -->
+                                <rect x="3" y="6" width="70" height="24" rx="1.5" fill="var(--primary-light)" />
+                                <line x1="3" y1="27" x2="73" y2="27" stroke-width="1" />
                                 
-                                <!-- Евротягач (кабина с аэродинамическим спойлером) -->
-                                <path d="M 58 35 L 58 20 L 62 13 Q 64 10 70 10 L 80 10 Q 85 10 86 14 L 88 28 L 88 35 Q 88 37 86 37 L 58 37 Z" fill="var(--surface-solid)" />
-                                <!-- Лобовое / боковое окно -->
-                                <path d="M 70 13 L 81 13 Q 84 13 85 16 L 86 23 L 70 23 Z" fill="var(--primary-light)" stroke-width="1.2" />
-                                <!-- Передняя фара -->
-                                <line x1="86" y1="31" x2="88" y2="31" stroke="var(--primary)" stroke-width="2" />
-                                <!-- Боковое зеркало -->
-                                <path d="M 87 16 L 89 16 L 89 20" stroke="var(--primary)" stroke-width="1.2" />
+                                <!-- Паллетный ящик / Боковая защита -->
+                                <rect x="30" y="30" width="22" height="4" fill="var(--surface-solid)" stroke-width="1.2" />
+                                <line x1="30" y1="32" x2="52" y2="32" stroke-width="1" />
+
+                                <!-- Фартук над задними колёсами -->
+                                <path d="M 8 30 L 28 30" stroke-width="1.2" />
+
+                                <!-- Кабина тягача (плавный обтекатель) -->
+                                <path d="M 74 30 L 74 15 L 77 10 C 80 7, 85 7, 89 7 L 97 7 C 101 7, 103 10, 104 14 L 106 25 L 106 30 C 106 32, 104 32, 102 32 L 74 32 Z" fill="var(--surface-solid)" />
+                                
+                                <!-- Боковое стекло -->
+                                <path d="M 88 10 L 98 10 C 101 10, 102 12, 103 15 L 103 21 L 88 21 Z" fill="var(--primary-light)" stroke-width="1.2" />
+                                
+                                <!-- Детали кабины (фара, зеркало, ручка) -->
+                                <line x1="103" y1="27" x2="106" y2="27" stroke-width="1.8" />
+                                <path d="M 103 13 L 105 13 L 105 17" stroke-width="1.2" />
+                                <line x1="89" y1="23" x2="92" y2="23" stroke-width="1.2" />
+                                
+                                <!-- Обвес / Топливный бак -->
+                                <rect x="75" y="30" width="12" height="3.5" fill="var(--surface-solid)" stroke-width="1" />
                             </g>
 
-                            <!-- Колёса с естественным медленным вращением по часовой стрелке -->
-                            <!-- Тягач: Рулевая ось -->
-                            <g class="animated-wheel" style="transform-origin: 80px 38px;">
-                                <circle cx="80" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
-                                <circle cx="80" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+                            <!-- Колёса (3 оси прицепа + 2 оси тягача) -->
+                            <g class="animated-wheel" style="transform-origin: 12px 34px;">
+                                <circle cx="12" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
+                                <circle cx="12" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
                             </g>
-                            <!-- Тягач: Ведущая ось -->
-                            <g class="animated-wheel" style="transform-origin: 65px 38px;">
-                                <circle cx="65" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
-                                <circle cx="65" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+                            <g class="animated-wheel" style="transform-origin: 20px 34px;">
+                                <circle cx="20" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
+                                <circle cx="20" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
                             </g>
-                            
-                            <!-- Полуприцеп: 3 оси -->
-                            <g class="animated-wheel" style="transform-origin: 18px 38px;">
-                                <circle cx="18" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
-                                <circle cx="18" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+                            <g class="animated-wheel" style="transform-origin: 28px 34px;">
+                                <circle cx="28" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
+                                <circle cx="28" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 27px 38px;">
-                                <circle cx="27" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
-                                <circle cx="27" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+
+                            <g class="animated-wheel" style="transform-origin: 70px 34px;">
+                                <circle cx="70" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
+                                <circle cx="70" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 36px 38px;">
-                                <circle cx="36" cy="38" r="4" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.8"/>
-                                <circle cx="36" cy="38" r="2" stroke="var(--primary)" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+                            <g class="animated-wheel" style="transform-origin: 96px 34px;">
+                                <circle cx="96" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
+                                <circle cx="96" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
                             </g>
                         </g>
                     </svg>
@@ -1349,7 +1358,7 @@
                 <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
             </div>
         `;
-
+        
         function handleLogoLoad(success) {
             const img = document.getElementById('headerLogoImg');
             const fallback = document.getElementById('brandFallback');
