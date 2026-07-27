@@ -1269,46 +1269,6 @@ async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Подача данных на загрузку отменена.", reply_markup=get_main_reply_markup())
 
-@dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
-async def handle_doc_finish(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    user_id = message.from_user.id
-    user_obj = message.from_user
-
-    photos = data.get("photos", [])
-    documents = data.get("documents", [])
-    notes = data.get("text_notes", "")
-    route_str = data.get("upload_route", "Маршрут")
-    date_str = data.get("upload_date", "Дата")
-    price_str = data.get("upload_price", "Ставка")
-    deal_id = data.get("upload_deal_id")
-
-    if not photos and not documents and not notes:
-        await message.answer("⚠️ Вы не прислали ни одного фото/файла или телефона.")
-        return
-
-# Проверяем, не полиэтилен ли это
-    is_polyethylene = False
-    if deal_id:
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT l.cargo_type, l.details, l.text 
-            FROM confirmed_deals cd 
-            LEFT JOIN loads l ON cd.load_id = l.load_id 
-            WHERE cd.id = ?
-        """, (deal_id,))
-        row = cursor.fetchone()
-        if row:
-            cargo_info = f"{row[0] or ''} {row[1] or ''} {row[2] or ''}".lower()
-            if "полиэтилен" in cargo_info or "polyethylene" in cargo_info:
-                is_polyethylene = True
-        conn.close()
-
-    # Gemini распознает и сортирует данные
-    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
-
-    # Проверяем полноту внесенных данных
 def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
     """Возвращает True, если документ просрочен или до конца осталось менее threshold_days дней."""
     if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
@@ -1454,34 +1414,6 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     try:
         # 1. Отправляем текстовый отчет логисту
         await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
-
-        # 2. Если исходно выслали PDF
-        if documents:
-            sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
-            if sorted_pdf_buf:
-                pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
-                await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=pdf_file, caption=file_caption)
-            else:
-                for doc_id in documents:
-                    await bot.send_document(chat_id=ADMIN_CHANNEL_ID, document=doc_id, caption=file_caption)
-
-        # 3. Если выслали фото — собираем отсортированный PDF
-        elif photos:
-            pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
-            pdf_bytes = pdf_buf.getvalue()
-            if pdf_bytes:
-                pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-                await bot.send_document(
-                    chat_id=ADMIN_CHANNEL_ID, 
-                    document=pdf_file, 
-                    caption=file_caption
-                )
-
-    except Exception as e:
-        logging.error(f"Error forwarding docs to admin channel: {e}", exc_info=True)
-
-    await state.clear()
-    await message.answer("✅ Данные переданы логисту.", reply_markup=get_main_reply_markup())
 
         # 2. Если исходно выслали PDF
         if documents:
@@ -2535,9 +2467,9 @@ async def get_loads_api(request):
     params = []
 
     if country and country != 'ALL':
-            query += " AND (destination_country LIKE ? OR route LIKE ?)"
-            params.extend([f"%{country}%", f"%{country}%"])
-        # Если фильтр по стране не задан или 'ALL' — отдаем все активные грузы биржи
+        query += " AND (destination_country LIKE ? OR route LIKE ?)"
+        params.extend([f"%{country}%", f"%{country}%"])
+    # Если фильтр по стране не задан или 'ALL' — отдаем все активные грузы биржи
         
     query += " ORDER BY load_id DESC"
     
