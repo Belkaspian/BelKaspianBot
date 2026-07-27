@@ -3181,12 +3181,16 @@ async def admin_cancel_deal_api(request):
 
 async def serve_index(request):
     try:
-        with open("index.html", "r", encoding="utf-8") as f:
+        # Указываем точный путь к файлу внутри папки static
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        index_path = os.path.join(base_dir, "static", "index.html")
+        
+        with open(index_path, "r", encoding="utf-8") as f:
             html_content = f.read()
         return web.Response(text=html_content, content_type='text/html')
     except Exception as e:
         logging.error(f"Error reading index.html: {e}")
-        return web.Response(text="Error loading index.html", status=500)
+        return web.Response(text=f"Error loading index.html: {e}", status=500)
 
 DIRECTIONS_HTML = """<!DOCTYPE html>
 <html lang="ru">
