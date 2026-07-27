@@ -22,7 +22,8 @@
             --primary-hover: #1e3a8a;
             --primary-light: rgba(30, 64, 175, 0.08);
             --bg: #f8fafc;
-            --surface: #ffffff;
+            --surface: rgba(255, 255, 255, 0.92);
+            --surface-solid: #ffffff;
             --surface-hover: #f1f5f9;
             --border: #e2e8f0;
             --text: #0f172a;
@@ -42,6 +43,7 @@
             --radius-md: 10px;
             --radius-lg: 14px;
             --transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+            --spring-transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
         [data-theme="dark"] {
@@ -49,14 +51,15 @@
             --primary-hover: #60a5fa;
             --primary-light: rgba(59, 130, 246, 0.15);
             --bg: #0f172a;
-            --surface: #1e293b;
+            --surface: rgba(30, 41, 59, 0.92);
+            --surface-solid: #1e293b;
             --surface-hover: #334155;
             --border: #334155;
             --text: #f8fafc;
             --text-muted: #94a3b8;
             
             --success: #34d399;
-            --success-light: rgba(16, 185, 129, 0.15);
+            --success-light: rgba(52, 211, 153, 0.15);
             --warning: #fbbf24;
             --warning-light: rgba(251, 191, 36, 0.15);
             --error: #f87171;
@@ -123,11 +126,11 @@
             align-items: center;
             gap: 10px;
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
         }
 
-        .header-brand:hover {
-            opacity: 0.9;
+        .header-brand:active {
+            transform: scale(0.96);
         }
 
         .header-logo-container {
@@ -198,7 +201,7 @@
 
         .icon-btn {
             position: relative;
-            background: var(--surface);
+            background: var(--surface-solid);
             border: 1px solid var(--border);
             color: var(--text-muted);
             width: 36px;
@@ -208,7 +211,7 @@
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             box-shadow: var(--shadow-sm);
         }
 
@@ -228,7 +231,7 @@
         }
 
         .icon-btn:active {
-            transform: scale(0.96) translateY(0);
+            transform: scale(0.92);
         }
 
         .bell-badge {
@@ -245,6 +248,12 @@
             display: none;
             line-height: 1;
             box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);
+            animation: badgePulse 2s infinite;
+        }
+
+        @keyframes badgePulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
         }
 
         /* Главная Навигация */
@@ -252,7 +261,7 @@
             display: flex;
             gap: 4px;
             margin-bottom: 12px;
-            background: var(--surface);
+            background: var(--surface-solid);
             padding: 4px;
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
@@ -268,7 +277,7 @@
             border-radius: var(--radius-sm);
             cursor: pointer;
             color: var(--text-muted);
-            transition: var(--transition);
+            transition: var(--spring-transition);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -287,6 +296,10 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
+        .nav-btn:active {
+            transform: scale(0.96);
+        }
+
         /* Подразделы "Мои грузы" */
         .sub-nav {
             display: flex;
@@ -301,11 +314,11 @@
             font-weight: 600;
             font-size: 11px;
             border-radius: var(--radius-sm);
-            background: var(--surface);
+            background: var(--surface-solid);
             border: 1px solid var(--border);
             color: var(--text-muted);
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -326,7 +339,10 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        /* Стили подменю раздела Выгружены */
+        .sub-nav-btn:active {
+            transform: scale(0.95);
+        }
+
         .unloaded-sub-nav {
             margin-top: -6px;
             gap: 4px;
@@ -337,7 +353,7 @@
             padding: 6px 4px;
         }
 
-        /* Сортировка + Пирамидка + Увеличенная Лупа */
+        /* Сортировка + Пирамидка + Лупа */
         .sort-search-bar {
             display: flex;
             align-items: center;
@@ -350,7 +366,7 @@
             display: flex;
             align-items: center;
             gap: 6px;
-            background: var(--surface);
+            background: var(--surface-solid);
             padding: 4px 10px 4px 6px;
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
@@ -374,21 +390,29 @@
             display: flex;
             align-items: center;
             gap: 4px;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             height: 30px;
         }
 
         .sort-dir-btn:hover {
             background: var(--primary-light);
             border-color: var(--primary);
-            transform: scale(1.03);
+            transform: scale(1.04);
         }
 
-        .pyramid-icon line {
-            transition: all 0.25s ease;
+        .sort-dir-btn:active {
+            transform: scale(0.92);
         }
 
-        /* Увеличенная форма поиска */
+        /* Плавный разворот иконки пирамидки */
+        .pyramid-icon {
+            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .sort-dir-btn.asc .pyramid-icon {
+            transform: rotate(180deg);
+        }
+
         .expandable-search {
             display: flex;
             align-items: center;
@@ -397,7 +421,7 @@
             height: 40px;
             overflow: hidden;
             transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s, border-color 0.2s;
-            background: var(--surface);
+            background: var(--surface-solid);
             border: 1px solid var(--border);
             border-radius: var(--radius-md);
             box-shadow: var(--shadow-sm);
@@ -436,11 +460,12 @@
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             flex-shrink: 0;
         }
 
         .search-toggle-btn:hover { color: var(--primary); }
+        .search-toggle-btn:active { transform: scale(0.92); }
 
         .search-toggle-btn .icon {
             width: 18px;
@@ -452,7 +477,7 @@
             align-items: center;
             gap: 10px;
             margin-bottom: 12px;
-            background: var(--surface);
+            background: var(--surface-solid);
             padding: 8px 12px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
@@ -496,7 +521,7 @@
 
         /* Таблица & Карточки */
         .table-container {
-            background: var(--surface);
+            background: var(--surface-solid);
             border-radius: var(--radius-md);
             overflow: hidden;
             border: 1px solid var(--border);
@@ -539,7 +564,7 @@
         .col-date { font-weight: 600; color: var(--text-muted); font-size: 11px; }
         .col-route { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
         .col-price { font-weight: 700; color: var(--success); text-align: right; font-size: 12px; }
-        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.2s ease; display: flex; justify-content: flex-end; }
+        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.25s ease; display: flex; justify-content: flex-end; }
 
         .t-row.expanded .col-arrow { transform: rotate(180deg); color: var(--primary); }
 
@@ -615,7 +640,7 @@
             font-size: 12px;
             color: #ffffff;
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -628,7 +653,7 @@
             box-shadow: var(--shadow-md);
         }
 
-        .btn:active { transform: translateY(0) scale(0.98); }
+        .btn:active { transform: scale(0.95); }
 
         .btn-success { background: var(--success); }
         .btn-success:hover { background: #047857; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25); }
@@ -639,14 +664,14 @@
         .btn-primary { background: var(--primary); }
         .btn-primary:hover { background: var(--primary-hover); box-shadow: 0 4px 12px var(--primary-light); }
 
-        .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary { background: var(--surface-solid); color: var(--text); border: 1px solid var(--border); }
         .btn-secondary:hover { background: var(--surface-hover); border-color: var(--text-muted); }
 
         .btn-danger { background: var(--error); }
         .btn-danger:hover { background: #b91c1c; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25); }
 
         .profile-card {
-            background: var(--surface);
+            background: var(--surface-solid);
             border-radius: var(--radius-md);
             padding: 16px;
             border: 1px solid var(--border);
@@ -687,6 +712,8 @@
         }
 
         .sub-chip {
+            position: relative;
+            overflow: hidden;
             background: var(--bg);
             padding: 8px 10px;
             border-radius: var(--radius-sm);
@@ -694,13 +721,15 @@
             font-size: 12px;
             font-weight: 500;
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             text-align: center;
             color: var(--text);
             box-shadow: var(--shadow-sm);
         }
 
         .sub-chip:hover { border-color: var(--primary); transform: translateY(-1px); }
+        .sub-chip:active { transform: scale(0.95); }
+
         .sub-chip.active {
             background: var(--primary);
             color: #ffffff;
@@ -709,7 +738,23 @@
             box-shadow: 0 3px 10px var(--primary-light);
         }
 
-        /* Красивое Пустое состояние (Empty State) */
+        /* Переливающийся блеск для подписок */
+        .sub-chip::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            opacity: 0;
+            transform: scale(0.5);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .sub-chip:active::after {
+            opacity: 1;
+            transform: scale(1.2);
+        }
+
+        /* Пустое состояние (Empty State) */
         .empty-state {
             padding: 42px 20px;
             text-align: center;
@@ -772,7 +817,7 @@
         }
 
         .modal-card {
-            background: var(--surface);
+            background: var(--surface-solid);
             border-radius: var(--radius-lg);
             padding: 20px;
             width: 100%;
@@ -785,7 +830,7 @@
         }
 
         @keyframes modalPop {
-            from { opacity: 0; transform: scale(0.95) translateY(10px); }
+            from { opacity: 0; transform: scale(0.94) translateY(10px); }
             to { opacity: 1; transform: scale(1) translateY(0); }
         }
 
@@ -804,10 +849,11 @@
             padding: 4px;
             border-radius: 50%;
             display: flex;
-            transition: var(--transition);
+            transition: var(--spring-transition);
         }
 
-        .modal-close:hover { background: var(--bg); color: var(--text); }
+        .modal-close:hover { background: var(--bg); color: var(--text); transform: scale(1.08); }
+        .modal-close:active { transform: scale(0.9); }
 
         .notif-item {
             background: var(--bg);
@@ -854,11 +900,11 @@
             text-align: center;
             background: var(--bg);
             cursor: pointer;
-            transition: var(--transition);
+            transition: var(--spring-transition);
             margin-bottom: 12px;
         }
 
-        .dropzone:hover { border-color: var(--primary); background: var(--primary-light); }
+        .dropzone:hover { border-color: var(--primary); background: var(--primary-light); transform: translateY(-1px); }
 
         .file-preview-list {
             display: flex;
@@ -878,12 +924,15 @@
             font-size: 11px;
         }
 
+        /* Обновленные плавающие мини-уведомления (Float Top Toast) */
         .toast-container {
             position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 2000;
+            top: 16px;
+            left: 16px;
+            right: 16px;
+            max-width: 420px;
+            margin: 0 auto;
+            z-index: 9999;
             display: flex;
             flex-direction: column;
             gap: 8px;
@@ -894,21 +943,42 @@
             background: var(--surface);
             color: var(--text);
             border: 1px solid var(--border);
-            padding: 10px 16px;
-            border-radius: 20px;
+            padding: 10px 14px;
+            border-radius: var(--radius-md);
             box-shadow: var(--shadow-lg);
+            backdrop-filter: blur(12px);
             font-size: 12px;
             font-weight: 600;
             display: flex;
             align-items: center;
-            gap: 8px;
-            animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            gap: 10px;
+            pointer-events: auto;
+            animation: toastSlideDown 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
         }
 
-        @keyframes toastIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .toast.hide {
+            animation: toastSlideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards;
         }
+
+        @keyframes toastSlideDown {
+            from { opacity: 0; transform: translateY(-16px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        @keyframes toastSlideUp {
+            from { opacity: 1; transform: translateY(0) scale(1); }
+            to { opacity: 0; transform: translateY(-12px) scale(0.95); }
+        }
+
+        .toast-icon {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .toast-icon.success { color: var(--success); }
+        .toast-icon.error { color: var(--error); }
+        .toast-icon.info { color: var(--primary); }
 
         @media (min-width: 640px) {
             body { max-width: 600px; margin: 0 auto; }
@@ -980,7 +1050,6 @@
     <!-- Блок Интерактивной Сортировки + Увеличенная Лупа Поиска -->
     <div class="sort-search-bar" id="sort-search-container">
         <div class="sort-container" id="sort-container">
-            <!-- Кнопка пирамидки сортировки -->
             <button class="sort-dir-btn" id="sortDirBtn" onclick="toggleSortDirection()" title="Направление сортировки">
                 <svg class="icon pyramid-icon" viewBox="0 0 24 24" id="pyramidIcon">
                     <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -1242,7 +1311,7 @@
                 <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">Сделки</div>
             </div>
 
-            <!-- Идентичный модуль Сортировки и Поиска в Админке -->
+            <!-- Сортировка и Поиск в Админке -->
             <div class="sort-search-bar" id="admin-sort-search-container" style="margin-bottom: 10px;">
                 <div class="sort-container">
                     <button class="sort-dir-btn" id="adminSortDirBtn" onclick="toggleAdminSortDirection()" title="Направление сортировки">
@@ -1276,7 +1345,7 @@
         </div>
     </div>
 
-    <!-- Toast-уведомления -->
+    <!-- Toast-уведомления (Верхние плавающие плашки) -->
     <div class="toast-container" id="toastContainer"></div>
 
     <script>
@@ -1286,7 +1355,7 @@
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
         let mySubTab = 'active';
-        let unloadedSubTab = 'unloaded_pending'; // Ожидают документы по умолчанию
+        let unloadedSubTab = 'unloaded_pending';
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
@@ -1303,18 +1372,84 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Пропорциональная и красивая векторная иллюстрация грузовика
+        // Синтез микро-звуков через Web Audio API (Мгновенный отклик, без сторонних файлов)
+        let audioCtx = null;
+        function getAudioContext() {
+            if (!audioCtx) {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (AudioCtx) audioCtx = new AudioCtx();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        function playUiSound(type = 'click') {
+            try {
+                const ctx = getAudioContext();
+                if (!ctx) return;
+
+                const now = ctx.currentTime;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                if (type === 'click') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(420, now);
+                    osc.frequency.exponentialRampToValueAtTime(200, now + 0.04);
+                    gain.gain.setValueAtTime(0.02, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+                    osc.start(now);
+                    osc.stop(now + 0.04);
+                } else if (type === 'success') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(520, now);
+                    osc.frequency.setValueAtTime(659.25, now + 0.06);
+                    gain.gain.setValueAtTime(0.03, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+                    osc.start(now);
+                    osc.stop(now + 0.25);
+                } else if (type === 'error') {
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(280, now);
+                    osc.frequency.setValueAtTime(220, now + 0.08);
+                    gain.gain.setValueAtTime(0.04, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+                    osc.start(now);
+                    osc.stop(now + 0.22);
+                } else if (type === 'pop') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(784, now);
+                    gain.gain.setValueAtTime(0.025, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+                    osc.start(now);
+                    osc.stop(now + 0.08);
+                }
+            } catch(e) {}
+
+            // Нативная тактильная отдача Telegram
+            if (tg.HapticFeedback) {
+                if (type === 'click' || type === 'pop') tg.HapticFeedback.impactOccurred('light');
+                else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
+                else if (type === 'error') tg.HapticFeedback.notificationOccurred('error');
+            }
+        }
+
+        // Векторная иллюстрация грузовика для пустых состояний
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
                     <svg viewBox="0 0 90 60" class="empty-illustration">
                         <g fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="8" y="16" width="46" height="26" rx="2" fill="var(--primary-light)" />
-                            <path d="M54 26h18l6 8v14H54V26z" fill="var(--surface)" />
+                            <path d="M54 26h18l6 8v14H54V26z" fill="var(--surface-solid)" />
                             <path d="M60 29h10l4 5h-14v-5z" fill="var(--primary-light)" />
-                            <circle cx="20" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
-                            <circle cx="32" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
-                            <circle cx="66" cy="46" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
+                            <circle cx="20" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
+                            <circle cx="32" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
+                            <circle cx="66" cy="46" r="4.5" fill="var(--surface-solid)" stroke-width="2.5"/>
                             <line x1="4" y1="51" x2="86" y2="51" stroke="var(--border)" stroke-width="2" />
                             <path d="M78 22c2-2 4-2 6 0M80 18c3-3 7-3 10 0" stroke="var(--text-muted)" stroke-width="1.8"/>
                         </g>
@@ -1333,11 +1468,11 @@
             if (success) {
                 img.style.display = 'block';
                 fallback.style.display = 'none';
-                if (titleText) titleText.style.display = 'none'; // Полностью скрываем текст, т.к. название есть в логотипе
+                if (titleText) titleText.style.display = 'none';
             } else {
                 img.style.display = 'none';
                 fallback.style.display = 'flex';
-                if (titleText) titleText.style.display = 'flex'; // Показываем название при ошибке логотипа
+                if (titleText) titleText.style.display = 'flex';
             }
         }
 
@@ -1345,6 +1480,8 @@
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('theme', theme);
             updateThemeButtons();
+            playUiSound('pop');
+            showToast(theme === 'dark' ? 'Активирована тёмная тема' : 'Активирована светлая тема', 'info');
         }
 
         function updateThemeButtons() {
@@ -1363,42 +1500,25 @@
         }
 
         if (localStorage.getItem('theme') === 'dark') {
-            setTheme('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
         } else {
-            setTheme('light');
+            document.documentElement.setAttribute('data-theme', 'light');
         }
 
-        // Логика кнопки пирамидки (переворот линий)
         function toggleSortDirection() {
             sortAscending = !sortAscending;
-            updatePyramidIcon('pyramidIcon', sortAscending);
+            const btn = document.getElementById('sortDirBtn');
+            btn.classList.toggle('asc', sortAscending);
+            playUiSound('pop');
             loadData(false);
         }
 
         function toggleAdminSortDirection() {
             adminSortAscending = !adminSortAscending;
-            updatePyramidIcon('adminPyramidIcon', adminSortAscending);
+            const btn = document.getElementById('adminSortDirBtn');
+            btn.classList.toggle('asc', adminSortAscending);
+            playUiSound('pop');
             applyAdminFilters();
-        }
-
-        function updatePyramidIcon(iconId, isAsc) {
-            const svg = document.getElementById(iconId);
-            if (!svg) return;
-            if (isAsc) {
-                // Перевернутая пирамидка (маленькая -> средняя -> большая)
-                svg.innerHTML = `
-                    <line x1="10" y1="6" x2="14" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                    <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                    <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                `;
-            } else {
-                // Прямая пирамидка (большая -> средняя -> маленькая)
-                svg.innerHTML = `
-                    <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                    <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                    <line x1="10" y1="18" x2="14" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                `;
-            }
         }
 
         function toggleSearchInput() {
@@ -1406,6 +1526,7 @@
             const searchInput = document.getElementById('searchInput');
             const icon = document.getElementById('searchBtnIcon');
 
+            playUiSound('click');
             searchBox.classList.toggle('open');
             if (searchBox.classList.contains('open')) {
                 searchInput.focus();
@@ -1422,6 +1543,7 @@
             const searchInput = document.getElementById('adminSearchInput');
             const icon = document.getElementById('adminSearchBtnIcon');
 
+            playUiSound('click');
             searchBox.classList.toggle('open');
             if (searchBox.classList.contains('open')) {
                 searchInput.focus();
@@ -1433,28 +1555,45 @@
             }
         }
 
-        function showToast(message) {
+        // Верхнее аккуратное тост-уведомление
+        function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = 'toast';
-            toast.innerHTML = message;
+            
+            let iconSvg = '';
+            if (type === 'success') {
+                iconSvg = `<svg class="toast-icon success" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+            } else if (type === 'error') {
+                iconSvg = `<svg class="toast-icon error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+            } else {
+                iconSvg = `<svg class="toast-icon info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+            }
+
+            toast.innerHTML = `${iconSvg}<span>${message}</span>`;
             container.appendChild(toast);
+
+            playUiSound(type === 'error' ? 'error' : (type === 'success' ? 'success' : 'pop'));
+
             setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
+                toast.classList.add('hide');
+                setTimeout(() => toast.remove(), 260);
+            }, 2500);
         }
 
         function closeModal(id) {
+            playUiSound('click');
             document.getElementById(id).classList.remove('active');
         }
 
         function askConfirm(text, callback) {
+            playUiSound('pop');
             const modal = document.getElementById('confirmModal');
             document.getElementById('confirmModalText').textContent = text;
             const yesBtn = document.getElementById('confirmModalYesBtn');
             
             const handleYes = () => {
+                playUiSound('click');
                 closeModal('confirmModal');
                 yesBtn.removeEventListener('click', handleYes);
                 callback(true);
@@ -1469,6 +1608,7 @@
             if (headerTimer) clearTimeout(headerTimer);
             if (headerClicks >= 5) {
                 headerClicks = 0;
+                playUiSound('pop');
                 if (sessionStorage.getItem('admin_authed') === 'true') {
                     openAdminPanel();
                 } else {
@@ -1493,11 +1633,12 @@
                     sessionStorage.setItem('admin_authed', 'true');
                     closeModal('adminPassModal');
                     openAdminPanel();
+                    showToast('Вход в админ-панель выполнен', 'success');
                 } else {
-                    showToast('Неверный пароль администратора');
+                    showToast('Неверный пароль администратора', 'error');
                 }
             } catch(e) {
-                showToast('Ошибка авторизации');
+                showToast('Ошибка авторизации', 'error');
             }
         }
 
@@ -1507,6 +1648,7 @@
         }
 
         function switchAdminSubTab(tab) {
+            playUiSound('click');
             adminSubTab = tab;
             document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
@@ -1564,11 +1706,13 @@
         }
 
         async function toggleCarrierStatus(uId) {
+            playUiSound('click');
             await fetch('/api/admin/carrier_status', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({user_id: uId})
             });
+            showToast('Статус перевозчика изменён', 'success');
             loadAdminCarriers();
         }
 
@@ -1611,6 +1755,7 @@
         }
 
         function openAdminEditModalById(loadId) {
+            playUiSound('pop');
             let l = allAdminLoadsArray.find(x => String(x.id) === String(loadId));
             if (!l) return;
 
@@ -1644,16 +1789,19 @@
                 body: JSON.stringify(data)
             });
             closeModal('adminEditLoadModal');
+            showToast('Груз успешно обновлён', 'success');
             loadAdminLoads();
             loadData(false);
         }
 
         async function toggleAdminLoadStatus(id) {
+            playUiSound('click');
             await fetch('/api/admin/toggle_load_active', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({id: id})
             });
+            showToast('Статус груза изменён', 'success');
             loadAdminLoads();
             loadData(false);
         }
@@ -1666,6 +1814,7 @@
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({id: id})
                     });
+                    showToast('Груз удалён', 'success');
                     loadAdminLoads();
                     loadData(false);
                 }
@@ -1711,6 +1860,7 @@
         }
 
         function openAdminEditDealModal(d) {
+            playUiSound('pop');
             document.getElementById('editDealId').value = d.deal_id;
             document.getElementById('editDealRoute').value = d.route || '';
             document.getElementById('editDealDate').value = d.date || '';
@@ -1733,6 +1883,7 @@
                 body: JSON.stringify(data)
             });
             closeModal('adminEditDealModal');
+            showToast('Сделка обновлена', 'success');
             loadAdminConfirmedDeals();
             loadData(false);
         }
@@ -1745,6 +1896,7 @@
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({deal_id: dealId})
                     });
+                    showToast('Сделка отменена', 'success');
                     loadAdminConfirmedDeals();
                     loadData(false);
                 }
@@ -1763,6 +1915,7 @@
         }
 
         function toggleSubChip(el) {
+            playUiSound('pop');
             el.classList.toggle('active');
             autoSaveProfile();
         }
@@ -1773,6 +1926,7 @@
         }
 
         function switchTab(tab) {
+            playUiSound('click');
             currentTab = tab;
             currentDataHash = '';
             document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
@@ -1804,6 +1958,7 @@
         }
 
         function switchMySubTab(sub) {
+            playUiSound('click');
             mySubTab = sub;
             currentDataHash = '';
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
@@ -1816,6 +1971,7 @@
         }
 
         function switchUnloadedSubTab(unloadedTab) {
+            playUiSound('click');
             unloadedSubTab = unloadedTab;
             currentDataHash = '';
             document.getElementById('unloaded-pending').classList.toggle('active', unloadedTab === 'unloaded_pending');
@@ -1842,6 +1998,7 @@
         }
 
         async function openNotifications() {
+            playUiSound('pop');
             let userId = getUserId();
             if (!userId) return;
 
@@ -2061,6 +2218,7 @@
         }
 
         function toggleRow(id) {
+            playUiSound('click');
             const row = document.getElementById(`row-${id}`) || event.currentTarget;
             const details = document.getElementById(`details-${id}`);
             
@@ -2079,6 +2237,7 @@
 
         function openOfferModal(id, event) {
             event.stopPropagation();
+            playUiSound('pop');
             activeOfferLoadId = id;
             document.getElementById('bidModal').classList.add('active');
         }
@@ -2086,7 +2245,7 @@
         async function submitModalBid() {
             let price = document.getElementById('modalPrice').value.trim();
             let comment = document.getElementById('modalComment').value.trim();
-            if (!price) return showToast('Укажите ставку');
+            if (!price) return showToast('Укажите желаемую ставку', 'error');
 
             let qty = document.getElementById(`qty-${activeOfferLoadId}`)?.value || '1';
             closeModal('bidModal');
@@ -2121,17 +2280,18 @@
                 });
                 let data = await res.json();
                 if (res.ok) {
-                    showToast('Заявка успешно отправлена');
+                    showToast('Заявка успешно отправлена', 'success');
                     loadData(false);
                 } else {
-                    showToast(data.error || 'Ошибка бронирования');
+                    showToast(data.error || 'Ошибка бронирования', 'error');
                 }
             } catch(e) {
-                showToast('Ошибка сети');
+                showToast('Ошибка сети', 'error');
             }
         }
 
         function openUnloadModal(dealId) {
+            playUiSound('pop');
             document.getElementById('unloadDealId').value = dealId;
             document.getElementById('unloadDate').valueAsDate = new Date();
             selectedFiles = [];
@@ -2142,7 +2302,9 @@
         function handleFileSelect(event) {
             const files = Array.from(event.target.files);
             selectedFiles = selectedFiles.concat(files);
+            playUiSound('pop');
             renderFilePreview();
+            showToast(`Прикреплено файлов: ${files.length}`, 'info');
         }
 
         function renderFilePreview() {
@@ -2156,6 +2318,7 @@
         }
 
         function removeFile(idx) {
+            playUiSound('click');
             selectedFiles.splice(idx, 1);
             renderFilePreview();
         }
@@ -2165,7 +2328,7 @@
             const date = document.getElementById('unloadDate').value;
             const notes = document.getElementById('unloadNotes').value;
 
-            if (!date) return showToast('Укажите дату выгрузки');
+            if (!date) return showToast('Укажите дату выгрузки', 'error');
 
             const formData = new FormData();
             formData.append('deal_id', dealId);
@@ -2179,14 +2342,14 @@
                     body: formData
                 });
                 if (res.ok) {
-                    showToast('Рейс успешно выгружен');
+                    showToast('Рейс выгружен, документы загружены', 'success');
                     closeModal('unloadModal');
                     loadData(false);
                 } else {
-                    showToast('Ошибка сохранения');
+                    showToast('Ошибка сохранения', 'error');
                 }
             } catch(e) {
-                showToast('Данные выгрузки сохранены');
+                showToast('Данные выгрузки сохранены', 'success');
                 closeModal('unloadModal');
                 loadData(false);
             }
