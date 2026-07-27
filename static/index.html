@@ -253,60 +253,6 @@
             box-shadow: var(--shadow-sm);
         }
 
-        /* Фильтры направлений */
-        .filter-wrapper {
-            position: relative;
-            margin-bottom: 12px;
-        }
-
-        .filter-scroll {
-            display: flex;
-            gap: 6px;
-            overflow-x: auto;
-            white-space: nowrap;
-            padding-bottom: 4px;
-            padding-right: 20px;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border) transparent;
-            scroll-behavior: smooth;
-        }
-
-        .filter-scroll::-webkit-scrollbar { height: 3px; }
-        .filter-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-        .filter-wrapper::after {
-            content: '';
-            position: absolute;
-            top: 0; right: 0; bottom: 4px;
-            width: 24px;
-            background: linear-gradient(to right, transparent, var(--bg));
-            pointer-events: none;
-        }
-
-        .chip {
-            padding: 6px 12px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: var(--transition);
-            display: inline-flex;
-            align-items: center;
-            box-shadow: var(--shadow-sm);
-            flex-shrink: 0;
-        }
-
-        .chip:hover { border-color: var(--primary); color: var(--text); }
-        .chip.active {
-            background: var(--primary-light);
-            color: var(--primary);
-            border-color: var(--primary);
-            font-weight: 600;
-        }
-
         /* Подразделы "Мои грузы" */
         .sub-nav {
             display: flex;
@@ -833,7 +779,7 @@
         <div class="header-brand" onclick="handleHeaderClick()">
             <div class="header-logo-container">
                 <img id="headerLogoImg"
-                     src="https://belkaspian.by/tpl/images/logo.svg" 
+                     src="https://belkaspian.by/wp-content/uploads/2018/06/logo.png" 
                      alt="УП Белкаспиан" 
                      class="header-logo-img"
                      onload="handleLogoLoad(true)"
@@ -859,7 +805,7 @@
         </div>
     </div>
 
-    <!-- Главная Навигация -->
+    <!-- Главная Навигация (Биржа / Мои грузы) -->
     <div class="main-nav">
         <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">
             <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
@@ -868,19 +814,6 @@
         <div class="nav-btn" id="tab-my" onclick="switchTab('my')">
             <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
             <span>Мои грузы</span>
-        </div>
-    </div>
-
-    <!-- Фильтры направлений -->
-    <div class="filter-wrapper" id="dir-filters">
-        <div class="filter-scroll" id="filterScroll">
-            <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
-            <div class="chip" onclick="setFilter('Казахстан', this)">Казахстан</div>
-            <div class="chip" onclick="setFilter('Узбекистан', this)">Узбекистан</div>
-            <div class="chip" onclick="setFilter('Кыргызстан', this)">Кыргызстан</div>
-            <div class="chip" onclick="setFilter('Грузия', this)">Грузия</div>
-            <div class="chip" onclick="setFilter('Азербайджан', this)">Азербайджан</div>
-            <div class="chip" onclick="setFilter('Армения', this)">Армения</div>
         </div>
     </div>
 
@@ -957,7 +890,7 @@
         <div class="profile-card">
             <div class="profile-title">
                 <svg class="icon" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                Подписки на уведомления
+                Подписки на направления
             </div>
             <div class="subs-grid">
                 <div class="sub-chip" data-val="Казахстан" onclick="toggleSubChip(this)">Казахстан</div>
@@ -970,7 +903,7 @@
         </div>
     </div>
 
-    <!-- Модалка: Подтверждение действий (Вместо системных alert/confirm с URL) -->
+    <!-- Модалка: Подтверждение действий -->
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1182,7 +1115,6 @@
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
         let mySubTab = 'active';
-        let currentCountry = 'ALL';
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
@@ -1215,14 +1147,6 @@
             const btn = document.getElementById('sortDirBtn');
             btn.classList.toggle('asc', sortAscending);
             loadData(false);
-        }
-
-        const filterScroll = document.getElementById('filterScroll');
-        if (filterScroll) {
-            filterScroll.addEventListener('wheel', (evt) => {
-                evt.preventDefault();
-                filterScroll.scrollLeft += evt.deltaY;
-            });
         }
 
         function toggleSearchInput() {
@@ -1273,7 +1197,6 @@
             document.getElementById(id).classList.remove('active');
         }
 
-        // Фирменное окно подтверждения (Без системного URL)
         function askConfirm(text, callback) {
             const modal = document.getElementById('confirmModal');
             document.getElementById('confirmModalText').textContent = text;
@@ -1606,7 +1529,6 @@
             document.getElementById('tab-my').classList.toggle('active', tab === 'my');
             document.getElementById('header-profile-btn').classList.toggle('active', tab === 'profile');
 
-            document.getElementById('dir-filters').style.display = (tab === 'catalog') ? 'block' : 'none';
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
 
@@ -1626,15 +1548,6 @@
             loadData(false);
         }
 
-        function setFilter(country, el) {
-            currentCountry = country;
-            currentDataHash = '';
-            document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-            el.classList.add('active');
-            loadData(false);
-        }
-
-        // Проверка количества непрочитанных уведомлений для колокольчика
         async function checkNotifications() {
             let userId = getUserId();
             if (!userId) return;
@@ -1719,8 +1632,6 @@
             try {
                 if (currentTab === 'catalog') {
                     let url = `/api/loads?user_id=${userId}&t=` + Date.now();
-                    if (currentCountry !== 'ALL') url += '&country=' + encodeURIComponent(currentCountry);
-                    
                     let res = await fetch(url);
                     let data = await res.json();
                     let rawLoads = data.loads || [];
@@ -1733,10 +1644,8 @@
                     let sortedLoads = sortItems(rawLoads);
                     let newHash = JSON.stringify(sortedLoads);
 
-                    // Если данные не изменились при автообновлении — сохраняем UI без перерисовки!
                     if (isSilent && newHash === currentDataHash) return;
 
-                    // Запоминаем текущую открытую строку перед перерисовкой
                     let openDetailsId = document.querySelector('.t-details.active')?.id;
                     currentDataHash = newHash;
 
@@ -1789,7 +1698,6 @@
                         </div>
                     `}).join('');
 
-                    // Восстанавливаем открытую строку после обновления
                     if (openDetailsId) {
                         let openEl = document.getElementById(openDetailsId);
                         if (openEl) {
@@ -2042,7 +1950,7 @@
             } catch(e) {}
         }
 
-        // Автозапуск и периодическая проверка данных
+        // Автозапуск
         loadData(false);
         setInterval(() => {
             if (currentTab === 'catalog' || currentTab === 'my') loadData(true);
