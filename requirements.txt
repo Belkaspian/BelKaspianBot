@@ -5,3 +5,5 @@ google-genai
 pydantic
 Pillow
 pypdf
+opencv-python-headless
+numpy
