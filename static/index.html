@@ -1,4 +1,4 @@
-INDEX_HTML = r"""<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -1345,6 +1345,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 if (res.ok) {
                     btn.textContent = '✅ Бот готов принять документы в чате!';
                     btn.style.background = '#28a745';
+
+                    // Проверяем устройство: мобильное или компьютер
+                    let platform = (tg.platform || '').toLowerCase();
+                    let isMobile = ['ios', 'android'].includes(platform) || (window.innerWidth <= 600 && !['tdesktop', 'macos', 'webk', 'weba'].includes(platform));
+
+                    // На смартфоне перекидываем прямо в чат с ботом, закрывая Web App
+                    if (isMobile && tg && tg.close) {
+                        setTimeout(() => { tg.close(); }, 300);
+                    }
                 } else {
                     btn.textContent = '❌ Ошибка';
                     setTimeout(() => { btn.textContent = originalText; }, 2000);
@@ -1521,4 +1530,4 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }, 3000);
     </script>
 </body>
-</html>"""
+</html>
