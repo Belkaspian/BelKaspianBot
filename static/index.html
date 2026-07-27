@@ -1294,70 +1294,88 @@
         // Векторная еврофура с плавным движением ВПЕРЕД и реалистичным силуэтом
         // Минималистичная еврофура строго по скинутому референсу
         const emptyStateHTML = `
-            <div class="empty-state">
-                <div class="empty-illustration-container">
-                    <svg viewBox="0 0 110 42" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <!-- Бегущее полотно дороги -->
-                            <line x1="0" y1="38" x2="110" y2="38" class="animated-road" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="6 4" />
+    <div class="empty-state">
+        <div class="empty-illustration-container">
+            <svg viewBox="0 0 110 42" class="empty-illustration">
+                <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                    
+                    <!-- Бегущая дорога -->
+                    <line x1="0" y1="37" x2="110" y2="37" class="animated-road" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="5 3.5" />
 
-                            <!-- Корпус еврофуры по референсу -->
-                            <g class="animated-truck-body">
-                                <!-- Полуприцеп -->
-                                <rect x="3" y="6" width="70" height="24" rx="1.5" fill="var(--primary-light)" />
-                                <line x1="3" y1="27" x2="73" y2="27" stroke-width="1" />
-                                
-                                <!-- Паллетный ящик / Боковая защита -->
-                                <rect x="30" y="30" width="22" height="4" fill="var(--surface-solid)" stroke-width="1.2" />
-                                <line x1="30" y1="32" x2="52" y2="32" stroke-width="1" />
+                    <!-- Корпус фуры -->
+                    <g class="animated-truck-body">
+                        <!-- Полуприцеп (Тент) -->
+                        <rect x="2" y="5" width="71" height="22" rx="1" fill="var(--primary-light)" />
+                        
+                        <!-- Нижний профиль / рама прицепа -->
+                        <line x1="2" y1="27" x2="73" y2="27" stroke-width="1.6" />
+                        
+                        <!-- Отбойник / брызговик сзади -->
+                        <path d="M 2 27 L 2 32 L 5 32" stroke-width="1" />
 
-                                <!-- Фартук над задними колёсами -->
-                                <path d="M 8 30 L 28 30" stroke-width="1.2" />
-
-                                <!-- Кабина тягача (плавный обтекатель) -->
-                                <path d="M 74 30 L 74 15 L 77 10 C 80 7, 85 7, 89 7 L 97 7 C 101 7, 103 10, 104 14 L 106 25 L 106 30 C 106 32, 104 32, 102 32 L 74 32 Z" fill="var(--surface-solid)" />
-                                
-                                <!-- Боковое стекло -->
-                                <path d="M 88 10 L 98 10 C 101 10, 102 12, 103 15 L 103 21 L 88 21 Z" fill="var(--primary-light)" stroke-width="1.2" />
-                                
-                                <!-- Детали кабины (фара, зеркало, ручка) -->
-                                <line x1="103" y1="27" x2="106" y2="27" stroke-width="1.8" />
-                                <path d="M 103 13 L 105 13 L 105 17" stroke-width="1.2" />
-                                <line x1="89" y1="23" x2="92" y2="23" stroke-width="1.2" />
-                                
-                                <!-- Обвес / Топливный бак -->
-                                <rect x="75" y="30" width="12" height="3.5" fill="var(--surface-solid)" stroke-width="1" />
-                            </g>
-
-                            <!-- Колёса (3 оси прицепа + 2 оси тягача) -->
-                            <g class="animated-wheel" style="transform-origin: 12px 34px;">
-                                <circle cx="12" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
-                                <circle cx="12" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
-                            </g>
-                            <g class="animated-wheel" style="transform-origin: 20px 34px;">
-                                <circle cx="20" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
-                                <circle cx="20" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
-                            </g>
-                            <g class="animated-wheel" style="transform-origin: 28px 34px;">
-                                <circle cx="28" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
-                                <circle cx="28" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
-                            </g>
-
-                            <g class="animated-wheel" style="transform-origin: 70px 34px;">
-                                <circle cx="70" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
-                                <circle cx="70" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
-                            </g>
-                            <g class="animated-wheel" style="transform-origin: 96px 34px;">
-                                <circle cx="96" cy="34" r="3.6" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.6"/>
-                                <circle cx="96" cy="34" r="1.8" stroke="var(--primary)" stroke-width="1" stroke-dasharray="1.5 1"/>
-                            </g>
+                        <!-- Боковая защита (паллетник / противоподкатный брус) -->
+                        <g stroke-width="1">
+                            <rect x="33" y="29.5" width="22" height="3.5" fill="var(--surface-solid)" rx="0.5" />
+                            <line x1="33" y1="31.2" x2="55" y2="31.2" />
                         </g>
-                    </svg>
-                </div>
-                <div class="empty-title">Активных заявок пока нет</div>
-                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
-            </div>
-        `;
+
+                        <!-- Соединительный элемент / Сдельно-сцепное устройство -->
+                        <rect x="73" y="25" width="4" height="2" fill="var(--primary)" />
+
+                        <!-- Кабина тягача (Евро-тип по референсу) -->
+                        <path d="M 76 31 
+                                 L 76 13 
+                                 C 76 10, 78 8.5, 82 8.5 
+                                 L 91 8.5 
+                                 C 94.5 8.5, 97 10.5, 98.5 14 
+                                 L 101.5 22 
+                                 L 101.5 31 
+                                 Z" 
+                              fill="var(--surface-solid)" />
+                        
+                        <!-- Боковое стекло кабины -->
+                        <path d="M 85 11 L 93.5 11 C 95.5 11, 96.5 12.5, 97 14.5 L 97.5 19.5 L 85 19.5 Z" fill="var(--primary-light)" stroke-width="1.1" />
+
+                        <!-- Детали кабины: Зеркало, ручка, фартук и решетка -->
+                        <path d="M 97.5 13.5 L 99.5 13.5 L 99.5 17" stroke-width="1" /> <!-- Зеркало -->
+                        <line x1="86.5" y1="21.5" x2="89" y2="21.5" stroke-width="1.2" /> <!-- Ручка -->
+                        <line x1="97" y1="26" x2="101.5" y2="26" stroke-width="1.2" /> <!-- Фара / Вставка -->
+                        
+                        <!-- Топливный бак / Обвес тягача -->
+                        <rect x="77" y="28" width="10" height="3" fill="var(--surface-solid)" stroke-width="0.9" />
+                    </g>
+
+                    <!-- Колёса (3 оси прицепа + 2 оси тягача) -->
+                    <!-- Оси прицепа -->
+                    <g class="animated-wheel" style="transform-origin: 11px 33.5px;">
+                        <circle cx="11" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="11" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                    <g class="animated-wheel" style="transform-origin: 19px 33.5px;">
+                        <circle cx="19" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="19" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                    <g class="animated-wheel" style="transform-origin: 27px 33.5px;">
+                        <circle cx="27" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="27" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+
+                    <!-- Оси тягача -->
+                    <g class="animated-wheel" style="transform-origin: 70px 33.5px;">
+                        <circle cx="70" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="70" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                    <g class="animated-wheel" style="transform-origin: 94px 33.5px;">
+                        <circle cx="94" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                        <circle cx="94" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                    </g>
+                </g>
+            </svg>
+        </div>
+        <div class="empty-title">Активных заявок пока нет</div>
+        <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
+    </div>
+`;
         
         function handleLogoLoad(success) {
             const img = document.getElementById('headerLogoImg');
