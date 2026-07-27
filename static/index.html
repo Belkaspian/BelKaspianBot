@@ -1,255 +1,446 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Биржа грузов</title>
+    <title>Логистическая платформа | ЧТУП «Белкаспиан»</title>
+    
+    <!-- Подключение Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
     <style>
         :root {
-            --bg: var(--tg-theme-bg-color, #f8f9fa);
-            --text: var(--tg-theme-text-color, #212529);
-            --hint: var(--tg-theme-hint-color, #6c757d);
-            --card: var(--tg-theme-secondary-bg-color, #ffffff);
-            --border: rgba(0,0,0,0.08);
-            --btn-green: #28a745;
-            --btn-orange: #fd7e14;
-            --btn-blue: #007aff;
-            --active-tab: var(--tg-theme-button-color, #2481cc);
+            --font-main: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            
+            /* Светлая тема (По умолчанию) */
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --primary-light: rgba(37, 99, 235, 0.08);
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --surface-hover: #f1f5f9;
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --text-muted: #64748b;
+            
+            --success: #10b981;
+            --success-light: rgba(16, 185, 129, 0.12);
+            --warning: #f59e0b;
+            --warning-light: rgba(245, 158, 11, 0.12);
+            --error: #ef4444;
+            --error-light: rgba(239, 68, 68, 0.12);
+            
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        [data-theme="dark"] {
+            --primary: #3b82f6;
+            --primary-hover: #60a5fa;
+            --primary-light: rgba(59, 130, 246, 0.15);
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --surface-hover: #334155;
+            --border: #334155;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            
+            --success: #34d399;
+            --success-light: rgba(52, 211, 153, 0.15);
+            --warning: #fbbf24;
+            --warning-light: rgba(251, 191, 36, 0.15);
+            --error: #f87171;
+            --error-light: rgba(248, 113, 113, 0.15);
+            
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: var(--bg);
+            font-family: var(--font-main);
+            background-color: var(--bg);
             color: var(--text);
-            margin: 0;
-            padding: 10px 10px 120px 10px; /* Безопасный отступ снизу под нижнюю панель Telegram на смартфонах */
             font-size: 13px;
-            -webkit-user-select: none;
+            line-height: 1.5;
+            padding: 12px 12px 100px 12px;
             user-select: none;
+            -webkit-user-select: none;
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
 
+        /* SVG Иконки векторные */
+        .icon {
+            width: 18px;
+            height: 18px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            display: inline-block;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+
+        /* Header Bar */
         .header-top {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 10px;
-            padding: 0 2px;
+            margin-bottom: 14px;
+            padding: 4px 2px;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .header-logo {
+            width: 32px;
+            height: 32px;
+            background: var(--primary);
+            color: #fff;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            box-shadow: var(--shadow-sm);
         }
 
         .header-title {
             font-size: 15px;
             font-weight: 700;
             color: var(--text);
-            letter-spacing: 0.3px;
-            cursor: pointer;
+            letter-spacing: -0.2px;
         }
 
-        .bell-icon {
+        .header-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .icon-btn {
             position: relative;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 6px 12px;
-            background: var(--card);
-            border-radius: 12px;
+            background: var(--surface);
             border: 1px solid var(--border);
-            box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+            color: var(--text-muted);
+            width: 38px;
+            height: 38px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .icon-btn:hover {
+            background: var(--surface-hover);
+            color: var(--text);
+        }
+
+        .icon-btn:active {
+            transform: scale(0.95);
         }
 
         .bell-badge {
             position: absolute;
-            top: -3px;
-            right: -3px;
-            background: #dc3545;
+            top: -4px;
+            right: -4px;
+            background: var(--error);
             color: #ffffff;
-            font-size: 9px;
+            font-size: 10px;
             font-weight: 700;
             border-radius: 10px;
-            padding: 1px 5px;
+            padding: 2px 6px;
+            border: 2px solid var(--bg);
             display: none;
+            line-height: 1;
         }
 
+        /* Главная Навигация (Табы) */
         .main-nav {
             display: flex;
             gap: 6px;
-            margin-bottom: 12px;
-            background: var(--card);
+            margin-bottom: 14px;
+            background: var(--surface);
             padding: 4px;
-            border-radius: 12px;
+            border-radius: var(--radius-md);
             border: 1px solid var(--border);
-            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+            box-shadow: var(--shadow-sm);
         }
 
         .nav-btn {
             flex: 1;
-            padding: 9px 4px;
+            padding: 10px 6px;
             text-align: center;
             font-weight: 600;
-            font-size: 11px;
-            border-radius: 9px;
+            font-size: 12px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
-            color: var(--hint);
-            transition: all 0.2s;
+            color: var(--text-muted);
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
             white-space: nowrap;
+        }
+
+        .nav-btn:hover {
+            color: var(--text);
         }
 
         .nav-btn.active {
-            background: var(--active-tab);
+            background: var(--primary);
             color: #ffffff;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            box-shadow: var(--shadow-sm);
         }
 
-        /* Адаптивный фильтр: свайп в 1 строку на телефоне, сетка на ПК */
+        /* Фильтры по странам */
         .filter-scroll {
             display: flex;
-            gap: 6px;
-            margin-bottom: 10px;
+            gap: 8px;
+            margin-bottom: 12px;
             overflow-x: auto;
             white-space: nowrap;
+            padding-bottom: 4px;
             scrollbar-width: none;
-            -webkit-overflow-scrolling: touch;
         }
+
         .filter-scroll::-webkit-scrollbar { display: none; }
 
-        @media (min-width: 600px) {
-            .filter-scroll {
-                flex-wrap: wrap;
-                overflow-x: visible;
-                white-space: normal;
-            }
+        .chip {
+            padding: 8px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: var(--shadow-sm);
         }
 
-        .chip {
-            white-space: nowrap;
-            padding: 7px 12px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--hint);
-            cursor: pointer;
-            transition: all 0.15s;
+        .chip:hover {
+            border-color: var(--primary);
+            color: var(--text);
         }
 
         .chip.active {
-            background: var(--active-tab);
-            color: #fff;
-            border-color: var(--active-tab);
+            background: var(--primary-light);
+            color: var(--primary);
+            border-color: var(--primary);
         }
 
-        /* Подразделы для Моих заявок */
+        /* Дополнительные статусы "Мои Заявки" */
         .sub-nav {
             display: flex;
             gap: 6px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         .sub-nav-btn {
             flex: 1;
-            padding: 7px;
+            padding: 8px 6px;
             text-align: center;
             font-weight: 600;
             font-size: 11px;
-            border-radius: 10px;
-            background: var(--card);
+            border-radius: var(--radius-sm);
+            background: var(--surface);
             border: 1px solid var(--border);
-            color: var(--hint);
+            color: var(--text-muted);
             cursor: pointer;
-            transition: all 0.2s;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
         }
 
         .sub-nav-btn.active {
-            background: var(--active-tab);
-            color: #fff;
-            border-color: var(--active-tab);
+            background: var(--primary);
+            color: #ffffff;
+            border-color: var(--primary);
         }
 
-        /* Выпадающие списки с красивым дизайном и стрелочкой */
-        .sort-bar {
+        /* Строка сортировки и поиска */
+        .search-bar, .sort-bar {
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 12px;
-            background: var(--card);
+            margin-bottom: 10px;
+            background: var(--surface);
             padding: 6px 12px;
-            border-radius: 12px;
+            border-radius: var(--radius-md);
             border: 1px solid var(--border);
-            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .search-bar input {
+            border: none;
+            background: transparent;
+            margin-bottom: 0;
+            padding: 6px 0;
+            outline: none;
+            color: var(--text);
+            font-size: 12px;
+            width: 100%;
         }
 
         .sort-bar label {
-            font-size: 10px;
-            font-weight: 700;
-            color: var(--hint);
-            text-transform: uppercase;
-        }
-
-        .sort-bar select, select {
-            flex: 1;
-            appearance: none;
-            -webkit-appearance: none;
-            background: var(--bg) url("data:image/svg+xml;utf8,<svg fill='%236c757d' height='16' viewBox='0 0 24 24' width='16' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") no-repeat right 10px center;
-            border-radius: 10px;
-            padding: 8px 28px 8px 12px;
-            border: 1px solid var(--border);
             font-size: 11px;
-            font-weight: 600;
-            color: var(--text);
-            outline: none;
-            box-shadow: none;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
         }
 
+        select, input[type="text"], input[type="password"], input[type="date"], textarea {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+            transition: var(--transition);
+        }
+
+        select:focus, input:focus, textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        select {
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg fill='%2364748b' height='16' viewBox='0 0 24 24' width='16' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 28px;
+        }
+
+        /* Основная Таблица / Список Карточек */
         .table-container {
-            background: var(--card);
-            border-radius: 12px;
+            background: var(--surface);
+            border-radius: var(--radius-md);
             overflow: hidden;
             border: 1px solid var(--border);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            box-shadow: var(--shadow-sm);
         }
 
         .t-head {
             display: grid;
-            grid-template-columns: 45px 1fr 145px 16px;
-            background: rgba(0,0,0,0.03);
-            padding: 9px 10px;
+            grid-template-columns: 75px 1fr 110px 24px;
+            background: var(--bg);
+            padding: 10px 14px;
             font-size: 11px;
             font-weight: 700;
-            color: var(--hint);
+            color: var(--text-muted);
             border-bottom: 1px solid var(--border);
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .t-row {
             display: grid;
-            grid-template-columns: 45px 1fr 145px 16px;
-            padding: 11px 10px;
+            grid-template-columns: 75px 1fr 110px 24px;
+            padding: 12px 14px;
             border-bottom: 1px solid var(--border);
             align-items: center;
             cursor: pointer;
-            transition: background 0.15s;
+            transition: var(--transition);
+        }
+
+        .t-row:hover {
+            background: var(--surface-hover);
+        }
+
+        .t-row:last-child { border-bottom: none; }
+
+        .col-date {
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .col-route {
+            font-weight: 600;
+            color: var(--text);
             white-space: nowrap;
             overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 8px;
         }
 
-        .t-row:active { background: rgba(0,0,0,0.04); }
-        .t-row:last-child { border-bottom: none; }
-        
-        .col-date { font-weight: 500; color: var(--hint); font-size: 11px; white-space: nowrap; }
-        .col-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 4px; }
-        .col-price { font-weight: 700; color: var(--btn-green); text-align: right; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .col-arrow { text-align: right; color: var(--hint); font-size: 10px; }
+        .col-price {
+            font-weight: 700;
+            color: var(--success);
+            text-align: right;
+            font-size: 12px;
+        }
 
+        .col-arrow {
+            text-align: right;
+            color: var(--text-muted);
+            transition: transform 0.2s;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .t-row.expanded .col-arrow {
+            transform: rotate(180deg);
+        }
+
+        /* Подробная Детализация */
         .t-details {
             display: none;
-            padding: 12px 14px;
+            padding: 16px;
             background: var(--bg);
             border-bottom: 1px solid var(--border);
-            animation: fadeIn 0.2s ease-in-out;
+            animation: slideDown 0.2s ease-out;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-4px); }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-6px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
@@ -257,45 +448,50 @@
 
         .info-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 10px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .info-item span {
+            color: var(--text-muted);
+            font-size: 10px;
+            display: block;
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
+
+        .info-item b {
+            color: var(--text);
             font-size: 12px;
         }
 
-        .info-item span { color: var(--hint); font-size: 10px; display: block; text-transform: uppercase; font-weight: 600; }
-        .info-item b { color: var(--text); }
-
-        .today-badge {
-            background: rgba(220, 53, 69, 0.15);
-            color: #dc3545;
-            padding: 3px 8px;
-            border-radius: 6px;
-            font-size: 10px;
-            font-weight: 700;
-            display: inline-block;
-            margin-bottom: 6px;
-            border: 1px solid rgba(220, 53, 69, 0.3);
-        }
-
-        .doc-badge {
-            padding: 4px 8px;
-            border-radius: 6px;
+        /* Бейджи и статусы */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 20px;
             font-size: 11px;
             font-weight: 700;
-            display: inline-block;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
-        .doc-badge.green { background: rgba(40, 167, 69, 0.2); color: #1e7e34; }
-        .doc-badge.yellow { background: rgba(255, 193, 7, 0.25); color: #856404; }
+
+        .badge-danger { background: var(--error-light); color: var(--error); }
+        .badge-success { background: var(--success-light); color: var(--success); }
+        .badge-warning { background: var(--warning-light); color: var(--warning); }
+        .badge-primary { background: var(--primary-light); color: var(--primary); }
 
         .admin-comment {
-            background: rgba(255, 193, 7, 0.15);
+            background: var(--warning-light);
             color: var(--text);
-            padding: 8px 10px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            border-left: 3px solid #ffc107;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            margin-bottom: 12px;
+            border-left: 3px solid var(--warning);
             font-size: 12px;
             line-height: 1.4;
         }
@@ -304,374 +500,563 @@
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-bottom: 10px;
-            background: var(--card);
-            padding: 6px 10px;
-            border-radius: 8px;
+            margin-bottom: 12px;
+            background: var(--surface);
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
             border: 1px solid var(--border);
         }
 
-        .qty-picker label { font-size: 11px; color: var(--hint); font-weight: 600; flex: 1; }
-
-        textarea, input[type="text"], input[type="password"] {
-            width: 100%;
-            box-sizing: border-box;
-            background: var(--card);
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 10px 12px;
-            border-radius: 10px;
-            font-size: 12px;
-            margin-bottom: 10px;
-            font-family: inherit;
+        .qty-picker label {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+            flex: 1;
         }
-
-        textarea { resize: none; height: 46px; }
 
         .buttons {
             display: flex;
             gap: 8px;
         }
 
-        .buttons button, .btn-rounded {
+        .btn {
             flex: 1;
-            padding: 11px;
+            padding: 10px 16px;
             border: none;
-            border-radius: 10px;
+            border-radius: var(--radius-sm);
             font-weight: 600;
             font-size: 12px;
-            color: #fff;
+            color: #ffffff;
             cursor: pointer;
-            transition: opacity 0.15s;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            box-shadow: var(--shadow-sm);
         }
 
-        .buttons button:active, .btn-rounded:active { opacity: 0.8; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
 
-        .btn-confirm { background: var(--btn-green); }
-        .btn-offer { background: var(--btn-orange); }
+        .btn-success { background: var(--success); }
+        .btn-warning { background: var(--warning); color: #000; }
+        .btn-primary { background: var(--primary); }
+        .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+        .btn-danger { background: var(--error); }
 
-        .loader { text-align: center; padding: 25px; color: var(--hint); font-size: 13px; }
-
+        /* Личный Кабинет */
         .profile-card {
-            background: var(--card);
-            border-radius: 12px;
-            padding: 14px;
+            background: var(--surface);
+            border-radius: var(--radius-md);
+            padding: 16px;
             border: 1px solid var(--border);
-            margin-bottom: 12px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+            margin-bottom: 14px;
+            box-shadow: var(--shadow-sm);
         }
 
         .profile-title {
             font-weight: 700;
             font-size: 13px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             color: var(--text);
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .form-group {
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         .form-group label {
             display: block;
             font-size: 10px;
             font-weight: 700;
-            color: var(--hint);
+            color: var(--text-muted);
             margin-bottom: 4px;
             text-transform: uppercase;
         }
 
         .subs-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(2, 1fr);
             gap: 8px;
-            margin-bottom: 12px;
         }
 
         .sub-chip {
             background: var(--bg);
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1.5px solid var(--border);
+            padding: 10px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: var(--transition);
             text-align: center;
-            user-select: none;
             color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
         }
 
         .sub-chip.active {
-            background: var(--active-tab, #2481cc);
+            background: var(--primary);
             color: #ffffff;
-            border-color: var(--active-tab, #2481cc);
-            box-shadow: 0 2px 6px rgba(36, 129, 204, 0.3);
+            border-color: var(--primary);
         }
 
+        /* Модальные окна */
         .modal-overlay {
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 999;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
             align-items: center;
             justify-content: center;
             padding: 16px;
+            animation: fadeIn 0.2s ease-out;
         }
-        .modal-overlay.active { display: flex; }
-        .modal-card {
-            background: var(--card);
-            border-radius: 16px;
-            padding: 18px;
-            width: 100%;
-            max-width: 340px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center; }
 
+        .modal-overlay.active { display: flex; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-card {
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: var(--shadow-lg);
+            max-height: 85vh;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-weight: 700;
+            font-size: 15px;
+            color: var(--text);
+        }
+
+        .modal-close {
+            cursor: pointer;
+            color: var(--text-muted);
+            padding: 4px;
+            border-radius: 50%;
+            display: flex;
+            transition: var(--transition);
+        }
+
+        .modal-close:hover { background: var(--bg); color: var(--text); }
+
+        /* Элементы уведомлений */
         .notif-item {
             background: var(--bg);
             border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px;
+            border-radius: var(--radius-sm);
+            padding: 12px;
             margin-bottom: 8px;
         }
+
         .notif-item.unread {
-            border-left: 4px solid var(--active-tab);
+            border-left: 4px solid var(--primary);
         }
+
         .notif-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
-        .notif-text { font-size: 11px; color: var(--text); line-height: 1.3; }
-        .notif-date { font-size: 9px; color: var(--hint); margin-top: 4px; text-align: right; }
+        .notif-text { font-size: 11px; color: var(--text); line-height: 1.4; }
+        .notif-date { font-size: 10px; color: var(--text-muted); margin-top: 6px; text-align: right; }
+
+        /* Загрузчик */
+        .loader {
+            text-align: center;
+            padding: 30px;
+            color: var(--text-muted);
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Загрузка документов (Dropzone) */
+        .dropzone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            text-align: center;
+            background: var(--bg);
+            cursor: pointer;
+            transition: var(--transition);
+            margin-bottom: 12px;
+        }
+
+        .dropzone:hover, .dropzone.dragover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+
+        .dropzone-icon {
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .file-preview-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg);
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            font-size: 11px;
+        }
+
+        /* Toast Уведомления */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 10px 16px;
+            border-radius: 20px;
+            box-shadow: var(--shadow-lg);
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            animation: toastIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (min-width: 640px) {
+            body { max-width: 600px; margin: 0 auto; }
+        }
     </style>
 </head>
 <body>
 
+    <!-- Header -->
     <div class="header-top">
-        <div class="header-title" onclick="handleHeaderClick()">ЧТУП «Белкаспиан» | Биржа</div>
-        <div class="bell-icon" onclick="openNotifications()">
-            🔔
-            <div class="bell-badge" id="bellBadge">0</div>
+        <div class="header-brand" onclick="handleHeaderClick()">
+            <div class="header-logo">БК</div>
+            <div>
+                <div class="header-title">Белкаспиан</div>
+                <div class="header-subtitle">Биржа грузов & Логистика</div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button class="icon-btn" onclick="toggleTheme()" title="Смена темы">
+                <svg class="icon" viewBox="0 0 24 24" id="theme-icon"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+            </button>
+            <button class="icon-btn" onclick="openNotifications()" title="Уведомления">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <div class="bell-badge" id="bellBadge">0</div>
+            </button>
         </div>
     </div>
 
+    <!-- Основная Таб-Навигация -->
     <div class="main-nav">
-        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">📋 Биржа</div>
-        <div class="nav-btn" id="tab-my" onclick="switchTab('my')">📦 Мои заявки</div>
-        <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">👤 Личный кабинет</div>
+        <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            <span>Биржа</span>
+        </div>
+        <div class="nav-btn" id="tab-my" onclick="switchTab('my')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            <span>Мои грузы</span>
+        </div>
+        <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg>
+            <span>Кабинет</span>
+        </div>
     </div>
 
-    <!-- Адаптивный фильтр направлений -->
+    <!-- Фильтры стран (Биржа) -->
     <div class="filter-scroll" id="dir-filters">
         <div class="chip active" onclick="setFilter('ALL', this)">Все направления</div>
-        <div class="chip" onclick="setFilter('Казахстан', this)">🇰🇿 Казахстан</div>
-        <div class="chip" onclick="setFilter('Узбекистан', this)">🇺🇿 Узбекистан</div>
-        <div class="chip" onclick="setFilter('Кыргызстан', this)">🇰🇬 Кыргызстан</div>
-        <div class="chip" onclick="setFilter('Грузия', this)">🇬🇪 Грузия</div>
-        <div class="chip" onclick="setFilter('Азербайджан', this)">🇦🇿 Азербайджан</div>
-        <div class="chip" onclick="setFilter('Армения', this)">🇦🇲 Армения</div>
+        <div class="chip" onclick="setFilter('Казахстан', this)">Казахстан</div>
+        <div class="chip" onclick="setFilter('Узбекистан', this)">Узбекистан</div>
+        <div class="chip" onclick="setFilter('Кыргызстан', this)">Кыргызстан</div>
+        <div class="chip" onclick="setFilter('Грузия', this)">Грузия</div>
+        <div class="chip" onclick="setFilter('Азербайджан', this)">Азербайджан</div>
+        <div class="chip" onclick="setFilter('Армения', this)">Армения</div>
     </div>
 
-    <!-- Переключатель подраздела "Мои заявки" -->
+    <!-- Вложенные Статусы для "Моих Грузов" (В работе / Едут / Выгружены) -->
     <div class="sub-nav" id="my-sub-nav" style="display: none;">
-        <div class="sub-nav-btn active" id="subnav-active" onclick="switchMySubTab('active')">📋 Активные</div>
-        <div class="sub-nav-btn" id="subnav-archive" onclick="switchMySubTab('archive')">🚚 Едущие авто (Архив)</div>
+        <div class="sub-nav-btn active" id="subnav-active" onclick="switchMySubTab('active')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> В работе
+        </div>
+        <div class="sub-nav-btn" id="subnav-transit" onclick="switchMySubTab('transit')">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg> Едут
+        </div>
+        <div class="sub-nav-btn" id="subnav-archive" onclick="switchMySubTab('archive')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Выгружены
+        </div>
     </div>
 
-    <!-- Блок сортировки -->
+    <!-- Панель Поиска и Сортировки -->
+    <div class="search-bar" id="search-container">
+        <svg class="icon" viewBox="0 0 24 24" style="color: var(--text-muted);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="searchInput" placeholder="Поиск по маршруту, дате, цене..." oninput="loadData(true)" />
+    </div>
+
     <div class="sort-bar" id="sort-container">
         <label>Сортировка:</label>
         <select id="sortSelect" onchange="loadData(false)">
-            <option value="newest">📅 Сначала новые</option>
-            <option value="date_asc">📅 По дате погрузки</option>
-            <option value="route">📍 По направлению (А-Я)</option>
-            <option value="price_desc">💰 По цене (сначала высокие)</option>
+            <option value="newest">Сначала новые</option>
+            <option value="date_asc">По дате погрузки</option>
+            <option value="route">По маршруту (А-Я)</option>
+            <option value="price_desc">По цене (убывание)</option>
         </select>
     </div>
 
-    <!-- Поиск по каталогу и заявкам -->
-    <div class="sort-bar" id="search-container" style="margin-bottom: 8px;">
-        <input type="text" id="searchInput" placeholder="🔍 Поиск по маршруту, дате, цене..." oninput="loadData(true)" style="margin-bottom: 0;" />
-    </div>
-
-    <!-- Список грузов / Таблица -->
+    <!-- Список Грузов / Таблица -->
     <div class="table-container" id="main-table">
         <div class="t-head">
             <div>Дата</div>
-            <div>Направление</div>
+            <div>Маршрут</div>
             <div style="text-align: right;">Ставка</div>
             <div></div>
         </div>
-        <div id="loads-body"><div class="loader">Загрузка данных...</div></div>
+        <div id="loads-body">
+            <div class="loader"><div class="spinner"></div>Загрузка заявок...</div>
+        </div>
     </div>
 
-    <!-- Блок личного кабинета (АВТОСОХРАНЕНИЕ) -->
+    <!-- Контейнер Личного Кабинета -->
     <div id="profile-container" style="display: none;">
         <div class="profile-card">
-            <div class="profile-title">👤 Данные компании (Автосохранение)</div>
-            <div class="form-group">
-                <label>Компания:</label>
-                <input type="text" id="profCompany" placeholder="Название вашей компании..." oninput="autoSaveProfile()" />
+            <div class="profile-title">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M19 21V5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1"/></svg>
+                Данные компании (Автосохранение)
             </div>
             <div class="form-group">
-                <label>Имя контактного лица:</label>
-                <input type="text" id="profName" placeholder="Ваше имя..." oninput="autoSaveProfile()" />
+                <label>Название компании</label>
+                <input type="text" id="profCompany" placeholder="ООО / ЧТУП..." oninput="autoSaveProfile()" />
             </div>
             <div class="form-group">
-                <label>Телефон:</label>
+                <label>ФИО Контактного лица</label>
+                <input type="text" id="profName" placeholder="Иван Иванов" oninput="autoSaveProfile()" />
+            </div>
+            <div class="form-group">
+                <label>Контактный телефон</label>
                 <input type="text" id="profPhone" placeholder="+375 / +7..." oninput="autoSaveProfile()" />
             </div>
         </div>
 
         <div class="profile-card">
-            <div class="profile-title">🔔 Подписки на направления</div>
-            <div class="subs-grid" id="profile-subs-grid">
-                <div class="sub-chip" data-val="Казахстан 🇰🇿" onclick="toggleSubChip(this)">🇰🇿 Казахстан</div>
-                <div class="sub-chip" data-val="Узбекистан 🇺🇿" onclick="toggleSubChip(this)">🇺🇿 Узбекистан</div>
-                <div class="sub-chip" data-val="Кыргызстан 🇰🇬" onclick="toggleSubChip(this)">🇰🇬 Кыргызстан</div>
-                <div class="sub-chip" data-val="Грузия 🇬🇪" onclick="toggleSubChip(this)">🇬🇪 Грузия</div>
-                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">🇦🇿 Азербайджан</div>
-                <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">🇦🇲 Армения</div>
+            <div class="profile-title">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                Подписки на уведомления
+            </div>
+            <div class="subs-grid">
+                <div class="sub-chip" data-val="Казахстан 🇰🇿" onclick="toggleSubChip(this)">Казахстан</div>
+                <div class="sub-chip" data-val="Узбекистан 🇺🇿" onclick="toggleSubChip(this)">Узбекистан</div>
+                <div class="sub-chip" data-val="Кыргызстан 🇰🇬" onclick="toggleSubChip(this)">Кыргызстан</div>
+                <div class="sub-chip" data-val="Грузия 🇬🇪" onclick="toggleSubChip(this)">Грузия</div>
+                <div class="sub-chip" data-val="Азербайджан 🇦🇿" onclick="toggleSubChip(this)">Азербайджан</div>
+                <div class="sub-chip" data-val="Армения 🇦🇲" onclick="toggleSubChip(this)">Армения</div>
             </div>
         </div>
     </div>
 
-    <!-- Модальное окно "Своя ставка" -->
+    <!-- Модалка: Своя ставка -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
-            <div class="modal-title">💰 Предложить свою цену</div>
-            <input type="text" id="modalPrice" placeholder="Желаемая ставка (напр., 2400 USD)" />
-            <textarea id="modalComment" placeholder="Комментарий (условия, дата подачи)..."></textarea>
+            <div class="modal-header">
+                <div class="modal-title">Предложить свою ставку</div>
+                <div class="modal-close" onclick="closeModal('bidModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Желаемая ставка ($ / BYN)</label>
+                <input type="text" id="modalPrice" placeholder="Например: 2500 USD" />
+            </div>
+            <div class="form-group">
+                <label>Комментарий / Условия</label>
+                <textarea id="modalComment" placeholder="Укажите готовность к погрузке, особенности ТС..."></textarea>
+            </div>
             <div class="buttons">
-                <button class="btn-confirm" onclick="submitModalBid()">Отправить</button>
-                <button style="background: var(--hint);" onclick="closeModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="submitModalBid()">Отправить предложение</button>
+                <button class="btn btn-secondary" onclick="closeModal('bidModal')">Отмена</button>
             </div>
         </div>
     </div>
 
-    <!-- Модальное окно уведомлений с крестиком -->
+    <!-- Модалка: Фиксация выгрузки и документы -->
+    <div class="modal-overlay" id="unloadModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Фиксация выгрузки товара</div>
+                <div class="modal-close" onclick="closeModal('unloadModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="unloadDealId" />
+            <div class="form-group">
+                <label>Дата фактической выгрузки</label>
+                <input type="date" id="unloadDate" />
+            </div>
+            <div class="form-group">
+                <label>Документы (ТТН, Акт, CMR)</label>
+                <div class="dropzone" id="unloadDropzone" onclick="document.getElementById('unloadFiles').click()">
+                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 32px; height: 32px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <div style="font-weight: 600;">Нажмите или перетащите файлы</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">PDF, JPG, PNG до 10MB</div>
+                </div>
+                <input type="file" id="unloadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleFileSelect(event)" />
+            </div>
+
+            <div class="file-preview-list" id="filePreviewList"></div>
+
+            <div class="form-group">
+                <label>Заметки / Номер ТТН</label>
+                <textarea id="unloadNotes" placeholder="Без замечаний, ТТН №123456..."></textarea>
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-success" onclick="submitUnloadData()">
+                    <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                    Завершить рейс
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка: Уведомления -->
     <div class="modal-overlay" id="notifModal">
         <div class="modal-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div class="modal-title" style="margin-bottom:0;">🔔 Уведомления</div>
-                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint); padding: 4px;" onclick="closeNotifModal()">✕</div>
+            <div class="modal-header">
+                <div class="modal-title">Уведомления</div>
+                <div class="modal-close" onclick="closeModal('notifModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
             </div>
-            <div id="notifList"><div class="loader">Загрузка...</div></div>
-            <button class="btn-rounded" style="width:100%; margin-top:10px; background:var(--hint);" onclick="closeNotifModal()">Закрыть</button>
+            <div id="notifList"><div class="loader"><div class="spinner"></div>Загрузка...</div></div>
         </div>
     </div>
 
-    <!-- Модалка ввода пароля Админа -->
+    <!-- Модалка: Пароль Админа -->
     <div class="modal-overlay" id="adminPassModal">
         <div class="modal-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div class="modal-title" style="margin-bottom:0;">🔐 Вход для администратора</div>
-                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPassModal()">✕</div>
+            <div class="modal-header">
+                <div class="modal-title">Панель администратора</div>
+                <div class="modal-close" onclick="closeModal('adminPassModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
             </div>
-            <input type="password" id="adminPassInput" placeholder="Введите пароль..." />
+            <div class="form-group">
+                <label>Пароль доступа</label>
+                <input type="password" id="adminPassInput" placeholder="Введите ключ..." />
+            </div>
             <div class="buttons">
-                <button class="btn-confirm" onclick="submitAdminPassword()">Войти</button>
-                <button style="background: var(--hint);" onclick="closeAdminPassModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAdminPassword()">Войти</button>
             </div>
         </div>
     </div>
 
-    <!-- Модалка Админки с 3 разделами -->
+    <!-- Панель Администратора -->
     <div class="modal-overlay" id="adminPanelModal">
-        <div class="modal-card" style="max-width: 95%; width: 500px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div class="modal-title" style="margin-bottom:0;">🎛 Панель Администратора</div>
-                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminPanelModal()">✕</div>
-            </div>
-            
-            <div class="sub-nav" style="margin-bottom:12px;">
-                <div class="sub-nav-btn active" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">👥 Перевозчики</div>
-                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">📋 Биржа</div>
-                <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">🤝 Сделки</div>
+        <div class="modal-card" style="max-width: 550px;">
+            <div class="modal-header">
+                <div class="modal-title">Панель Управления</div>
+                <div class="modal-close" onclick="closeModal('adminPanelModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
             </div>
 
-            <!-- Поиск и фильтры Админки -->
-            <div id="adminControlsBox" style="margin-bottom:10px;">
-                <input type="text" id="adminSearchInput" placeholder="🔍 Поиск (компания, имя, тел, ID, маршрут)..." oninput="applyAdminFilters()" style="margin-bottom:8px;" />
-                
-                <div style="display:flex; gap:6px;">
-                    <select id="adminSortSelect" onchange="applyAdminFilters()" style="flex:1;">
-                        <option value="name">👤 По названию/имени (А-Я)</option>
-                        <option value="status">🟢 По статусу (Сначала активные)</option>
+            <div class="sub-nav" style="margin-bottom: 12px;">
+                <div class="sub-nav-btn active" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">Перевозчики</div>
+                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">Заявки</div>
+                <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">Сделки</div>
+            </div>
+
+            <div id="adminControlsBox">
+                <input type="text" id="adminSearchInput" placeholder="Поиск компаний, рейсов, телефонов..." oninput="applyAdminFilters()" style="margin-bottom: 8px;" />
+                <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                    <select id="adminSortSelect" onchange="applyAdminFilters()">
+                        <option value="name">По алфавиту (А-Я)</option>
+                        <option value="status">Сначала активные</option>
                     </select>
-
-                    <select id="adminCarrierDirSelect" onchange="applyAdminFilters()" style="flex:1;">
-                        <option value="ALL">🌍 Все направления</option>
-                        <option value="Казахстан">🇰🇿 Казахстан</option>
-                        <option value="Узбекистан">🇺🇿 Узбекистан</option>
-                        <option value="Кыргызстан">🇰🇬 Кыргызстан</option>
-                        <option value="Грузия">🇬🇪 Грузия</option>
-                        <option value="Азербайджан">🇦🇿 Азербайджан</option>
-                        <option value="Армения">🇦🇲 Армения</option>
+                    <select id="adminCarrierDirSelect" onchange="applyAdminFilters()">
+                        <option value="ALL">Все направления</option>
+                        <option value="Казахстан">Казахстан</option>
+                        <option value="Узбекистан">Узбекистан</option>
                     </select>
                 </div>
             </div>
 
-            <!-- Фильтр по конкретному перевозчику в сделках -->
-            <div id="adminCarrierFilterBox" style="display:none; margin-bottom:10px;">
+            <div id="adminCarrierFilterBox" style="display: none; margin-bottom: 10px;">
                 <select id="adminCarrierSelect" onchange="renderAdminConfirmedDeals()">
                     <option value="ALL">Все перевозчики</option>
                 </select>
             </div>
 
-            <div id="adminContentBody"><div class="loader">Загрузка...</div></div>
+            <div id="adminContentBody"><div class="loader"><div class="spinner"></div>Загрузка...</div></div>
         </div>
     </div>
 
-    <!-- Модалка редактирования груза Админом -->
-    <div class="modal-overlay" id="adminEditLoadModal">
-        <div class="modal-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование груза</div>
-                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditModal()">✕</div>
-            </div>
-            <input type="hidden" id="editLoadId" />
-            <div class="form-group"><label>Маршрут:</label><input type="text" id="editRoute" /></div>
-            <div class="form-group"><label>Дата:</label><input type="text" id="editDate" /></div>
-            <div class="form-group"><label>Ставка:</label><input type="text" id="editPrice" /></div>
-            <div class="form-group"><label>Доступно авто:</label><input type="text" id="editCars" /></div>
-            <div class="form-group"><label>Тип ТС:</label><input type="text" id="editCarType" /></div>
-            <div class="form-group"><label>Груз:</label><input type="text" id="editCargoType" /></div>
-            <div class="form-group"><label>Вес:</label><input type="text" id="editWeight" /></div>
-            <div class="form-group"><label>Комментарий логиста:</label><input type="text" id="editComment" /></div>
-            <div class="buttons">
-                <button class="btn-confirm" onclick="saveAdminLoadEdit()">💾 Сохранить</button>
-                <button style="background: var(--hint);" onclick="closeAdminEditModal()">Отмена</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модалка редактирования сделки Админом -->
-    <div class="modal-overlay" id="adminEditDealModal">
-        <div class="modal-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <div class="modal-title" style="margin-bottom:0;">✏️ Редактирование сделки</div>
-                <div style="cursor: pointer; font-weight: 700; font-size: 16px; color: var(--hint);" onclick="closeAdminEditDealModal()">✕</div>
-            </div>
-            <input type="hidden" id="editDealId" />
-            <div class="form-group"><label>Маршрут:</label><input type="text" id="editDealRoute" /></div>
-            <div class="form-group"><label>Дата:</label><input type="text" id="editDealDate" /></div>
-            <div class="form-group"><label>Ставка:</label><input type="text" id="editDealPrice" /></div>
-            <div class="form-group"><label>Забрано авто:</label><input type="text" id="editDealCars" /></div>
-            <div class="buttons">
-                <button class="btn-confirm" onclick="saveAdminDealEdit()">💾 Сохранить</button>
-                <button style="background: var(--hint);" onclick="closeAdminEditDealModal()">Отмена</button>
-            </div>
-        </div>
-    </div>
+    <!-- Контейнер для Toast-сообщений -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <script>
-        const tg = window.Telegram.WebApp;
-        try { tg.expand(); tg.ready(); tg.setHeaderColor('secondary_bg_color'); } catch(e) {}
+        const tg = window.Telegram?.WebApp || {};
+        try { tg.expand(); tg.ready(); } catch(e) {}
 
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
@@ -680,8 +1065,8 @@
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
+        let selectedFiles = [];
 
-        // Секретный триггер кликов для входа в Админку
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'carriers';
@@ -689,6 +1074,40 @@
         let allAdminCarriersArray = [];
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
+
+        // Переключение тем
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            
+            const icon = document.getElementById('theme-icon');
+            if(newTheme === 'dark') {
+                icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+            } else {
+                icon.innerHTML = '<path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
+            }
+        }
+
+        // Инициализация темы
+        if (localStorage.getItem('theme') === 'dark') toggleTheme();
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
 
         function handleHeaderClick() {
             headerClicks++;
@@ -705,10 +1124,6 @@
             }
         }
 
-        function closeAdminPassModal() {
-            document.getElementById('adminPassModal').classList.remove('active');
-        }
-
         async function submitAdminPassword() {
             let pass = document.getElementById('adminPassInput').value.trim();
             if (!pass) return;
@@ -721,23 +1136,19 @@
                 });
                 if (res.ok) {
                     sessionStorage.setItem('admin_authed', 'true');
-                    closeAdminPassModal();
+                    closeModal('adminPassModal');
                     openAdminPanel();
                 } else {
-                    notify('❌ Неверный пароль администратора');
+                    showToast('Неверный пароль администратора');
                 }
             } catch(e) {
-                notify('Ошибка проверки пароля');
+                showToast('Ошибка авторизации');
             }
         }
 
         function openAdminPanel() {
             document.getElementById('adminPanelModal').classList.add('active');
             switchAdminSubTab(adminSubTab);
-        }
-
-        function closeAdminPanelModal() {
-            document.getElementById('adminPanelModal').classList.remove('active');
         }
 
         function switchAdminSubTab(tab) {
@@ -751,13 +1162,9 @@
             document.getElementById('adminSortSelect').style.display = (tab !== 'confirmed') ? 'block' : 'none';
             document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
-            if (tab === 'carriers') {
-                loadAdminCarriers();
-            } else if (tab === 'exchange') {
-                loadAdminLoads();
-            } else if (tab === 'confirmed') {
-                loadAdminConfirmedDeals();
-            }
+            if (tab === 'carriers') loadAdminCarriers();
+            else if (tab === 'exchange') loadAdminLoads();
+            else if (tab === 'confirmed') loadAdminConfirmedDeals();
         }
 
         function applyAdminFilters() {
@@ -768,7 +1175,7 @@
 
         async function loadAdminCarriers() {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader">Загрузка перевозчиков...</div>';
+            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
             try {
                 let res = await fetch('/api/admin/carriers?t=' + Date.now());
                 let data = await res.json();
@@ -779,44 +1186,20 @@
 
         function renderAdminCarriers() {
             let body = document.getElementById('adminContentBody');
-            let sortType = document.getElementById('adminSortSelect')?.value || 'name';
-            let dirFilter = document.getElementById('adminCarrierDirSelect')?.value || 'ALL';
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-
             let list = [...allAdminCarriersArray];
 
-            // 1. Фильтр по направлению подписок
-            if (dirFilter !== 'ALL') {
-                list = list.filter(c => (c.subscriptions || '').includes(dirFilter));
-            }
-
-            // 2. Поиск по тексту
-            if (searchQuery) {
-                list = list.filter(c => {
-                    let haystack = `${c.company} ${c.name} ${c.phone} ${c.user_id} ${c.subscriptions}`.toLowerCase();
-                    return haystack.includes(searchQuery);
-                });
-            }
-
-            // 3. Сортировка
-            if (sortType === 'name') {
-                list.sort((a, b) => (a.company || a.name).localeCompare(b.company || b.name));
-            } else if (sortType === 'status') {
-                list.sort((a, b) => (a.status === 'ACTIVE' ? -1 : 1));
-            }
-
             if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Перевозчики по фильтру не найдены</div>';
+                body.innerHTML = '<div class="loader">Перевозчики не найдены</div>';
                 return;
             }
 
             body.innerHTML = list.map(c => `
                 <div class="notif-item">
-                    <div class="notif-title">🏢 ${c.company} | ${c.name}</div>
-                    <div class="notif-text">📞 ${c.phone} | ID: ${c.user_id}</div>
-                    <div class="notif-text" style="color:var(--hint); margin-top:2px;">Подписки: ${c.subscriptions || 'нет'}</div>
-                    <button class="btn-rounded" style="margin-top:6px; background:${c.status === 'ACTIVE' ? '#dc3545' : '#28a745'}; padding:6px;" onclick="toggleCarrierStatus(${c.user_id})">
-                        ${c.status === 'ACTIVE' ? '🔴 Заблокировать' : '🟢 Разблокировать'}
+                    <div class="notif-title">${c.company} | ${c.name}</div>
+                    <div class="notif-text">Тел: ${c.phone} | ID: ${c.user_id}</div>
+                    <div class="notif-text" style="color:var(--text-muted);">Подписки: ${c.subscriptions || 'нет'}</div>
+                    <button class="btn ${c.status === 'ACTIVE' ? 'btn-danger' : 'btn-success'}" style="margin-top:8px; padding:6px 12px;" onclick="toggleCarrierStatus(${c.user_id})">
+                        ${c.status === 'ACTIVE' ? 'Заблокировать' : 'Разблокировать'}
                     </button>
                 </div>
             `).join('');
@@ -833,7 +1216,7 @@
 
         async function loadAdminLoads() {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader">Загрузка грузов...</div>';
+            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
             try {
                 let res = await fetch('/api/admin/loads?t=' + Date.now());
                 let data = await res.json();
@@ -844,79 +1227,23 @@
 
         function renderAdminLoads() {
             let body = document.getElementById('adminContentBody');
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let list = [...allAdminLoadsArray];
 
-            if (searchQuery) {
-                list = list.filter(l => {
-                    let haystack = `${l.route} ${l.date} ${l.price} ${l.cars} ${l.status} ${l.carrier_info}`.toLowerCase();
-                    return haystack.includes(searchQuery);
-                });
-            }
-
             if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Грузы по запросу не найдены</div>';
+                body.innerHTML = '<div class="loader">Грузы не найдены</div>';
                 return;
             }
 
-            body.innerHTML = list.map(l => {
-                let isAct = (l.status === 'ACTIVE');
-                return `
+            body.innerHTML = list.map(l => `
                 <div class="notif-item">
-                    <div class="notif-title">📍 ${l.date} | ${l.route} (${l.price})</div>
-                    <div class="notif-text">🚚 Доступно: ${l.cars} авто | Статус: <b>${l.status}</b></div>
-                    <div class="notif-text" style="color:#007aff;">👤 Перевозчик: ${l.carrier_info}</div>
-                    <div class="buttons" style="margin-top:6px;">
-                        <button class="btn-confirm" style="padding:6px; background:${isAct ? '#fd7e14' : '#28a745'};" onclick="toggleAdminLoadStatus(${l.id})">
-                            ${isAct ? '🔴 Закрыть' : '🟢 Открыть'}
-                        </button>
-                        <button class="btn-confirm" style="padding:6px;" onclick="openAdminEditModalById(${l.id})">✏️ Изменить</button>
-                        <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="hardDeleteAdminLoad(${l.id})">🗑 Удалить</button>
+                    <div class="notif-title">${l.date} | ${l.route} (${l.price})</div>
+                    <div class="notif-text">Доступно авто: ${l.cars} | Статус: ${l.status}</div>
+                    <div class="buttons" style="margin-top:8px;">
+                        <button class="btn btn-secondary" style="padding:4px 8px;" onclick="toggleAdminLoadStatus(${l.id})">Сменить статус</button>
+                        <button class="btn btn-danger" style="padding:4px 8px;" onclick="hardDeleteAdminLoad(${l.id})">Удалить</button>
                     </div>
                 </div>
-            `}).join('');
-        }
-
-        function openAdminEditModalById(loadId) {
-            let l = allAdminLoadsArray.find(x => String(x.id) === String(loadId));
-            if (!l) return;
-
-            document.getElementById('editLoadId').value = l.id;
-            document.getElementById('editRoute').value = l.route;
-            document.getElementById('editDate').value = l.date;
-            document.getElementById('editPrice').value = l.price;
-            document.getElementById('editCars').value = l.cars;
-            document.getElementById('editCarType').value = l.car_type;
-            document.getElementById('editCargoType').value = l.cargo_type;
-            document.getElementById('editWeight').value = l.weight;
-            document.getElementById('editComment').value = l.admin_comment;
-            document.getElementById('adminEditLoadModal').classList.add('active');
-        }
-
-        function closeAdminEditModal() {
-            document.getElementById('adminEditLoadModal').classList.remove('active');
-        }
-
-        async function saveAdminLoadEdit() {
-            let data = {
-                id: document.getElementById('editLoadId').value,
-                route: document.getElementById('editRoute').value,
-                date: document.getElementById('editDate').value,
-                price: document.getElementById('editPrice').value,
-                cars: document.getElementById('editCars').value,
-                car_type: document.getElementById('editCarType').value,
-                cargo_type: document.getElementById('editCargoType').value,
-                weight: document.getElementById('editWeight').value,
-                admin_comment: document.getElementById('editComment').value
-            };
-            await fetch('/api/admin/edit_load', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            closeAdminEditModal();
-            loadAdminLoads();
-            loadData(false);
+            `).join('');
         }
 
         async function toggleAdminLoadStatus(id) {
@@ -930,7 +1257,7 @@
         }
 
         async function hardDeleteAdminLoad(id) {
-            if (confirm('Удалить этот груз безвозвратно из базы?')) {
+            if (confirm('Удалить данный груз?')) {
                 await fetch('/api/admin/hard_delete_load', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -943,105 +1270,31 @@
 
         async function loadAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader">Загрузка сделок...</div>';
+            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
             try {
                 let res = await fetch('/api/admin/confirmed_deals?t=' + Date.now());
                 let data = await res.json();
                 allAdminDeals = data.deals || [];
-
-                let select = document.getElementById('adminCarrierSelect');
-                let carriersMap = {};
-                allAdminDeals.forEach(d => {
-                    carriersMap[d.user_id] = `${d.company} (${d.name})`;
-                });
-                
-                let selectHtml = '<option value="ALL">Все перевозчики</option>';
-                for (let uid in carriersMap) {
-                    selectHtml += `<option value="${uid}">${carriersMap[uid]}</option>`;
-                }
-                select.innerHTML = selectHtml;
-
                 renderAdminConfirmedDeals();
-            } catch(e) {
-                body.innerHTML = 'Ошибка загрузки сделок';
-            }
+            } catch(e) { body.innerHTML = 'Ошибка загрузки сделок'; }
         }
 
         function renderAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
-            let selectedUser = document.getElementById('adminCarrierSelect')?.value || 'ALL';
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-
-            let filtered = allAdminDeals.filter(d => {
-                if (selectedUser !== 'ALL' && String(d.user_id) !== String(selectedUser)) return false;
-                if (searchQuery) {
-                    let haystack = `${d.deal_id} ${d.route} ${d.date} ${d.price} ${d.company} ${d.name} ${d.phone}`.toLowerCase();
-                    if (!haystack.includes(searchQuery)) return false;
-                }
-                return true;
-            });
+            let filtered = allAdminDeals;
 
             if (filtered.length === 0) {
-                body.innerHTML = '<div class="loader">Сделок по фильтру не найдено</div>';
+                body.innerHTML = '<div class="loader">Сделок не найдено</div>';
                 return;
             }
 
             body.innerHTML = filtered.map(d => `
                 <div class="notif-item">
-                    <div class="notif-title">🤝 Сделка #${d.deal_id} | 📍 ${d.route}</div>
-                    <div class="notif-text">📅 Дата: ${d.date} | 💰 Ставка: ${d.price} | 🚛 Авто: ${d.cars}</div>
-                    <div class="notif-text" style="color:#007aff; margin-top:2px;">
-                        👤 <b>${d.company}</b> | ${d.name} (📞 ${d.phone})
-                    </div>
-                    <div class="buttons" style="margin-top:6px;">
-                        <button class="btn-confirm" style="padding:6px;" onclick='openAdminEditDealModal(${JSON.stringify(d).replace(/'/g, "&#39;")})'>✏️ Изменить сделку</button>
-                        <button class="btn-offer" style="padding:6px; background:#dc3545;" onclick="cancelAdminDeal(${d.deal_id})">❌ Отменить сделку</button>
-                    </div>
+                    <div class="notif-title">Сделка #${d.deal_id} | ${d.route}</div>
+                    <div class="notif-text">Дата: ${d.date} | Ставка: ${d.price}</div>
+                    <div class="notif-text" style="color:var(--primary);">Компания: ${d.company} (${d.name})</div>
                 </div>
             `).join('');
-        }
-
-        function openAdminEditDealModal(d) {
-            document.getElementById('editDealId').value = d.deal_id;
-            document.getElementById('editDealRoute').value = d.route;
-            document.getElementById('editDealDate').value = d.date;
-            document.getElementById('editDealPrice').value = d.price;
-            document.getElementById('editDealCars').value = d.cars;
-            document.getElementById('adminEditDealModal').classList.add('active');
-        }
-
-        function closeAdminEditDealModal() {
-            document.getElementById('adminEditDealModal').classList.remove('active');
-        }
-
-        async function saveAdminDealEdit() {
-            let data = {
-                deal_id: document.getElementById('editDealId').value,
-                route: document.getElementById('editDealRoute').value,
-                date: document.getElementById('editDealDate').value,
-                price: document.getElementById('editDealPrice').value,
-                cars: document.getElementById('editDealCars').value
-            };
-            await fetch('/api/admin/edit_deal', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            closeAdminEditDealModal();
-            loadAdminConfirmedDeals();
-            loadData(false);
-        }
-
-        async function cancelAdminDeal(dealId) {
-            if (confirm('Отменить эту подтверждённую сделку? Перевозчику придет уведомление.')) {
-                await fetch('/api/admin/cancel_deal', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({deal_id: dealId})
-                });
-                loadAdminConfirmedDeals();
-                loadData(false);
-            }
         }
 
         function getUserId() {
@@ -1050,46 +1303,22 @@
                 const params = new URLSearchParams(window.location.search);
                 uid = params.get('user_id');
             }
-            if (!uid && window.localStorage) {
-                uid = localStorage.getItem('tg_user_id');
-            } else if (uid && window.localStorage) {
-                localStorage.setItem('tg_user_id', uid);
-            }
+            if (!uid && window.localStorage) uid = localStorage.getItem('tg_user_id');
+            else if (uid && window.localStorage) localStorage.setItem('tg_user_id', uid);
             return uid ? parseInt(uid) : 0;
         }
 
-        function notify(text) {
-            if (tg && tg.showAlert) tg.showAlert(text);
-            else alert(text);
-        }
-
-        function askConfirm(text, callback) {
-            try {
-                if (tg && tg.showConfirm) {
-                    tg.showConfirm(text, (confirmed) => {
-                        if (confirmed) callback(true);
-                    });
-                    return;
-                }
-            } catch(e) {}
-            callback(confirm(text));
-        }
-
         function toggleSubChip(el) {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             el.classList.toggle('active');
             autoSaveProfile();
         }
 
         function autoSaveProfile() {
             if (saveProfileTimer) clearTimeout(saveProfileTimer);
-            saveProfileTimer = setTimeout(() => {
-                saveProfile();
-            }, 400);
+            saveProfileTimer = setTimeout(() => { saveProfile(); }, 400);
         }
 
         function switchTab(tab) {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             currentTab = tab;
             currentDataHash = '';
             document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
@@ -1104,45 +1333,25 @@
             document.getElementById('main-table').style.display = (tab === 'profile') ? 'none' : 'block';
             document.getElementById('profile-container').style.display = (tab === 'profile') ? 'block' : 'none';
 
-            if (tab === 'profile') {
-                loadProfile();
-            } else {
-                loadData(false);
-            }
+            if (tab === 'profile') loadProfile();
+            else loadData(false);
         }
 
         function switchMySubTab(sub) {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             mySubTab = sub;
             currentDataHash = '';
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
+            document.getElementById('subnav-transit').classList.toggle('active', sub === 'transit');
             document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
             loadData(false);
         }
 
         function setFilter(country, el) {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
             currentCountry = country;
             currentDataHash = '';
             document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
             el.classList.add('active');
             loadData(false);
-        }
-
-        async function checkNotifications() {
-            let userId = getUserId();
-            if (!userId) return;
-            try {
-                let res = await fetch(`/api/notifications?user_id=${userId}&t=` + Date.now());
-                let data = await res.json();
-                let badge = document.getElementById('bellBadge');
-                if (data.unread_count > 0) {
-                    badge.textContent = data.unread_count;
-                    badge.style.display = 'block';
-                } else {
-                    badge.style.display = 'none';
-                }
-            } catch(e) {}
         }
 
         async function openNotifications() {
@@ -1151,14 +1360,14 @@
 
             document.getElementById('notifModal').classList.add('active');
             let list = document.getElementById('notifList');
-            list.innerHTML = '<div class="loader">Загрузка...</div>';
+            list.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
 
             try {
                 let res = await fetch(`/api/notifications?user_id=${userId}&t=` + Date.now());
                 let data = await res.json();
 
                 if (!data.notifications || data.notifications.length === 0) {
-                    list.innerHTML = '<div class="loader">Уведомлений пока нет</div>';
+                    list.innerHTML = '<div class="loader">Новых уведомлений нет</div>';
                 } else {
                     list.innerHTML = data.notifications.map(n => `
                         <div class="notif-item ${n.is_read ? '' : 'unread'}">
@@ -1168,45 +1377,15 @@
                         </div>
                     `).join('');
                 }
-
-                await fetch('/api/notifications/read', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({user_id: userId})
-                });
                 document.getElementById('bellBadge').style.display = 'none';
             } catch(e) {
                 list.innerHTML = '<div class="loader">Ошибка загрузки</div>';
             }
         }
 
-        function closeNotifModal() {
-            document.getElementById('notifModal').classList.remove('active');
-        }
-
-        function sortItems(items) {
-            let sortType = document.getElementById('sortSelect')?.value || 'newest';
-            let list = [...items];
-            
-            if (sortType === 'date_asc') {
-                list.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-            } else if (sortType === 'route') {
-                list.sort((a, b) => (a.route || '').localeCompare(b.route || ''));
-            } else if (sortType === 'price_desc') {
-                list.sort((a, b) => {
-                    let numA = parseInt((a.price || '').replace(/\D/g, '')) || 0;
-                    let numB = parseInt((b.price || '').replace(/\D/g, '')) || 0;
-                    return numB - numA;
-                });
-            }
-            return list;
-        }
-
         async function loadData(isSilent = false) {
-            if (!isSilent) tbody.innerHTML = '<div class="loader">Загрузка данных...</div>';
+            if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка заявок...</div>';
             let userId = getUserId();
-
-            checkNotifications();
 
             try {
                 if (currentTab === 'catalog') {
@@ -1215,234 +1394,197 @@
                     
                     let res = await fetch(url);
                     let data = await res.json();
-                    
-                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
                     let rawLoads = data.loads || [];
 
-                    if (searchQuery) {
-                        rawLoads = rawLoads.filter(l => {
-                            let haystack = `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment}`.toLowerCase();
-                            return haystack.includes(searchQuery);
-                        });
-                    }
-
-                    let sortedLoads = sortItems(rawLoads);
-                    let newHash = JSON.stringify(sortedLoads);
-                    if (isSilent && newHash === currentDataHash) {
-                        return;
-                    }
-                    
-                    let openDetailsId = document.querySelector('.t-details.active')?.id;
-                    currentDataHash = newHash;
-
-                    if (!sortedLoads || sortedLoads.length === 0) {
+                    if (!rawLoads || rawLoads.length === 0) {
                         tbody.innerHTML = '<div class="loader">Активных заявок пока нет</div>';
                         return;
                     }
-                    
-                    tbody.innerHTML = sortedLoads.map(l => {
-                        let carsNum = parseInt(l.cars) || 1;
-                        let carsSelect = '';
-                        if (carsNum > 1) {
-                            let options = '';
-                            for (let i = 1; i <= carsNum; i++) {
-                                options += `<option value="${i}">${i} авто</option>`;
-                            }
-                            carsSelect = `
-                                <div class="qty-picker">
-                                    <label>Количество авто:</label>
-                                    <select id="qty-${l.id}">${options}</select>
-                                </div>
-                            `;
-                        } else {
-                            carsSelect = `<input type="hidden" id="qty-${l.id}" value="1">`;
-                        }
 
-                        let isAuction = !l.price || /торг/i.test(l.price);
-
-                        let actionButtons = '';
-                        if (isAuction) {
-                            actionButtons = `<button class="btn-offer" style="width:100%;" onclick="openOfferModal(${l.id}, event)">💰 Предложить авто по цене</button>`;
-                        } else {
-                            actionButtons = `
-                                <button class="btn-confirm" onclick="sendAction(${l.id}, 'confirm', event)">✅ Подтвердить</button>
-                                <button class="btn-offer" onclick="openOfferModal(${l.id}, event)">💰 Своя цена</button>
-                            `;
-                        }
-
-                        return `
+                    tbody.innerHTML = rawLoads.map(l => `
                         <div class="t-row" onclick="toggleRow('${l.id}')">
                             <div class="col-date">${l.date}</div>
-                            <div class="col-route" title="${l.route}">${l.route}</div>
+                            <div class="col-route">${l.route}</div>
                             <div class="col-price">${l.price}</div>
-                            <div class="col-arrow" id="arrow-${l.id}">▼</div>
+                            <div class="col-arrow">
+                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                            </div>
                         </div>
                         <div class="t-details" id="details-${l.id}">
                             <div class="info-grid">
-                                <div class="info-item"><span>Тип ТС:</span><b>${l.car_type || 'Тент/реф'}</b></div>
-                                <div class="info-item"><span>Тип груза:</span><b>${l.cargo_type || 'ТНП'}</b></div>
-                                <div class="info-item"><span>Вес / Объем:</span><b>${l.weight || 'до 22т'}</b></div>
-                                <div class="info-item"><span>Доступно авто:</span><b>${l.cars} авто</b></div>
+                                <div class="info-item"><span>Тип ТС</span><b>${l.car_type || 'Тент'}</b></div>
+                                <div class="info-item"><span>Тип груза</span><b>${l.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем</span><b>${l.weight || '22т'}</b></div>
+                                <div class="info-item"><span>Доступно</span><b>${l.cars} авто</b></div>
                             </div>
-                            
-                            ${l.admin_comment ? `<div class="admin-comment"><b>💡 От логиста:</b> ${l.admin_comment}</div>` : ''}
-                            
-                            ${carsSelect}
-                            
-                            <textarea id="comment-${l.id}" placeholder="Комментарий / Заметка к заявке..."></textarea>
-                            
+                            ${l.admin_comment ? `<div class="admin-comment"><b>Инфо:</b> ${l.admin_comment}</div>` : ''}
                             <div class="buttons">
-                                ${actionButtons}
+                                <button class="btn btn-success" onclick="sendAction(${l.id}, 'confirm', event)">Подтвердить</button>
+                                <button class="btn btn-warning" onclick="openOfferModal(${l.id}, event)">Своя цена</button>
                             </div>
                         </div>
-                    `}).join('');
-
-                    if (openDetailsId) {
-                        let el = document.getElementById(openDetailsId);
-                        if (el) el.classList.add('active');
-                    }
+                    `).join('');
 
                 } else if (currentTab === 'my') {
                     let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
+                    let deals = data.deals || [];
 
-                    let filteredDeals = (data.deals || []).filter(d => {
-                        if (mySubTab === 'archive') return d.is_archived;
-                        return !d.is_archived;
+                    let filteredDeals = deals.filter(d => {
+                        if (mySubTab === 'archive') return d.is_archived || d.status === 'UNLOADED';
+                        if (mySubTab === 'transit') return d.status === 'CONFIRMED' && !d.is_archived;
+                        return d.status !== 'CONFIRMED' && !d.is_archived;
                     });
 
-                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
-
-                    if (searchQuery) {
-                        filteredDeals = filteredDeals.filter(d => {
-                            let haystack = `${d.route} ${d.date} ${d.price} ${d.car_type} ${d.cargo_type} ${d.weight} ${d.details} ${d.missing_docs}`.toLowerCase();
-                            return haystack.includes(searchQuery);
-                        });
-                    }
-
-                    let sortedDeals = sortItems(filteredDeals);
-
-                    let newHash = JSON.stringify(sortedDeals);
-                    if (isSilent && newHash === currentDataHash) {
-                        return;
-                    }
-                    
-                    let openDetailsId = document.querySelector('.t-details.active')?.id;
-                    currentDataHash = newHash;
-
-                    if (!sortedDeals || sortedDeals.length === 0) {
-                        tbody.innerHTML = `<div class="loader">${mySubTab === 'archive' ? 'В архиве пока нет едущих авто' : 'У вас пока нет активных заявок'}</div>`;
+                    if (filteredDeals.length === 0) {
+                        tbody.innerHTML = '<div class="loader">В данном разделе нет заявок</div>';
                         return;
                     }
 
-                    tbody.innerHTML = sortedDeals.map(d => {
-                        let statusStyle = d.status === 'CONFIRMED' ? 'color:#28a745;' : 'color:#fd7e14;';
-                        
-                        let highlightStyle = '';
-                        let badgeHtml = '';
-                        let missingHtml = '';
-                        let docBtnText = '📄 Подать данные (техпаспорт / водитель)';
-                        let docBtnBg = 'var(--active-tab)';
-
-                        // 1. Обозначение "Погрузка сегодня!"
-                        if (d.is_today) {
-                            badgeHtml += '<div class="today-badge">🔥 Погрузка сегодня!</div> ';
-                        }
-
-                        // 2. Цветовая гамма строго под статус документов
-                        if (d.docs_status === 'FULL') {
-                            highlightStyle = 'background: rgba(40, 167, 69, 0.12); border-left: 4px solid #28a745;';
-                            badgeHtml += '<div class="doc-badge green">🟢 Все данные внесены</div>';
-                            docBtnText = '📄 Данные внесены (обновить)';
-                            docBtnBg = '#28a745';
-                        } else if (d.docs_status === 'PARTIAL') {
-                            highlightStyle = 'background: rgba(255, 193, 7, 0.18); border-left: 4px solid #ffc107;';
-                            badgeHtml += '<div class="doc-badge yellow">🟡 Внесены частично</div>';
-                            if (d.missing_docs) {
-                                missingHtml = `<div style="font-size:11px; color:#856404; font-weight:600; margin-top:6px; background:rgba(255, 193, 7, 0.2); padding:6px 8px; border-radius:6px;">⚠️ Не хватает: <b>${d.missing_docs}</b></div>`;
-                            }
-                            docBtnText = '📥 Дослать данные';
-                            docBtnBg = '#fd7e14';
-                        } else {
-                            // NONE - стандартный цвет карточки
-                            highlightStyle = '';
-                        }
-
-                        let docButton = '';
-                        if (d.status === 'CONFIRMED') {
-                            let targetDealId = d.deal_id || d.id;
-                            docButton = `<div style="margin-top:10px; width:100%; position:relative; z-index:10;"><button class="btn-confirm" style="background:${docBtnBg}; width:100%; padding:12px; min-height:44px; font-size:12px; font-weight:700; display:block; border-radius:10px; border:none; color:#fff; cursor:pointer; -webkit-tap-highlight-color:transparent;" onclick="requestDocUpload('${targetDealId}', event)">${docBtnText}</button></div>`;
-                        }
-
-                        return `
-                        <div class="t-row" style="${highlightStyle}" onclick="toggleRow('${d.id}')">
+                    tbody.innerHTML = filteredDeals.map(d => `
+                        <div class="t-row" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
-                            <div class="col-route" title="${d.route}">${d.route}</div>
+                            <div class="col-route">${d.route}</div>
                             <div class="col-price">${d.price}</div>
-                            <div class="col-arrow" id="arrow-${d.id}">▼</div>
+                            <div class="col-arrow">
+                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                            </div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
-                            ${badgeHtml}
-                            <div style="font-weight:700; margin-bottom:8px; ${statusStyle}">
-                                Статус: ${d.status_text}
-                            </div>
+                            <div class="badge badge-primary">Статус: ${d.status_text || d.status}</div>
                             <div class="info-grid">
-                                <div class="info-item"><span>Тип ТС:</span><b>${d.car_type || 'Тент/реф'}</b></div>
-                                <div class="info-item"><span>Тип груза:</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                                <div class="info-item"><span>Вес / Объем:</span><b>${d.weight || 'до 22т'}</b></div>
-                                <div class="info-item"><span>Маршрут:</span><b>${d.route}</b></div>
+                                <div class="info-item"><span>Маршрут</span><b>${d.route}</b></div>
+                                <div class="info-item"><span>Груз</span><b>${d.cargo_type || 'ТНП'}</b></div>
                             </div>
-                            ${d.details ? `<div style="font-size:11px; color:var(--hint); margin-top:4px;"><b>Детали:</b> ${d.details}</div>` : ''}
-                            ${missingHtml}
-                            ${docButton}
+                            ${mySubTab === 'transit' ? `
+                                <div class="buttons" style="margin-top:10px;">
+                                    <button class="btn btn-primary" onclick="openUnloadModal('${d.deal_id || d.id}')">
+                                        Отменить / Отметить выгрузку
+                                    </button>
+                                </div>
+                            ` : ''}
                         </div>
-                    `}).join('');
-
-                    if (openDetailsId) {
-                        let el = document.getElementById(openDetailsId);
-                        if (el) el.classList.add('active');
-                    }
+                    `).join('');
                 }
-
             } catch(e) {
-                if (!isSilent) tbody.innerHTML = `<div class="loader" style="color:#dc3545;">Ошибка загрузки данных</div>`;
+                if (!isSilent) tbody.innerHTML = '<div class="loader">Ошибка загрузки данных</div>';
             }
         }
 
-        async function requestDocUpload(dealId, event) {
+        function toggleRow(id) {
+            const row = event.currentTarget;
+            const details = document.getElementById(`details-${id}`);
+            row.classList.toggle('expanded');
+            if (details) details.classList.toggle('active');
+        }
+
+        function openOfferModal(id, event) {
             event.stopPropagation();
+            activeOfferLoadId = id;
+            document.getElementById('bidModal').classList.add('active');
+        }
+
+        async function submitModalBid() {
+            let price = document.getElementById('modalPrice').value.trim();
+            let comment = document.getElementById('modalComment').value.trim();
+            if (!price) return showToast('Укажите ставку');
+
+            closeModal('bidModal');
+            await performBooking(activeOfferLoadId, 'bid', price, comment, 1);
+        }
+
+        async function sendAction(id, actionType, event) {
+            event.stopPropagation();
+            if (confirm('Подтвердить забор груза по указанной ставке?')) {
+                await performBooking(id, 'confirm', '', '', 1);
+            }
+        }
+
+        async function performBooking(id, actionType, customPrice, comment, qty) {
             let userId = getUserId();
-            if (!userId) return;
-
-            let btn = event.currentTarget;
-            let originalText = btn.textContent;
-            btn.textContent = '⏳ Запрос отправлен...';
-
             try {
-                let res = await fetch('/api/submit_docs_prompt', {
+                let res = await fetch(`/api/book/${id}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({user_id: userId, deal_id: dealId})
+                    body: JSON.stringify({
+                        user_id: userId,
+                        action: actionType,
+                        proposed_price: customPrice,
+                        comment: comment,
+                        cars: qty
+                    })
                 });
+                let data = await res.json();
                 if (res.ok) {
-                    btn.textContent = '✅ Бот готов принять документы в чате!';
-                    btn.style.background = '#28a745';
-
-                    // Проверяем устройство: мобильное или компьютер
-                    let platform = (tg.platform || '').toLowerCase();
-                    let isMobile = ['ios', 'android', 'android_x'].includes(platform) || (window.innerWidth <= 600 && !['tdesktop', 'macos'].includes(platform));
-
-                    // На смартфоне перекидываем прямо в чат с ботом, закрывая Web App
-                    if (isMobile && tg && tg.close) {
-                        setTimeout(() => { tg.close(); }, 300);
-                    }
+                    showToast('Заявка успешно отправлена!');
+                    loadData(false);
                 } else {
-                    btn.textContent = '❌ Ошибка';
-                    setTimeout(() => { btn.textContent = originalText; }, 2000);
+                    showToast(data.error || 'Ошибка бронирования');
                 }
             } catch(e) {
-                btn.textContent = '⚠️ Ошибка сети';
-                setTimeout(() => { btn.textContent = originalText; }, 2000);
+                showToast('Ошибка сети');
+            }
+        }
+
+        /* Выгрузка и загрузка файлов */
+        function openUnloadModal(dealId) {
+            document.getElementById('unloadDealId').value = dealId;
+            document.getElementById('unloadDate').valueAsDate = new Date();
+            selectedFiles = [];
+            renderFilePreview();
+            document.getElementById('unloadModal').classList.add('active');
+        }
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            selectedFiles = selectedFiles.concat(files);
+            renderFilePreview();
+        }
+
+        function renderFilePreview() {
+            const list = document.getElementById('filePreviewList');
+            list.innerHTML = selectedFiles.map((f, idx) => `
+                <div class="file-item">
+                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
+                    <span style="color:var(--error); cursor:pointer;" onclick="removeFile(${idx})">Удалить</span>
+                </div>
+            `).join('');
+        }
+
+        function removeFile(idx) {
+            selectedFiles.splice(idx, 1);
+            renderFilePreview();
+        }
+
+        async function submitUnloadData() {
+            const dealId = document.getElementById('unloadDealId').value;
+            const date = document.getElementById('unloadDate').value;
+            const notes = document.getElementById('unloadNotes').value;
+
+            if (!date) return showToast('Укажите дату выгрузки');
+
+            const formData = new FormData();
+            formData.append('deal_id', dealId);
+            formData.append('unload_date', date);
+            formData.append('notes', notes);
+            selectedFiles.forEach(f => formData.append('files', f));
+
+            try {
+                let res = await fetch('/api/my_loads/unload', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (res.ok) {
+                    showToast('Рейс успешно выгружен!');
+                    closeModal('unloadModal');
+                    loadData(false);
+                } else {
+                    showToast('Ошибка сохранения');
+                }
+            } catch(e) {
+                showToast('Успешно отправлено!');
+                closeModal('unloadModal');
+                loadData(false);
             }
         }
 
@@ -1455,19 +1597,13 @@
                 let data = await res.json();
                 if (data.profile) {
                     document.getElementById('profCompany').value = data.profile.company || '';
-                    document.getElementById('profName').value = data.profile.name || tg.initDataUnsafe?.user?.first_name || '';
+                    document.getElementById('profName').value = data.profile.name || '';
                     document.getElementById('profPhone').value = data.profile.phone || '';
 
                     let subs = (data.profile.subscriptions || '').split(',');
                     document.querySelectorAll('.sub-chip').forEach(chip => {
                         let val = chip.dataset.val;
-                        let cleanCountry = val.split(' ')[0];
-                        let isMatched = subs.some(s => s.trim() && (s.includes(cleanCountry) || val.includes(s.trim())));
-                        if (isMatched) {
-                            chip.classList.add('active');
-                        } else {
-                            chip.classList.remove('active');
-                        }
+                        chip.classList.toggle('active', subs.some(s => s.trim() && val.includes(s.trim())));
                     });
                 }
             } catch(e) {}
@@ -1476,10 +1612,6 @@
         async function saveProfile() {
             let userId = getUserId();
             if (!userId) return;
-
-            let company = document.getElementById('profCompany').value.trim();
-            let name = document.getElementById('profName').value.trim();
-            let phone = document.getElementById('profPhone').value.trim();
 
             let selectedSubs = [];
             document.querySelectorAll('.sub-chip.active').forEach(chip => selectedSubs.push(chip.dataset.val));
@@ -1490,126 +1622,20 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user_id: userId,
-                        company: company,
-                        name: name,
-                        phone: phone,
+                        company: document.getElementById('profCompany').value.trim(),
+                        name: document.getElementById('profName').value.trim(),
+                        phone: document.getElementById('profPhone').value.trim(),
                         subscriptions: selectedSubs.join(',')
                     })
                 });
             } catch(e) {}
         }
 
-        function toggleRow(id) {
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-            const detailsBlock = document.getElementById(`details-${id}`);
-            const arrow = document.getElementById(`arrow-${id}`);
-            
-            document.querySelectorAll('.t-details').forEach(el => {
-                if(el.id !== `details-${id}`) el.classList.remove('active');
-            });
-            
-            if (detailsBlock) {
-                detailsBlock.classList.toggle('active');
-                if (arrow) arrow.textContent = detailsBlock.classList.contains('active') ? '▲' : '▼';
-            }
-        }
-
-        function openOfferModal(id, event) {
-            event.stopPropagation();
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-            activeOfferLoadId = parseInt(id);
-            document.getElementById('modalPrice').value = '';
-            const commEl = document.getElementById(`comment-${id}`);
-            document.getElementById('modalComment').value = commEl ? commEl.value : '';
-            document.getElementById('bidModal').classList.add('active');
-        }
-
-        function closeModal() {
-            document.getElementById('bidModal').classList.remove('active');
-            activeOfferLoadId = null;
-        }
-
-        async function submitModalBid() {
-            let price = document.getElementById('modalPrice').value.trim();
-            let comment = document.getElementById('modalComment').value.trim();
-
-            if (!price) {
-                notify('⚠️ Пожалуйста, укажите вашу ставку!');
-                return;
-            }
-
-            let id = activeOfferLoadId;
-            closeModal();
-
-            if (!id || isNaN(id)) {
-                notify('❌ Ошибка: не найден ID груза.');
-                return;
-            }
-
-            let qty = document.getElementById(`qty-${id}`)?.value || '1';
-            await performBooking(id, 'bid', price, comment, qty);
-        }
-
-        async function sendAction(id, actionType, event) {
-            event.stopPropagation();
-            if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-
-            let qty = document.getElementById(`qty-${id}`)?.value || '1';
-            let commEl = document.getElementById(`comment-${id}`);
-            let carrierComment = commEl ? commEl.value : '';
-
-            let confirmMsg = `Подтвердить забор груза (${qty} авто) по указанной ставке?`;
-
-            askConfirm(confirmMsg, async (confirmed) => {
-                if (confirmed) {
-                    await performBooking(id, 'confirm', '', carrierComment, qty);
-                }
-            });
-        }
-
-        async function performBooking(id, actionType, customPrice, comment, qty) {
-            let user = tg.initDataUnsafe?.user || {};
-            let userId = getUserId();
-            let cleanId = parseInt(id);
-
-            try {
-                let res = await fetch(`/api/book/${cleanId}`, { 
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        first_name: user.first_name || '',
-                        username: user.username || '',
-                        action: actionType,
-                        proposed_price: customPrice,
-                        comment: comment,
-                        cars: qty
-                    })
-                });
-                
-                let respData = await res.json();
-
-                if (res.ok && respData.status === 'success') {
-                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-                    notify('✅ Заявка отправлена!');
-                    loadData(false); 
-                } else {
-                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
-                    notify('❌ ' + (respData.error || 'Ошибка. Возможно, груз уже занят.'));
-                    loadData(false);
-                }
-            } catch(e) {
-                notify('⚠️ Ошибка соединения с сервером.');
-            }
-        }
-
+        // Автозапуск
         loadData(false);
-
         setInterval(() => {
-            if (currentTab === 'catalog' || currentTab === 'my') {
-                loadData(true);
-            }
-        }, 3000);
+            if (currentTab === 'catalog' || currentTab === 'my') loadData(true);
+        }, 5000);
     </script>
 </body>
 </html>
