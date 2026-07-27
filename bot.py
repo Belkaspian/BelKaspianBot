@@ -431,8 +431,15 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    route_str = re.sub(r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|руб|долл|\$|€|тг).*$', '', route_str, flags=re.IGNORECASE)
-    route_str = re.sub(r'\s*,\s*,\s*', ', ', route_str)
+    # Жесткое отсечение стоимости и валют в конце маршрута
+    price_strip_pattern = re.compile(
+        r'[,;\s]+(?:\d[\d\s\.,]*)?\s*(?:RUB|USD|EUR|KZT|UZS|сум|сумм|руб|рублей|р|долл|доллар|долларов|usd|\$|€|евро|eur|тенге|kzt|тг|торг|торги)\b.*$',
+        re.IGNORECASE
+    )
+    route_str = price_strip_pattern.sub('', route_str)
+    
+    # Удаляем висячие числа и лишние запятые в конце маршрута
+    route_str = re.sub(r'[,;\s]+\d[\d\s\.,]*$', '', route_str).strip()
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
     car_type = "Тент/реф"
@@ -1435,7 +1442,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
 
     pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
-    file_caption = f"📅 Дата загрузки: {date_str} | 📍 Направление: {route_str}"
+    clean_route_short = route_str.replace(' → ', '-').replace(' -> ', '-').strip()
+    file_caption = f"{date_str} {clean_route_short}"
 
     try:
         # 1. Отправляем текстовый отчет логисту
@@ -2499,7 +2507,19 @@ async def get_loads_api(request):
     if country and country != 'ALL':
         query += " AND (destination_country LIKE ? OR route LIKE ?)"
         params.extend([f"%{country}%", f"%{country}%"])
-    # Если фильтр по стране не задан или 'ALL' — отдаем все активные грузы биржи
+    else:
+        # Для вкладки "Все направления" показываем ТОЛЬКО грузы по подпискам пользователя
+        if user_subs:
+            sub_conditions = []
+            for sub in user_subs:
+                clean_sub = sub.split(' ')[0]
+                sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
+                params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
+            query += " AND (" + " OR ".join(sub_conditions) + ")"
+        else:
+            # Если подписок нет — не показываем ничего
+            conn.close()
+            return web.json_response({"loads": []})
         
     query += " ORDER BY load_id DESC"
     
