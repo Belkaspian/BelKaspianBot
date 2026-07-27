@@ -1309,12 +1309,11 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
 
     # Проверяем полноту внесенных данных
-    def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
+def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
     """Возвращает True, если документ просрочен или до конца осталось менее threshold_days дней."""
     if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
         return False
     
-    # Регулярные выражения для формата ДД.ММ.ГГГГ / ДД-ММ-ГГГГ и ISO ГГГГ-ММ-ДД
     match = re.search(r'(\d{1,2})[\./-](\d{1,2})[\./-](\d{2,4})', str(expiry_str))
     if not match:
         match_iso = re.search(r'(\d{4})[\./-](\d{1,2})[\./-](\d{1,2})', str(expiry_str))
@@ -1334,6 +1333,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     except ValueError:
         return False
 
+
+# Блок проверки документов внутри функции handle_doc_finish:
     # Проверяем полноту и валидность внесенных данных
     missing_items = []
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
