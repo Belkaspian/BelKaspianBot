@@ -99,7 +99,6 @@ def is_convert_allowed(user: types.User) -> bool:
 
 # ==================== ОПРЕДЕЛЕНИЕ ТИПА ФАЙЛА ПО MAGIC BYTES ====================
 def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
-    """Точное определение MIME-типа файла по его сигнатуре (Magic Bytes)"""
     if file_bytes.startswith(b'%PDF'):
         return "application/pdf"
     elif file_bytes.startswith(b'\x89PNG'):
@@ -284,9 +283,6 @@ class DocUploadStates(StatesGroup):
 class DocConvertStates(StatesGroup):
     waiting_for_files = State()
 
-class ScanStates(StatesGroup):
-    waiting_for_photo = State()
-
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
 
@@ -308,8 +304,7 @@ def get_main_reply_markup(user: Optional[types.User] = None):
     builder.add(types.KeyboardButton(text="📱 Вызвать меню"))
     if user and is_convert_allowed(user):
         builder.add(types.KeyboardButton(text="🔄 Преобразовать данные"))
-    builder.add(types.KeyboardButton(text="📸 Сделать скан"))
-    builder.adjust(1, 2)
+    builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_chat_menu_inline_markup(user: Optional[types.User] = None):
@@ -320,7 +315,6 @@ def get_chat_menu_inline_markup(user: Optional[types.User] = None):
     builder.row(types.InlineKeyboardButton(text="🚚 Забранные грузы", callback_data="menu_my_deals"))
     if user and is_convert_allowed(user):
         builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
-    builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
     return builder.as_markup()
 
 def normalize_currency(curr_str: str) -> str:
@@ -602,7 +596,7 @@ def format_carrier_info(user_id: int, username: str, full_name: str) -> str:
 
     return f"👤 Перевозчик: {user_link}\n🏢 {comp}, {name} {phone}"
 
-def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=False):
+def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment="", is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
         cars_formatted = f"{cars_str} авто"
     else:
@@ -616,21 +610,23 @@ def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text
     )
     if details_text:
         card += f"\n📦 {details_text}"
+    if admin_comment:
+        card += f"\n💬 Комментарий логиста: {admin_comment}"
     return card
 
 async def update_cargo_messages_for_all_users(cargo_id: int):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT date, route, price, cars_count, details, status FROM loads WHERE load_id = ?", (cargo_id,))
+    cursor.execute("SELECT date, route, price, cars_count, details, status, admin_comment FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     
     if not row:
         conn.close()
         return
         
-    date_str, route_str, price_str, cars_str, details_text, status = row
+    date_str, route_str, price_str, cars_str, details_text, status, admin_comment = row
     is_closed = (status in ['CLOSED', 'EXPIRED'])
-    new_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=is_closed)
+    new_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment=admin_comment, is_closed=is_closed)
     
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
     messages_to_edit = cursor.fetchall()
@@ -667,16 +663,16 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         conn.close()
         return
 
-    cursor.execute("SELECT date, route, price, cars_count, details, status FROM loads WHERE load_id = ?", (cargo_id,))
+    cursor.execute("SELECT date, route, price, cars_count, details, status, admin_comment FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
     
     if not row:
         return
         
-    date_str, route_str, price_str, cars_str, details_text, status = row
+    date_str, route_str, price_str, cars_str, details_text, status, admin_comment = row
     is_closed = (status in ['CLOSED', 'EXPIRED'])
-    formatted_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, is_closed=is_closed)
+    formatted_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment=admin_comment, is_closed=is_closed)
     
     builder = InlineKeyboardBuilder()
     if not is_closed:
@@ -697,7 +693,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
     except Exception:
         pass
 
-# ==================== ИИ GEMINI & СКАНЕР ДОКУМЕНТОВ ====================
+# ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
 
 class VehicleDetails(BaseModel):
     brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
@@ -753,206 +749,7 @@ def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -
     except ValueError:
         return False
 
-# ==================== ИИ-СКАНЕР ДОКУМЕНТОВ (ФИНАЛЬНЫЙ ПОЛНЫЙ КОД) ====================
-
-from pydantic import BaseModel, Field
-
-
-class CornerPoint(BaseModel):
-    x: int = Field(description="Координата X от 0 до 1000")
-    y: int = Field(description="Координата Y от 0 до 1000")
-
-
-class DocumentScanGeometry(BaseModel):
-    top_left: CornerPoint
-    top_right: CornerPoint
-    bottom_right: CornerPoint
-    bottom_left: CornerPoint
-    rotate: int = Field(
-        default=0, description="Угол поворота: 0, 90, 180 или 270"
-    )
-
-
-# ==================== РАСШИРЕННЫЙ ИИ-СКАНЕР ДОКУМЕНТОВ ====================
-
-from pydantic import BaseModel, Field
-
-
-class CornerPoint(BaseModel):
-    x: int = Field(description="Координата X от 0 до 1000")
-    y: int = Field(description="Координата Y от 0 до 1000")
-
-
-class DocumentScanGeometry(BaseModel):
-    top_left: CornerPoint
-    top_right: CornerPoint
-    bottom_right: CornerPoint
-    bottom_left: CornerPoint
-    rotate: int = Field(
-        default=0, description="Угол поворота: 0, 90, 180 или 270"
-    )
-
-
-# ==================== ПРЯМАЯ ИИ-ОБРАБОТКА (IMAGEN 4 + GEMINI IMAGE) ====================
-
-EXPLICIT_SCANNER_PROMPT = """
-Ты — профессиональный специализированный ИИ-агент глубокой компьютерной обработки, генеративной реставрации и пространственного анализа официальных логистических и транспортных документов (CMR-накладные, ТТН, Торг-12, Инвойсы, СТС, Водительские права, Паспорта).
-
-==================================================
-1. ГЛАВНАЯ ЦЕЛЬ
-==================================================
-Возьми исходную фотографию документа и сгенерируй на выходе ИДЕАЛЬНЫЙ, ЧЕТКИЙ, ЮРИДИЧЕСКИ АУТЕНТИЧНЫЙ "СКАН С ПРИНТЕРА" в вертикальном формате (стандарт A4 / бланка CMR), применив полную визуальную и геометрическую реставрацию.
-
-==================================================
-2. ДЕТАЛЬНАЯ ИНСТРУКЦИЯ ПО ГЕОМЕТРИИ И ОБРЕЗКЕ
-==================================================
-- ПОИСК ГРАНИЦ: Найди 4 точные физические внешние угловые точки самого бумажного листа.
-- УДАЛЕНИЕ ФОНА: Полностью отсеки и удали весь сторонний окружающий фон (стол, панель/торпеду автомобиля, ткань, темноту, руль, стены).
-- ВЫРАВНИВАНИЕ ПЕРСПЕКТИВЫ: Исправь ракурс съемки. Если документ сфотографирован под углом, сверху, сбоку или с завалом перспективы — разверни и выровняй его в идеальный плоский прямоугольник книжной (вертикальной) ориентации.
-- ВЫРАВНИВАНИЕ КРАЕВ: Если края документа скомканы, согнуты, имеют волнистую или неровную линию — выравни их по идеальной прямой огибающей линии бланка.
-- ПОВОРОТ КАДРА: Если исходное фото сделано боком (на 90°/270°) или вверх ногами (на 180°), разверни итоговый документ так, чтобы заголовок был вверху, а текст читался строго СВЕРХУ ВНИЗ и СЛЕВА НАПРАВО.
-
-==================================================
-3. УДАЛЕНИЕ ПАЛЬЦЕВ, РУК И ПОМЕХ (INPAINTING)
-==================================================
-- ДЕТЕКЦИЯ ПАЛЬЦЕВ: Внимательно найди все пальцы, фаланги рук или зажимы планшета, удерживающие документ за края.
-- РЕСТАВРАЦИЯ ТЕКСТУРЫ: Аккуратно удали пальцы и руки с кадра, восстановив на их месте чистый бежево-белый фон оригинальной бумаги.
-- Без слепых пятен, черных разводов или неаккуратного размытия на месте удаленных объектов.
-
-==================================================
-4. ОСВЕТЛЕНИЕ, КОНТРАСТ И ЦВЕТОКОРРЕКЦИЯ
-==================================================
-- ОЧИСТКА ФОНА: Осветли темный или серый фон бумаги, сделав его чисто белым или светло-молочным, как на оригинальном бланке печати.
-- УДАЛЕНИЕ ТЕНЕЙ: Полностью устрани неравномерные тени от смартфона, рук, тела человека или внешнего освещения.
-- УСИЛЕНИЕ ЧИТАЕМОСТИ: Повысь локальный контраст и резкость всех печатных символов, табличных сеток, рукописного текста, дат, ИНН, номеров машин и штампов.
-- СОХРАННОСТЬ ЦВЕТОВ: Сохрани оригинальные цветные оттенки синих и красных печатей, штампов, синей ручки и подписей, сделав их сочными и чёткими.
-
-==================================================
-5. СТРОЖАЙШИЙ ЗАПРЕТ ИЗМЕНЕНИЙ (100% ЮРИДИЧЕСКАЯ ЦЕЛОСТНОСТЬ)
-==================================================
-- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО изменять, дорисовывать, перерисовывать, заменять или удалять хотя бы одну букву, цифру, слово, номер ТС, дату, ИНН, КПП или сумму.
-- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО искажать форму или структуру печатей, штампов и подписей.
-- Не применяй арт-фильтры, художественные стили или эффект «рисунка».
-- Все табличные рамки, графы и микрошрифты бланка должны остаться на 100% сохранными и совпадать с оригиналом.
-
-Сгенерируй и верни ИТОГОВОЕ ИЗОБРАЖЕНИЕ обработанного скана документа.
-"""
-
-
-async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
-    """
-    Прямая ИИ-обработка через генеративные модели Imagen 4 и Gemini Image-to-Image.
-    """
-    try:
-        import cv2
-        import numpy as np
-
-        if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
-            logging.error(
-                "❌ ОШИБКА: GEMINI_API_KEY не задан или нет google-genai!"
-            )
-            return image_bytes
-
-        logging.info(
-            f"🚀 [ИИ-СЕРВЕР] Отправка фото в Imagen 4 / Gemini для ПРЯМОЙ обработки... (Размер: {len(image_bytes)} байт)"
-        )
-
-        # Полный приоритетный список моделей обработки и генерации картинок:
-        image_generation_models = [
-            # Флагманские движки обработки изображений Imagen 4
-            "imagen-4.0-generate-ultra",
-            "imagen-4.0-generate",
-            "imagen-4.0-generate-fast",
-            # Мультимодальные модели Gemini с модальностью IMAGE
-            "gemini-3.5-flash-image",
-            "gemini-3.1-flash-image",
-            "gemini-2.5-flash-image",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash",
-        ]
-
-        mime_type = detect_mime_type(image_bytes, "")
-        part_image = genai_types.Part.from_bytes(
-            data=image_bytes, mime_type=mime_type
-        )
-
-        config_image_output = genai_types.GenerateContentConfig(
-            response_modalities=["IMAGE"], temperature=0.1
-        )
-
-        # 1. ПРЯМАЯ ГЕНЕРАЦИЯ СКАНОМ ЧЕРЕЗ ИИ
-        for m_name in image_generation_models:
-            try:
-                logging.info(
-                    f"⏳ [ИИ-СЕРВЕР] ИИ-модель {m_name} обрабатывает документ..."
-                )
-
-                response = None
-                if hasattr(gemini_client, "aio"):
-                    response = await gemini_client.aio.models.generate_content(
-                        model=m_name,
-                        contents=[part_image, EXPLICIT_SCANNER_PROMPT],
-                        config=config_image_output,
-                    )
-                else:
-                    response = await asyncio.to_thread(
-                        gemini_client.models.generate_content,
-                        model=m_name,
-                        contents=[part_image, EXPLICIT_SCANNER_PROMPT],
-                        config=config_image_output,
-                    )
-
-                if response and response.candidates:
-                    for part in response.candidates[0].content.parts:
-                        if (
-                            hasattr(part, "inline_data")
-                            and part.inline_data
-                            and part.inline_data.data
-                        ):
-                            ai_photo_bytes = part.inline_data.data
-                            logging.info(
-                                f"🎉 [УСПЕХ ИИ] Модель {m_name} ВЕРНУЛА ГОТОВОЕ ФОТО! (Размер: {len(ai_photo_bytes)} байт)"
-                            )
-                            return ai_photo_bytes
-            except Exception as e_gen:
-                logging.warning(
-                    f"⚠️ Модель {m_name} пропущена или не подложила модальность IMAGE: {e_gen}"
-                )
-
-        # 2. РЕЗЕРВНЫЙ АЛГОРИТМ (Если генерация картинок недоступна по API-ключу)
-        logging.warning(
-            "⚠️ ИИ-сервер не вернул готовую картинку напрямую. Включаем резервную геометрию..."
-        )
-
-        orig_img = cv2.imdecode(
-            np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR
-        )
-        corners = find_document_contours_cv(orig_img)
-        warped = four_point_transform(orig_img, corners)
-        inpainted = ai_inpaint_remove_fingers_and_crop_edges(warped)
-        scanned_final = advance_homomorphic_scan_filter(inpainted)
-
-        _, encoded_img = cv2.imencode(
-            ".jpg", scanned_final, [int(cv2.IMWRITE_JPEG_QUALITY), 96]
-        )
-        return encoded_img.tobytes()
-
-    except Exception as e:
-        logging.error(
-            f"❌ Критическая ошибка в scan_document_with_ai_agent: {e}",
-            exc_info=True,
-        )
-        return image_bytes
-
 def get_category_priority(cat_str: str) -> int:
-    """Возвращает числовой приоритет сортировки документов:
-    1: Паспорт
-    2: Водительские права
-    3: Техпаспорт тягача
-    4: Техпаспорт прицепа
-    5: Прочие документы
-    """
     s = str(cat_str).lower().strip()
     if 'passport_front' in s or 'паспорт_лиц' in s: return 10
     if 'passport' in s or 'паспорт' in s: return 15
@@ -979,7 +776,6 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         return fallback_text, all_files, {}
 
     contents = []
-    # Добавляем текстовый промпт прямо в массив contents для принудительного распознавания изображений
     user_instruction = (
         "Внимательно изучи все прикреплённые документы и фотографии. "
         "Определи и извлеки данные по водителям, паспортам, правам, тягачам и прицепам. "
@@ -1027,11 +823,21 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     )
 
     response = None
+    # Оптимальный приоритет моделей на основе лимитов:
     models_to_try = [
+        # 1. Топовые флагманы для максимальной точности
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash",
         "gemini-2.5-flash",
+        # 2. Неисчерпаемый резерв с гигантским лимитом
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        # 3. Отключенные / тяжелые модели в самом конце
+        "gemini-3.1-pro",
+        "gemini-2.5-pro",
         "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
     ]
 
     for model_name in models_to_try:
@@ -1163,7 +969,6 @@ async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
         return None
 
 async def create_pdf_report_with_images(route: str, date_str: str, price: str, carrier_info: str, ai_text: str, photo_ids: list) -> io.BytesIO:
-    """Генерация единого PDF с пред-обработкой и обрезкой ИИ-сканером каждого фото"""
     buffer = io.BytesIO()
     images = []
 
@@ -1174,17 +979,14 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
             await bot.download_file(file_info.file_path, destination=buf)
             raw_bytes = buf.getvalue()
 
-            # Сканирование, выравнивание перспектив и увеличение чёткости текста ИИ-сканером
-            scanned_bytes = await scan_document_with_ai_agent(raw_bytes)
-
-            img = Image.open(io.BytesIO(scanned_bytes))
+            img = Image.open(io.BytesIO(raw_bytes))
             img = ImageOps.exif_transpose(img)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
             images.append(img)
         except Exception as e:
-            logging.error(f"Error processing photo {pid} for PDF scan report: {e}")
+            logging.error(f"Error processing photo {pid} for PDF report: {e}")
 
     if images:
         images[0].save(
@@ -1291,7 +1093,7 @@ async def callback_menu_profile(callback: types.CallbackQuery):
 async def callback_menu_active(callback: types.CallbackQuery):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, date, route, price, cars_count, details FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 20")
+    cursor.execute("SELECT load_id, date, route, price, cars_count, details, admin_comment FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 20")
     rows = cursor.fetchall()
     conn.close()
 
@@ -1301,8 +1103,8 @@ async def callback_menu_active(callback: types.CallbackQuery):
         return
 
     await callback.message.answer("📦 **Список актуальных грузов:**", parse_mode="Markdown")
-    for load_id, date_str, route_str, price_str, cars_str, details_str in rows:
-        card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str)
+    for load_id, date_str, route_str, price_str, cars_str, details_str, admin_comment in rows:
+        card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str, admin_comment=admin_comment)
         builder = InlineKeyboardBuilder()
         web_app_url = f"{RENDER_URL}/webapp"
         builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
@@ -1504,54 +1306,6 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     await message.answer("✅ Телефон обновлен!")
     await show_profile_menu(message)
 
-# ==================== СДЕЛАТЬ СКАН (СКАНЕР ДОКУМЕНТОВ) ====================
-
-@dp.message(F.text == "📸 Сделать скан")
-@dp.callback_query(F.data == "menu_make_scan")
-async def cmd_make_scan_start(event: types.Message | types.CallbackQuery, state: FSMContext):
-    await state.set_state(ScanStates.waiting_for_photo)
-    prompt = (
-        "📸 **Режим «Сделать скан»**\n\n"
-        "Отправьте фото документа в этот чат.\n"
-        "ИИ-Агент автоматически найдет границы листа, выровняет перспективу, уберет тени и повысит чёткость текста.\n\n"
-        "⚠️ *Все тексты, подписи и печати сохраняются в точности без изменений.*"
-    )
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="❌ Отмена"))
-
-    if isinstance(event, types.CallbackQuery):
-        await event.message.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
-        await event.answer()
-    else:
-        await event.answer(prompt, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
-
-@dp.message(ScanStates.waiting_for_photo, F.text == "❌ Отмена")
-async def cancel_make_scan(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Сканирование отменено.", reply_markup=get_main_reply_markup(message.from_user))
-
-@dp.message(ScanStates.waiting_for_photo, F.photo)
-async def process_scan_photo(message: types.Message, state: FSMContext):
-    status_msg = await message.answer("🔄 ИИ-Агент сканирует документ и выравнивает геометрию...")
-    try:
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        buf = io.BytesIO()
-        await bot.download_file(file_info.file_path, destination=buf)
-        orig_bytes = buf.getvalue()
-
-        enhanced_bytes = await scan_document_with_ai_agent(orig_bytes)
-
-        doc_file = types.BufferedInputFile(enhanced_bytes, filename="Document_Scan.jpg")
-        await message.answer_document(document=doc_file, caption="✅ Скан документа готов!")
-        await status_msg.delete()
-    except Exception as e:
-        logging.error(f"Error making scan: {e}")
-        await message.answer("❌ Ошибка при обработке скана.")
-
-    await state.clear()
-    await message.answer("Готово!", reply_markup=get_main_reply_markup(message.from_user))
-
 # ==================== ПРЕОБРАЗОВАТЬ ДАННЫЕ (АВТОНОМНО) ====================
 
 @dp.message(F.text == "🔄 Преобразовать данные")
@@ -1615,7 +1369,7 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не прислали ни одного фото/файла или заметки.")
         return
 
-    status_msg = await message.answer("🔄 ИИ распознает документы, выполняет кадрирование сканов и сортирует страницы в PDF...")
+    status_msg = await message.answer("🔄 ИИ распознает документы и сортирует страницы в PDF...")
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False)
 
@@ -2386,7 +2140,6 @@ async def handle_admin_messages_and_posts(event: types.Message, state: FSMContex
         builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
         builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
         builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
-        builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
         builder.row(types.InlineKeyboardButton(text="🔐 Сменить пароль Web App", callback_data="adm_change_pass"))
         await event.answer("🎛 **Панель администратора**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
         return
@@ -2564,7 +2317,6 @@ async def admin_menu_back(callback: types.CallbackQuery):
     builder.row(types.InlineKeyboardButton(text="🤝 Подтвержденные грузы", callback_data="adm_menu_confirmed"))
     builder.row(types.InlineKeyboardButton(text="👥 Перевозчики", callback_data="adm_menu_carriers"))
     builder.row(types.InlineKeyboardButton(text="🔄 Преобразовать данные", callback_data="menu_convert_standalone"))
-    builder.row(types.InlineKeyboardButton(text="📸 Сделать скан", callback_data="menu_make_scan"))
     builder.row(types.InlineKeyboardButton(text="🔐 Сменить пароль Web App", callback_data="adm_change_pass"))
     await callback.message.edit_text("🎛 **Панель администратора**\nВыберите нужный раздел:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
@@ -3236,14 +2988,14 @@ async def book_load_api(request):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
 
-    cursor.execute("SELECT status, route, date, price, cars_count, details FROM loads WHERE load_id = ?", (load_id,))
+    cursor.execute("SELECT status, route, date, price, cars_count, details, admin_comment FROM loads WHERE load_id = ?", (load_id,))
     load = cursor.fetchone()
     
     if not load or load[0] != 'ACTIVE':
         conn.close()
         return web.json_response({"error": "Груз недоступен"}, status=400)
         
-    status, route_str, date_str, price_str, cars_count_str, details_text = load
+    status, route_str, date_str, price_str, cars_count_str, details_text, admin_comment = load
     current_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if cars_count_str and re.search(r'\d+', str(cars_count_str)) else 1
 
     carrier_text = format_carrier_info(user_id, username, first_name)
@@ -3585,3 +3337,4 @@ if __name__ == "__main__":
     except Exception as e:
         traceback.print_exc()
         sys.exit(1)
+
