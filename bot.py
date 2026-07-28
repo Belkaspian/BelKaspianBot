@@ -121,7 +121,7 @@ def init_db():
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    # Включаем WAL режим для исключения блокировок базы
+    # Включаем WAL режим для исключения блокировок базы при параллельных запросах
     cursor.execute("PRAGMA journal_mode=WAL;")
     
     cursor.execute("""
@@ -434,7 +434,7 @@ def parse_cargo_date(date_str: str) -> date | None:
     except ValueError:
         return None
 
-# ИСПРАВЛЕННЫЙ ПАРСИНГ МАРШРУТОВ И ЦЕН
+# Точный парсинг сырого текста грузов
 def parse_cargo_raw(raw_text: str):
     clean_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
 
@@ -463,11 +463,8 @@ def parse_cargo_raw(raw_text: str):
 
         if ('-' in line or '→' in line or '—' in line) and not route_str:
             clean_route = line
-            # Удаляем дату
             clean_route = date_pattern.sub('', clean_route)
-            # Удаляем кол-во машин
             clean_route = cars_pattern.sub('', clean_route)
-            # Удаляем ценники, включая сокращения 'д', 'долл', 'руб'
             clean_route = re.sub(
                 r'[\d\.\,\s]+(?:\$|€|руб|rub|rur|\bр\b|долл|usd|\bдол\b|\bд\b|евро|eur|тенге|kzt|\bтг\b|узб\s*сум|сумм|\bсум\b|uzs|торг|торги)\b.*$',
                 '',
@@ -482,8 +479,6 @@ def parse_cargo_raw(raw_text: str):
             )
             clean_route = re.sub(r'[,;\s]+\d[\d\s\.,]*$', '', clean_route).strip()
             clean_route = re.sub(r'[\s,]+', ' ', clean_route).strip(' ,.-')
-            
-            # Нормализуем тире/стрелки
             clean_route = re.sub(r'\s*[-—→]+\s*', ' → ', clean_route)
             clean_route = re.sub(r'^\s*,\s*|\s*,\s*$', '', clean_route).strip()
             
@@ -499,7 +494,6 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    # Финальная подчистка маршрута
     route_str = re.sub(r'[,;\s]+\d+.*$', '', route_str).strip()
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
@@ -598,19 +592,28 @@ def parse_multiple_cargos(raw_text: str):
         
     return result_texts
 
-def format_carrier_info(user_id: int, username: str, full_name: str) -> str:
+# Кликабельная ссылка на профиль Telegram для моментального чата
+def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -> str:
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
-    user_link = f"@{username}" if username else f"tg://user?id={user_id}"
     comp = row[0] if row and row[0] and row[0] != 'Не указана' else "Не указана"
-    name = row[1] if row and row[1] else full_name
+    db_name = row[1] if row and row[1] else ""
     phone = row[2] if row and row[2] else "Не указан"
 
-    return f"👤 Перевозчик: {user_link}\n🏢 {comp}, {name} {phone}"
+    display_name = db_name or full_name or "Перевозчик"
+
+    # Формируем кликабельный тег профиля Telegram
+    if username:
+        clean_username = username.lstrip('@')
+        user_link = f"[@{clean_username}](tg://user?id={user_id})"
+    else:
+        user_link = f"[{display_name}](tg://user?id={user_id})"
+
+    return f"👤 Перевозчик: {user_link}\n🏢 {comp}, {display_name} {phone}"
 
 def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment="", is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
@@ -838,10 +841,21 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     )
 
     response = None
+    # Оптимальный приоритет моделей на основе ваших лимитов:
     models_to_try = [
+        # 1. Топовые флагманы для максимальной точности
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash",
         "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash-exp"
+        # 2. Неисчерпаемый резерв с гигантским лимитом
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        # 3. Отключенные модели в самом конце
+        "gemini-3.1-pro",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
     ]
 
     for model_name in models_to_try:
@@ -1075,6 +1089,12 @@ async def send_welcome_message(message: types.Message):
     await message.answer(
         "Главное меню:",
         reply_markup=get_chat_menu_inline_markup(message.from_user)
+    )
+
+    # Принудительно отправляем нижнее меню кнопок в чат
+    await message.answer(
+        "Используйте кнопку ниже для быстрого доступа к меню:",
+        reply_markup=get_main_reply_markup(message.from_user)
     )
 
 @dp.message(F.text == "📱 Вызвать меню")
@@ -1633,9 +1653,30 @@ async def handle_doc_text_notes(message: types.Message, state: FSMContext):
     new_notes = (old_notes + "\n" + message.text).strip()
     await state.update_data(text_notes=new_notes)
 
-# ==================== ПАРСИНГ ИЗ КАНАЛОВ НАПРАВЛЕНИЙ ====================
+# Вспомогательная функция определения страны направления
+def detect_country(text: str) -> str:
+    t = text.lower()
+    if 'казахстан' in t or any(c in t for c in ['алматы', 'астана', 'шымкент', 'караганда', 'актау', 'атырау']):
+        return "Казахстан 🇰🇿"
+    elif 'узбекистан' in t or any(c in t for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана']):
+        return "Узбекистан 🇺🇿"
+    elif 'кыргызстан' in t or 'киргизия' in t or 'бишкек' in t or 'ош' in t:
+        return "Кыргызстан 🇰🇬"
+    elif 'грузия' in t or 'тбилиси' in t or 'поти' in t or 'батуми' in t:
+        return "Грузия 🇬🇪"
+    elif 'азербайджан' in t or 'баку' in t or 'сумгаит' in t:
+        return "Азербайджан 🇦🇿"
+    elif 'армения' in t or 'ереван' in t:
+        return "Армения 🇦🇲"
+    return "Все"
 
-@dp.channel_post(F.chat.id.in_(list(CHANNEL_TO_DIRECTION.keys())))
+# ==================== ПАРСИНГ ИЗ КАНАЛОВ И АДМИН-КАНАЛА ====================
+
+LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
+if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
+    LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
+
+@dp.channel_post(F.chat.id.in_(LISTENED_CHATS))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
     raw_text = message.text or message.caption
@@ -1643,6 +1684,11 @@ async def handle_channel_post(message: types.Message):
         return
         
     direction = CHANNEL_TO_DIRECTION.get(chat_id)
+    if not direction:
+        # Пост из админ-канала: автоматически определяем направление по тексту
+        date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(raw_text)
+        direction = detect_country(route_str or raw_text)
+
     splitted_texts = parse_multiple_cargos(raw_text)
     
     conn = sqlite3.connect("cargo_bot.db")
@@ -1888,6 +1934,11 @@ async def get_loads_api(request):
         if u_row and u_row[0]:
             user_subs = [s.strip() for s in u_row[0].split(',') if s.strip()]
 
+    # Если пользователь авторизован, но у него НЕТ включенных подписок — возвращаем пустой список на Бирже
+    if user_id and not user_subs and not (country and country != 'ALL'):
+        conn.close()
+        return web.json_response({"loads": []})
+
     query = """
         SELECT load_id, route, date, cars_count, price, text, 
                COALESCE(cargo_type, 'ТНП'), 
@@ -2058,7 +2109,7 @@ async def my_loads_api(request):
             
     return web.json_response({"deals": deals})
 
-# ИСПРАВЛЕННАЯ ПРЯМАЯ ЗАГРУЗКА ИЗ WEB APP (ОТПРАВЛЯЕТ 1 СВОДКУ + 1 PDF БЕЗ СПАМА)
+# Прямая загрузка из Web App: отправляет 1 текстовую сводку с кликабельной ссылкой + 1 собранный PDF
 async def direct_upload_docs_api(request):
     try:
         reader = await request.multipart()
@@ -2133,9 +2184,8 @@ async def direct_upload_docs_api(request):
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
 
-        cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
-        u_row = cursor.fetchone()
-        user_info = f"👤 Перевозчик: tg://user?id={user_id}\n🏢 {u_row[0] if u_row else 'Не указана'}, {u_row[1] if u_row else 'Водитель'} {u_row[2] if u_row else ''}"
+        # Кликабельная ссылка на профиль перевозчика
+        user_info = format_carrier_info(user_id)
 
         if all_file_ids:
             ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photo_ids, doc_ids, phone_input)
