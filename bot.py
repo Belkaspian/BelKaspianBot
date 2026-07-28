@@ -793,390 +793,143 @@ class DocumentScanGeometry(BaseModel):
     )
 
 
+# ==================== ПРЯМАЯ ИИ-ОБРАБОТКА (IMAGEN 4 + GEMINI IMAGE) ====================
+
 EXPLICIT_SCANNER_PROMPT = """
-Ты — профессиональный ИИ-агент глубокого пространственного анализа, компьютерного зрения и автоматизированной геометрии официальных логистических документов (CMR, ТТН, Инвойсов, Паспортов, СТС).
+Ты — профессиональный специализированный ИИ-агент глубокой компьютерной обработки, генеративной реставрации и пространственного анализа официальных логистических и транспортных документов (CMR-накладные, ТТН, Торг-12, Инвойсы, СТС, Водительские права, Паспорта).
 
 ==================================================
-1. ГЛАВНАЯ ЦЕЛЬ И РОЛЬ
+1. ГЛАВНАЯ ЦЕЛЬ
 ==================================================
-Твоя единственная функция — провести точнейший геометрический аудит фотографии документа, определить 4 ИСТИННЫХ внешних физических угла бумажного листа (для последующего перспективного выравнивания в ровный прямоугольный скан формата А4) и установить угол его поворота.
+Возьми исходную фотографию документа и сгенерируй на выходе ИДЕАЛЬНЫЙ, ЧЕТКИЙ, ЮРИДИЧЕСКИ АУТЕНТИЧНЫЙ "СКАН С ПРИНТЕРА" в вертикальном формате (стандарт A4 / бланка CMR), применив полную визуальную и геометрическую реставрацию.
 
 ==================================================
-2. КАТЕГОРИЧЕСКИЕ ЗАПРЕТЫ И ПРАВИЛА (100% ЮРИДИЧЕСКАЯ ЦЕЛОСТНОСТЬ)
+2. ДЕТАЛЬНАЯ ИНСТРУКЦИЯ ПО ГЕОМЕТРИИ И ОБРЕЗКЕ
 ==================================================
-1. НИ ПРИ КАКИХ УСЛОВИЯХ НЕ ИЗМЕНЯЙ, НЕ ПЕРЕРИСОВЫВАЙ И НЕ ИСКАЖАЙ ТЕКСТ, ДАТЫ, ИНН, НОМЕРА ТС, ПЕЧАТИ, ШТАМПЫ И ПОДПИСИ.
-2. НЕ ПРИНИМАЙ ПАЛЬЦЫ, РУКИ, КРАЙ СТОЛА, ПЛАНШЕТ С ЗАЖИМОМ, ТОРПЕДУ АВТОМОБИЛЯ ИЛИ ФОН ЗА ГРАНИЦЫ ДОКУМЕНТА.
-3. НЕ СРЕЗАЙ ШАПКУ ДОКУМЕНТА (логотипы, номера CMR/ТТН, заглавные поля) И НИЖНИЕ БЛОКИ (графы с печатями 16-29).
-4. НЕ КРОПИ ВНУТРЬ ТАБЛИЦЫ. Твоя задача — найти ВНЕШНИЙ край бумаги.
+- ПОИСК ГРАНИЦ: Найди 4 точные физические внешние угловые точки самого бумажного листа.
+- УДАЛЕНИЕ ФОНА: Полностью отсеки и удали весь сторонний окружающий фон (стол, панель/торпеду автомобиля, ткань, темноту, руль, стены).
+- ВЫРАВНИВАНИЕ ПЕРСПЕКТИВЫ: Исправь ракурс съемки. Если документ сфотографирован под углом, сверху, сбоку или с завалом перспективы — разверни и выровняй его в идеальный плоский прямоугольник книжной (вертикальной) ориентации.
+- ВЫРАВНИВАНИЕ КРАЕВ: Если края документа скомканы, согнуты, имеют волнистую или неровную линию — выравни их по идеальной прямой огибающей линии бланка.
+- ПОВОРОТ КАДРА: Если исходное фото сделано боком (на 90°/270°) или вверх ногами (на 180°), разверни итоговый документ так, чтобы заголовок был вверху, а текст читался строго СВЕРХУ ВНИЗ и СЛЕВА НАПРАВО.
 
 ==================================================
-3. ДЕТАЛЬНАЯ ИНСТРУКЦИЯ ПО ОПРЕДЕЛЕНИЮ 4 УГЛОВ (CORNERS)
+3. УДАЛЕНИЕ ПАЛЬЦЕВ, РУК И ПОМЕХ (INPAINTING)
 ==================================================
-Определи 4 физических угла самого бумажного листа в системе координат от 0 до 1000 (где y=0 — верхний край кадра, y=1000 — нижний край кадра; x=0 — левый край кадра, x=1000 — правый край кадра):
-
-- "top_left": Верхний-левый угловой пиксель бумажного листа.
-- "top_right": Верхний-правый угловой пиксель бумажного листа.
-- "bottom_right": Нижний-правый угловой пиксель бумажного листа.
-- "bottom_left": Нижний-левый угловой пиксель бумажного листа.
-
-ОСОБЫЕ СЛУЧАИ И КРАЕВЫЕ УСЛОВИЯ:
-А) Если угол листа перекрыт пальцем/рукой:
-   Мысленно проложи прямые линии вдоль видимых краев (граней) бумаги до точки их естественного математического пересечения. Точка пересечения этих линий и есть угол листа!
-Б) Если край листа согнут, волнообразен или смята страница:
-   Выбирай крайнюю внешнюю огибающую точку листа, чтобы вся страница полностью поместилась внутрь контура и ни одна графа таблицы не срезалась.
-В) Если лист лежит на светлом/белом фоне (низкий контраст):
-   Внимательно проанализируй текстуру бумаги, тени по периметру листа и типографскую рамку бланка для нахождения истинной границы бумаги.
+- ДЕТЕКЦИЯ ПАЛЬЦЕВ: Внимательно найди все пальцы, фаланги рук или зажимы планшета, удерживающие документ за края.
+- РЕСТАВРАЦИЯ ТЕКСТУРЫ: Аккуратно удали пальцы и руки с кадра, восстановив на их месте чистый бежево-белый фон оригинальной бумаги.
+- Без слепых пятен, черных разводов или неаккуратного размытия на месте удаленных объектов.
 
 ==================================================
-4. ОПРЕДЕЛЕНИЕ ОРИЕНТАЦИИ (ROTATE)
+4. ОСВЕТЛЕНИЕ, КОНТРАСТ И ЦВЕТОКОРРЕКЦИЯ
 ==================================================
-Определи, на какой угол нужно повернуть фото ПО ЧАСОВОЙ СТРЕЛКЕ, чтобы документ располагался строго вертикально, а текст читался СВЕРХУ ВНИЗ и СЛЕВА НАПРАВО:
-- 0: Документ уже ориентирован правильно (ориентация книжная, заголовок вверху).
-- 90: Документ повернут на 90 градусов по часовой стрелке (лежа завалился вправо).
-- 180: Документ перевернут вверх ногами.
-- 270: Документ повернут на 270 градусов по часовой стрелке (завалился влево).
+- ОЧИСТКА ФОНА: Осветли темный или серый фон бумаги, сделав его чисто белым или светло-молочным, как на оригинальном бланке печати.
+- УДАЛЕНИЕ ТЕНЕЙ: Полностью устрани неравномерные тени от смартфона, рук, тела человека или внешнего освещения.
+- УСИЛЕНИЕ ЧИТАЕМОСТИ: Повысь локальный контраст и резкость всех печатных символов, табличных сеток, рукописного текста, дат, ИНН, номеров машин и штампов.
+- СОХРАННОСТЬ ЦВЕТОВ: Сохрани оригинальные цветные оттенки синих и красных печатей, штампов, синей ручки и подписей, сделав их сочными и чёткими.
 
 ==================================================
-5. СТРОГИЙ ФОРМАТ ОТВЕТА (JSON)
+5. СТРОЖАЙШИЙ ЗАПРЕТ ИЗМЕНЕНИЙ (100% ЮРИДИЧЕСКАЯ ЦЕЛОСТНОСТЬ)
 ==================================================
-Верни результат СТРОГО в формате чистый валидный JSON без разметки markdown (без ```json ... ```) и без вводных или заключительных слов:
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО изменять, дорисовывать, перерисовывать, заменять или удалять хотя бы одну букву, цифру, слово, номер ТС, дату, ИНН, КПП или сумму.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО искажать форму или структуру печатей, штампов и подписей.
+- Не применяй арт-фильтры, художественные стили или эффект «рисунка».
+- Все табличные рамки, графы и микрошрифты бланка должны остаться на 100% сохранными и совпадать с оригиналом.
 
-{
-  "top_left": {"x": 100, "y": 50},
-  "top_right": {"x": 900, "y": 50},
-  "bottom_right": {"x": 900, "y": 950},
-  "bottom_left": {"x": 100, "y": 950},
-  "corners": [[50, 100], [50, 900], [950, 900], [950, 100]],
-  "rotate": 0,
-  "has_fingers": true
-}
+Сгенерируй и верни ИТОГОВОЕ ИЗОБРАЖЕНИЕ обработанного скана документа.
 """
 
 
-def find_document_contours_cv(img):
-    """Гарантированный резервный поиск углов листа через Otsu бинаризацию"""
-    import cv2
-    import numpy as np
-
-    orig_h, orig_w = img.shape[:2]
-    ratio = orig_h / 1000.0
-    small_h = 1000
-    small_w = int(orig_w / ratio)
-    resized = cv2.resize(img, (small_w, small_h))
-
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(
-        closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < (small_w * small_h * 0.20):
-            continue
-
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        if len(approx) == 4:
-            return approx.reshape(4, 2) * ratio
-
-        rect = cv2.minAreaRect(c)
-        box = cv2.boxPoints(rect)
-        return np.float32(box) * ratio
-
-    m_y = float(orig_h * 0.02)
-    m_x = float(orig_w * 0.02)
-    return np.array(
-        [
-            [m_x, m_y],
-            [orig_w - m_x, m_y],
-            [orig_w - m_x, orig_h - m_y],
-            [m_x, orig_h - m_y],
-        ],
-        dtype="float32",
-    )
-
-
-def four_point_transform(image, pts):
-    """Перспективное выравнивание с 100% защитой от NoneType"""
-    import cv2
-    import numpy as np
-
-    if pts is None or len(pts) != 4:
-        return image
-
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]  # ВЛ
-    rect[2] = pts[np.argmax(s)]  # НП
-
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # ВП
-    rect[3] = pts[np.argmax(diff)]  # НЛ
-
-    (tl, tr, br, bl) = rect
-    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB))
-
-    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    maxHeight = max(int(heightA), int(heightB))
-
-    if maxWidth <= 0 or maxHeight <= 0:
-        return image
-
-    dst = np.array(
-        [
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1],
-        ],
-        dtype="float32",
-    )
-
-    M = cv2.getPerspectiveTransform(rect, dst)
-    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-
-
-def ai_inpaint_remove_fingers_and_crop_edges(img):
-    """Удаление пальцев (Inpainting Navier-Stokes) + Smart Trim (2.5%)"""
-    import cv2
-    import numpy as np
-
-    h, w = img.shape[:2]
-
-    # Поиск оттенков кожи по краям (до 14% глубины кадра)
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower_skin1 = np.array([0, 15, 50], dtype=np.uint8)
-    upper_skin1 = np.array([25, 255, 255], dtype=np.uint8)
-    mask1 = cv2.inRange(hsv, lower_skin1, upper_skin1)
-
-    lower_skin2 = np.array([160, 15, 50], dtype=np.uint8)
-    upper_skin2 = np.array([180, 255, 255], dtype=np.uint8)
-    mask2 = cv2.inRange(hsv, lower_skin2, upper_skin2)
-
-    skin_mask = cv2.bitwise_or(mask1, mask2)
-
-    border_mask = np.zeros((h, w), dtype=np.uint8)
-    m_h, m_w = int(h * 0.10), int(w * 0.14)
-    border_mask[:m_h, :] = 255
-    border_mask[h - m_h :, :] = 255
-    border_mask[:, :m_w] = 255
-    border_mask[:, w - m_w :] = 255
-
-    finger_mask = cv2.bitwise_and(skin_mask, border_mask)
-
-    if cv2.countNonZero(finger_mask) > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        dilated_mask = cv2.dilate(finger_mask, kernel, iterations=2)
-        img = cv2.inpaint(
-            img, dilated_mask, inpaintRadius=7, flags=cv2.INPAINT_NS
-        )
-
-    # Smart Trim: срез 2.5% внешних полей
-    crop_y = int(h * 0.025)
-    crop_x = int(w * 0.025)
-    if (h - 2 * crop_y) > 100 and (w - 2 * crop_x) > 100:
-        img = img[crop_y : h - crop_y, crop_x : w - crop_x]
-
-    return img
-
-
-def advance_homomorphic_scan_filter(img):
-    """Бережное локальное контрастирование (CLAHE + Bilateral Filtering)"""
-    import cv2
-    import numpy as np
-
-    filtered = cv2.bilateralFilter(img, d=5, sigmaColor=30, sigmaSpace=30)
-    lab = cv2.cvtColor(filtered, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_enhanced = clahe.apply(l)
-
-    blur = cv2.GaussianBlur(l_enhanced, (0, 0), 2.0)
-    l_sharp = cv2.addWeighted(l_enhanced, 1.3, blur, -0.3, 0)
-    l_final = cv2.convertScaleAbs(l_sharp, alpha=1.05, beta=10)
-
-    merged_lab = cv2.merge([l_final, a, b])
-    return cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
-
-
 async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
-    """Главная функция обработки фото ИИ-сканером"""
+    """
+    Прямая ИИ-обработка через генеративные модели Imagen 4 и Gemini Image-to-Image.
+    """
     try:
         import cv2
         import numpy as np
 
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
+        if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
             logging.error(
-                "❌ Сканер: Не удалось декодировать изображение из image_bytes"
+                "❌ ОШИБКА: GEMINI_API_KEY не задан или нет google-genai!"
             )
             return image_bytes
 
-        orig_h, orig_w = img.shape[:2]
-        corners = None
-        rotate_angle = 0
-        ai_success = False
+        logging.info(
+            f"🚀 [ИИ-СЕРВЕР] Отправка фото в Imagen 4 / Gemini для ПРЯМОЙ обработки... (Размер: {len(image_bytes)} байт)"
+        )
 
-        if not GEMINI_API_KEY:
-            logging.error(
-                "❌ ОШИБКА: Переменная GEMINI_API_KEY не задана на сервере!"
-            )
-        elif not gemini_client or not HAS_GENAI:
-            logging.error(
-                "❌ ОШИБКА: gemini_client не инициализирован или нет библиотеки google-genai!"
-            )
-        else:
-            logging.info(
-                f"🚀 Запуск ИИ-сканера Gemini... Размер фото: {orig_w}x{orig_h}, байт: {len(image_bytes)}"
-            )
+        # Полный приоритетный список моделей обработки и генерации картинок:
+        image_generation_models = [
+            # Флагманские движки обработки изображений Imagen 4
+            "imagen-4.0-generate-ultra",
+            "imagen-4.0-generate",
+            "imagen-4.0-generate-fast",
+            # Мультимодальные модели Gemini с модальностью IMAGE
+            "gemini-3.5-flash-image",
+            "gemini-3.1-flash-image",
+            "gemini-2.5-flash-image",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash",
+        ]
 
-            models_to_try = [
-                "gemini-3.6-flash",
-                "gemini-3.5-flash",
-                "gemini-3-flash",
-                "gemini-2.5-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-3.1-flash-lite",
-                "gemini-2.5-flash-lite",
-                "gemini-3.1-pro",
-                "gemini-2.5-pro",
-                "gemini-2.0-flash",
-            ]
-            mime_type = detect_mime_type(image_bytes, "")
-            part = genai_types.Part.from_bytes(
-                data=image_bytes, mime_type=mime_type
-            )
+        mime_type = detect_mime_type(image_bytes, "")
+        part_image = genai_types.Part.from_bytes(
+            data=image_bytes, mime_type=mime_type
+        )
 
-            config = genai_types.GenerateContentConfig(
-                response_mime_type="application/json", temperature=0.0
-            )
+        config_image_output = genai_types.GenerateContentConfig(
+            response_modalities=["IMAGE"], temperature=0.1
+        )
 
-            for m_name in models_to_try:
-                try:
-                    logging.info(
-                        f"⏳ Отправка запроса в Gemini (модель: {m_name})..."
+        # 1. ПРЯМАЯ ГЕНЕРАЦИЯ СКАНОМ ЧЕРЕЗ ИИ
+        for m_name in image_generation_models:
+            try:
+                logging.info(
+                    f"⏳ [ИИ-СЕРВЕР] ИИ-модель {m_name} обрабатывает документ..."
+                )
+
+                response = None
+                if hasattr(gemini_client, "aio"):
+                    response = await gemini_client.aio.models.generate_content(
+                        model=m_name,
+                        contents=[part_image, EXPLICIT_SCANNER_PROMPT],
+                        config=config_image_output,
                     )
-                    if hasattr(gemini_client, "aio"):
-                        response = (
-                            await gemini_client.aio.models.generate_content(
-                                model=m_name,
-                                contents=[part, EXPLICIT_SCANNER_PROMPT],
-                                config=config,
+                else:
+                    response = await asyncio.to_thread(
+                        gemini_client.models.generate_content,
+                        model=m_name,
+                        contents=[part_image, EXPLICIT_SCANNER_PROMPT],
+                        config=config_image_output,
+                    )
+
+                if response and response.candidates:
+                    for part in response.candidates[0].content.parts:
+                        if (
+                            hasattr(part, "inline_data")
+                            and part.inline_data
+                            and part.inline_data.data
+                        ):
+                            ai_photo_bytes = part.inline_data.data
+                            logging.info(
+                                f"🎉 [УСПЕХ ИИ] Модель {m_name} ВЕРНУЛА ГОТОВОЕ ФОТО! (Размер: {len(ai_photo_bytes)} байт)"
                             )
-                        )
-                    else:
-                        response = await asyncio.to_thread(
-                            gemini_client.models.generate_content,
-                            model=m_name,
-                            contents=[part, EXPLICIT_SCANNER_PROMPT],
-                            config=config,
-                        )
+                            return ai_photo_bytes
+            except Exception as e_gen:
+                logging.warning(
+                    f"⚠️ Модель {m_name} пропущена или не подложила модальность IMAGE: {e_gen}"
+                )
 
-                    if response and response.text:
-                        raw_text = response.text.strip()
-                        logging.info(f"✅ Gemini ({m_name}) ответил: {raw_text}")
+        # 2. РЕЗЕРВНЫЙ АЛГОРИТМ (Если генерация картинок недоступна по API-ключу)
+        logging.warning(
+            "⚠️ ИИ-сервер не вернул готовую картинку напрямую. Включаем резервную геометрию..."
+        )
 
-                        match_json = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                        if match_json:
-                            parsed = json.loads(match_json.group(0))
-
-                            tl = parsed.get("top_left") or parsed.get("topLeft")
-                            tr = parsed.get("top_right") or parsed.get(
-                                "topRight"
-                            )
-                            br = parsed.get("bottom_right") or parsed.get(
-                                "bottomRight"
-                            )
-                            bl = parsed.get("bottom_left") or parsed.get(
-                                "bottomLeft"
-                            )
-                            rotate_angle = int(parsed.get("rotate", 0))
-
-                            if (
-                                isinstance(tl, dict)
-                                and isinstance(tr, dict)
-                                and isinstance(br, dict)
-                                and isinstance(bl, dict)
-                            ):
-                                pts_px = [
-                                    [
-                                        float(tl.get("y", 0)) * orig_h / 1000.0,
-                                        float(tl.get("x", 0)) * orig_w / 1000.0,
-                                    ],
-                                    [
-                                        float(tr.get("y", 0)) * orig_h / 1000.0,
-                                        float(tr.get("x", 0)) * orig_w / 1000.0,
-                                    ],
-                                    [
-                                        float(br.get("y", 0)) * orig_h / 1000.0,
-                                        float(br.get("x", 0)) * orig_w / 1000.0,
-                                    ],
-                                    [
-                                        float(bl.get("y", 0)) * orig_h / 1000.0,
-                                        float(bl.get("x", 0)) * orig_w / 1000.0,
-                                    ],
-                                ]
-                                corners = np.array(pts_px, dtype="float32")
-                                ai_success = True
-                                logging.info(
-                                    "🎯 Углы успешно извлечены из ответа ИИ!"
-                                )
-                                break
-                            elif (
-                                isinstance(parsed.get("corners"), list)
-                                and len(parsed["corners"]) == 4
-                            ):
-                                c_list = parsed["corners"]
-                                pts_px = []
-                                for point in c_list:
-                                    y_px = float(point[0]) * orig_h / 1000.0
-                                    x_px = float(point[1]) * orig_w / 1000.0
-                                    pts_px.append([x_px, y_px])
-                                corners = np.array(pts_px, dtype="float32")
-                                ai_success = True
-                                logging.info(
-                                    "🎯 Углы извлечены из массива corners!"
-                                )
-                                break
-                except Exception as e_model:
-                    err_msg = str(e_model)
-                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                        logging.warning(
-                            f"⚠️ Лимит квоты Gemini превышен ({m_name}). Пробуем следующую модель..."
-                        )
-                    else:
-                        logging.error(
-                            f"❌ Ошибка запроса к модели {m_name}: {e_model}"
-                        )
-
-        if not ai_success:
-            logging.warning(
-                "⚠️ ИИ Gemini не вернул координаты. Запускаем гарантированный резервный поиск..."
-            )
-
-        if rotate_angle == 90:
-            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-        elif rotate_angle == 180:
-            img = cv2.rotate(img, cv2.ROTATE_180)
-        elif rotate_angle == 270:
-            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-        if corners is None:
-            corners = find_document_contours_cv(img)
-
-        warped = four_point_transform(img, corners)
+        orig_img = cv2.imdecode(
+            np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR
+        )
+        corners = find_document_contours_cv(orig_img)
+        warped = four_point_transform(orig_img, corners)
         inpainted = ai_inpaint_remove_fingers_and_crop_edges(warped)
         scanned_final = advance_homomorphic_scan_filter(inpainted)
 
@@ -1191,7 +944,6 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
             exc_info=True,
         )
         return image_bytes
-
 
 def get_category_priority(cat_str: str) -> int:
     """Возвращает числовой приоритет сортировки документов:
