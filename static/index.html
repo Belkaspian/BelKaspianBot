@@ -521,11 +521,21 @@
         }
 
         .col-date { font-weight: 600; color: var(--text-muted); font-size: 11px; }
-        .col-route { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+        .col-route { font-weight: 600; color: var(--text); font-size: 11px; line-height: 1.3; display: flex; flex-direction: column; overflow: hidden; padding-right: 4px; }
+        .col-route span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .col-route span.dest { color: var(--text-muted); font-weight: 500; font-size: 10px; }
         .col-price { font-weight: 700; color: var(--success); text-align: right; font-size: 12px; }
-        .col-truck { font-weight: 500; color: var(--text-muted); font-size: 10px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.25s ease; display: flex; justify-content: flex-end; }
-
+        .col-truck { font-weight: 600; color: var(--text); font-size: 10px; text-align: center; display: flex; flex-direction: column; line-height: 1.2; justify-content: center; }
+        .col-truck span.trailer { color: var(--text-muted); font-size: 9px; font-weight: 500; }
+        
+        .btn-compact {
+            padding: 4px 8px !important;
+            font-size: 10px !important;
+            border-radius: 4px !important;
+            width: auto !important;
+            flex: none !important;
+        }
+        
         .t-row.expanded .col-arrow { transform: rotate(180deg); color: var(--primary); }
 
         .t-details {
@@ -1177,6 +1187,42 @@
         </div>
     </div>
 
+    <!-- Модалка: Прямая загрузка файлов и телефона из Web App -->
+    <div class="modal-overlay" id="directUploadModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Подача документов по грузу</div>
+                <div class="modal-close" onclick="closeModal('directUploadModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="uploadModalDealId" />
+            <div class="form-group">
+                <label>Номер телефона водителя</label>
+                <input type="text" id="uploadModalPhone" placeholder="+375 / +7 (999) 000-00-00" />
+            </div>
+            <div class="form-group">
+                <label>Документы (СТС, ВУ, Паспорт)</label>
+                <div class="dropzone" id="directUploadDropzone" 
+                     onclick="document.getElementById('directUploadFiles').click()"
+                     ondragover="event.preventDefault(); this.style.borderColor='var(--primary)';"
+                     ondragleave="this.style.borderColor='var(--border)';"
+                     ondrop="handleDropFiles(event)">
+                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <div style="font-weight: 600;">Перетащите файлы сюда или нажмите</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">Поддерживаются PDF и фото документов</div>
+                </div>
+                <input type="file" id="directUploadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleDirectFileSelect(event)" />
+            </div>
+            <div class="file-preview-list" id="directFilePreviewList"></div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitDirectUploadData()">
+                    ✅ Завершить и отправить
+                </button>
+            </div>
+        </div>
+    </div>
+   
     <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -1200,6 +1246,74 @@
         let allAdminCarriersArray = [];
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
+        let directSelectedFiles = [];
+
+        function openDirectUploadModal(dealId) {
+            document.getElementById('uploadModalDealId').value = dealId;
+            document.getElementById('uploadModalPhone').value = '';
+            directSelectedFiles = [];
+            renderDirectFilePreview();
+            document.getElementById('directUploadModal').classList.add('active');
+        }
+
+        function handleDirectFileSelect(event) {
+            const files = Array.from(event.target.files);
+            directSelectedFiles = directSelectedFiles.concat(files);
+            renderDirectFilePreview();
+        }
+
+        function handleDropFiles(event) {
+            event.preventDefault();
+            document.getElementById('directUploadDropzone').style.borderColor = 'var(--border)';
+            if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+                directSelectedFiles = directSelectedFiles.concat(Array.from(event.dataTransfer.files));
+                renderDirectFilePreview();
+            }
+        }
+
+        function renderDirectFilePreview() {
+            const list = document.getElementById('directFilePreviewList');
+            list.innerHTML = directSelectedFiles.map((f, idx) => `
+                <div class="file-item">
+                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
+                    <span style="color:var(--error); cursor:pointer;" onclick="removeDirectFile(${idx})">Удалить</span>
+                </div>
+            `).join('');
+        }
+
+        function removeDirectFile(idx) {
+            directSelectedFiles.splice(idx, 1);
+            renderDirectFilePreview();
+        }
+
+        async function submitDirectUploadData() {
+            const dealId = document.getElementById('uploadModalDealId').value;
+            const phone = document.getElementById('uploadModalPhone').value.trim();
+
+            if (directSelectedFiles.length === 0) {
+                return showToast('Выберите хотя бы один файл', 'error');
+            }
+
+            showToast('Отправка и обработка ИИ...', 'info');
+            const formData = new FormData();
+            formData.append('deal_id', dealId);
+            formData.append('user_id', getUserId());
+            formData.append('phone', phone);
+            directSelectedFiles.forEach(f => formData.append('files', f));
+
+            try {
+                let res = await fetch('/api/my_loads/direct_upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    showToast('Данные успешно сохранены!', 'success');
+                    closeModal('directUploadModal');
+                    loadData(false);
+                } else {
+                    showToast('Ошибка при загрузке', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
 
         const emptyStateHTML = `
             <div class="empty-state">
@@ -1651,7 +1765,11 @@
                 let data = await res.json();
                 if (res.ok) {
                     showToast('Инструкция отправлена в чат', 'success');
-                    try { tg.close(); } catch(e) {}
+                    // Закрываем Web App только на мобильных устройствах
+                    const platform = (tg.platform || '').toLowerCase();
+                    if (platform === 'android' || platform === 'ios') {
+                        try { tg.close(); } catch(e) {}
+                    }
                 } else {
                     showToast(data.error || 'Ошибка', 'error');
                 }
@@ -1826,26 +1944,42 @@
                         if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
                         else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
 
-                        let plateDisplay = (d.truck_plate || d.trailer_plate) 
-                            ? `${d.truck_plate || '—'} / ${d.trailer_plate || '—'}` 
-                            : '— / —';
+                        // Форматируем двухстрочный маршрут
+                        let routeParts = d.route.split('→');
+                        let routeHTML = routeParts.length >= 2 
+                            ? `<span>${routeParts[0].trim()}</span><span class="dest">→ ${routeParts[1].trim()}</span>`
+                            : `<span>${d.route}</span>`;
 
-                        let docBtnText = d.docs_submitted ? 'Заменить данные через чат' : 'Подать данные через чат';
-                        let docBtnClass = d.docs_submitted ? 'btn-warning' : 'btn-primary';
+                        // Форматируем двухстрочные номера авто
+                        let truckHTML = `<div class="col-truck"><span>${d.truck_plate || '—'}</span><span class="trailer">${d.trailer_plate || '—'}</span></div>`;
+
+                        // Дифференцированные надписи для кнопок
+                        let mainBtnText = "Подать данные";
+                        let chatBtnText = "через чат";
+                        let btnClass = "btn-primary";
+
+                        if (d.docs_status === 'PARTIAL') {
+                            mainBtnText = "Дослать данные";
+                            btnClass = "btn-warning";
+                        } else if (d.docs_status === 'FULL') {
+                            mainBtnText = "Заменить данные";
+                            btnClass = "btn-secondary";
+                        }
 
                         return `
                         <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
-                            <div class="col-route">${d.route}</div>
-                            <div class="col-truck">${plateDisplay}</div>
+                            <div class="col-route">${routeHTML}</div>
+                            ${truckHTML}
                             <div class="col-price">${d.price}</div>
                             <div class="col-arrow">
                                 <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
                             </div>
                         </div>
+                        
                         <div class="t-details" id="details-${d.id}">
                             ${d.is_today ? `<span class="badge badge-today">🚚 ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                            ${d.missing_docs ? `<div class="missing-docs-box"><b>Не хватает данных:</b> ${d.missing_docs}</div>` : ''}
+                            ${d.missing_docs ? `<div class="missing-docs-box"><b>⚠️ Не хватает данных:</b><br>• ${d.missing_docs.split(', ').join('<br>• ')}</div>` : ''}
                             
                             <div class="info-grid">
                                 <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
@@ -1855,9 +1989,12 @@
                             </div>
 
                             ${mySubTab === 'active' ? `
-                                <div class="buttons" style="margin-top:10px;">
-                                    <button class="btn ${docBtnClass}" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
-                                        ${docBtnText}
+                                <div class="buttons" style="margin-top:10px; align-items: center;">
+                                    <button class="btn ${btnClass}" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
+                                        📁 ${mainBtnText}
+                                    </button>
+                                    <button class="btn btn-secondary btn-compact" title="Подать данные через бота Telegram" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
+                                        💬 ${chatBtnText}
                                     </button>
                                 </div>
                             ` : ''}
@@ -1912,11 +2049,26 @@
 
         async function sendAction(id, actionType, event) {
             event.stopPropagation();
-            askConfirm('Подтвердить забор груза по указанной ставке?', async (confirmed) => {
-                if (confirmed) {
-                    await performBooking(id, 'confirm', '', '', '1');
+            
+            // Находим данные по грузу для получения доступного кол-ва
+            let loadObj = allAdminLoadsArray.find(x => String(x.id) === String(id));
+            let maxCars = loadObj ? parseInt(loadObj.cars) || 1 : 1;
+
+            if (maxCars > 1) {
+                let qty = prompt(`Укажите количество авто для забора (доступно: ${maxCars}):`, "1");
+                if (!qty) return;
+                let parsedQty = parseInt(qty);
+                if (isNaN(parsedQty) || parsedQty < 1 || parsedQty > maxCars) {
+                    return showToast(`Укажите корректное число от 1 до ${maxCars}`, 'error');
                 }
-            });
+                await performBooking(id, 'confirm', '', '', String(parsedQty));
+            } else {
+                askConfirm('Подтвердить забор 1 груза по указанной ставке?', async (confirmed) => {
+                    if (confirmed) {
+                        await performBooking(id, 'confirm', '', '', '1');
+                    }
+                });
+            }
         }
 
         async function performBooking(id, actionType, customPrice, comment, qty) {
