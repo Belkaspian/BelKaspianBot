@@ -121,6 +121,9 @@ def init_db():
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
+    # Включаем WAL режим для исключения блокировок базы
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -431,6 +434,7 @@ def parse_cargo_date(date_str: str) -> date | None:
     except ValueError:
         return None
 
+# ИСПРАВЛЕННЫЙ ПАРСИНГ МАРШРУТОВ И ЦЕН
 def parse_cargo_raw(raw_text: str):
     clean_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
 
@@ -457,18 +461,34 @@ def parse_cargo_raw(raw_text: str):
             if cars_match:
                 cars_str = cars_match.group(1)
 
-        if '-' in line or '→' in line:
-            clean_route = date_pattern.sub('', line)
+        if ('-' in line or '→' in line or '—' in line) and not route_str:
+            clean_route = line
+            # Удаляем дату
+            clean_route = date_pattern.sub('', clean_route)
+            # Удаляем кол-во машин
             clean_route = cars_pattern.sub('', clean_route)
+            # Удаляем ценники, включая сокращения 'д', 'долл', 'руб'
             clean_route = re.sub(
-                r'[\d\.\,\s]+(?:RUB|USD|EUR|KZT|UZS|сум|сумм|руб|долл|доллар|\$|€|тг)', 
-                '', 
-                clean_route, 
+                r'[\d\.\,\s]+(?:\$|€|руб|rub|rur|\bр\b|долл|usd|\bдол\b|\bд\b|евро|eur|тенге|kzt|\bтг\b|узб\s*сум|сумм|\bсум\b|uzs|торг|торги)\b.*$',
+                '',
+                clean_route,
                 flags=re.IGNORECASE
             )
-            clean_route = clean_route.strip(' ,.-')
+            clean_route = re.sub(
+                r'[\d\.\,\s]+(?:\$|€|руб|rub|rur|\bр\b|долл|usd|\bдол\b|\bд\b|евро|eur|тенге|kzt|\bтг\b|узб\s*сум|сумм|\bсум\b|uzs)\b',
+                '',
+                clean_route,
+                flags=re.IGNORECASE
+            )
+            clean_route = re.sub(r'[,;\s]+\d[\d\s\.,]*$', '', clean_route).strip()
+            clean_route = re.sub(r'[\s,]+', ' ', clean_route).strip(' ,.-')
+            
+            # Нормализуем тире/стрелки
+            clean_route = re.sub(r'\s*[-—→]+\s*', ' → ', clean_route)
+            clean_route = re.sub(r'^\s*,\s*|\s*,\s*$', '', clean_route).strip()
+            
             if clean_route:
-                route_str = clean_route.replace(' - ', ' → ').replace('-', '→')
+                route_str = clean_route
 
     if not date_str:
         date_str = "Дата не указана"
@@ -479,12 +499,8 @@ def parse_cargo_raw(raw_text: str):
     if not cars_str:
         cars_str = "1"
 
-    price_strip_pattern = re.compile(
-        r'[,;\s]+(?:\d[\d\s\.,]*)?\s*(?:RUB|USD|EUR|KZT|UZS|сум|сумм|руб|рублей|р|долл|доллар|долларов|usd|\$|€|евро|eur|тенге|kzt|тг|торг|торги)\b.*$',
-        re.IGNORECASE
-    )
-    route_str = price_strip_pattern.sub('', route_str)
-    route_str = re.sub(r'[,;\s]+\d[\d\s\.,]*$', '', route_str).strip()
+    # Финальная подчистка маршрута
+    route_str = re.sub(r'[,;\s]+\d+.*$', '', route_str).strip()
     route_str = re.sub(r'^\s*,\s*|\s*,\s*$', '', route_str).strip()
 
     car_type = "Тент/реф"
@@ -507,7 +523,7 @@ def parse_cargo_raw(raw_text: str):
 
     parts = []
     for line in clean_lines:
-        if '-' in line or '→' in line or (date_pattern.search(line) and not parts):
+        if '-' in line or '→' in line or '—' in line or (date_pattern.search(line) and not parts):
             continue
         for p in line.split(','):
             p_clean = p.strip()
@@ -564,7 +580,7 @@ def parse_multiple_cargos(raw_text: str):
     common_details = []
     
     for line in lines:
-        if date_pattern.search(line) and ('-' in line or '→' in line):
+        if date_pattern.search(line) and ('-' in line or '→' in line or '—' in line):
             cargo_lines.append(line)
         else:
             common_details.append(line)
@@ -692,8 +708,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         conn.close()
     except Exception:
         pass
-
-# ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
+        # ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
 
 class VehicleDetails(BaseModel):
     brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
@@ -823,21 +838,10 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     )
 
     response = None
-    # Оптимальный приоритет моделей на основе указанных лимитов:
     models_to_try = [
-        # 1. Топовые флагманы для максимальной точности
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3-flash",
         "gemini-2.5-flash",
-        # 2. Неисчерпаемый резерв с гигантским лимитом
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
-        # 3. Отключенные / тяжелые модели в самом конце
-        "gemini-3.1-pro",
-        "gemini-2.5-pro",
-        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash-exp"
     ]
 
     for model_name in models_to_try:
@@ -1031,7 +1035,8 @@ async def auto_clean_expired_cargos():
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
         await asyncio.sleep(30)
-        # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
+
+# ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -1426,7 +1431,7 @@ async def handle_convert_text_notes(message: types.Message, state: FSMContext):
     new_notes = (old_notes + "\n" + message.text).strip()
     await state.update_data(text_notes=new_notes)
 
-# ==================== ХЭНДЛЕРЫ ПОДАЧИ / ЗАМЕНЫ ДОКУМЕНТОВ ====================
+# ==================== ХЭНДЛЕРЫ ПОДАЧИ / ЗАМЕНЫ ДОКУМЕНТОВ В ЧАТЕ ====================
 
 @dp.message(DocUploadStates.waiting_for_docs, F.photo)
 async def handle_doc_photo(message: types.Message, state: FSMContext):
@@ -1502,7 +1507,6 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
-    # Умная сохранность данных при частичной замене
     new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
     if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
         new_truck_plate = prev_truck_plate
@@ -1677,7 +1681,8 @@ async def handle_channel_post(message: types.Message):
                 await asyncio.sleep(0.05)
                 
     conn.close()
-    # ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СТАВОК В ЧАТЕ ====================
+
+# ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СТАВОК В ЧАТЕ ====================
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
@@ -1866,8 +1871,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     await state.clear()
     await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
-
-# ==================== WEB APP БЭКЕНД И REST API ====================
+    # ==================== WEB APP БЭКЕНД И REST API ====================
 
 async def get_loads_api(request):
     country = request.query.get('country')
@@ -1991,7 +1995,7 @@ async def my_loads_api(request):
         bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub = r
         c_date = parse_cargo_date(date_str)
         is_today = bool(c_date and c_date == msk_today)
-        is_transit = False  # Нерассмотренные заявки находятся только во "В работе"
+        is_transit = False
 
         deals.append({
             "id": f"bid_{bid_id}",
@@ -2024,7 +2028,6 @@ async def my_loads_api(request):
 
         c_date = parse_cargo_date(date_str)
         is_today = bool(c_date and c_date == msk_today)
-        # Важнейшее правило: Переход в "Едут" происходит ТОЛЬКО если дата погрузки прошла И по грузу поданы документы!
         has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
         is_transit = bool(c_date and msk_today > c_date and not is_unl and has_submitted_docs)
 
@@ -2055,6 +2058,7 @@ async def my_loads_api(request):
             
     return web.json_response({"deals": deals})
 
+# ИСПРАВЛЕННАЯ ПРЯМАЯ ЗАГРУЗКА ИЗ WEB APP (ОТПРАВЛЯЕТ 1 СВОДКУ + 1 PDF БЕЗ СПАМА)
 async def direct_upload_docs_api(request):
     try:
         reader = await request.multipart()
@@ -2083,17 +2087,21 @@ async def direct_upload_docs_api(request):
                     buf = io.BytesIO(content)
                     buf.name = filename
                     
+                    target_temp_chat = user_id if user_id else (ADMIN_ID if ADMIN_ID else DOCS_CHANNEL_ID)
+                    
                     if mime == "application/pdf":
                         msg = await bot.send_document(
-                            chat_id=DOCS_CHANNEL_ID,
-                            document=types.BufferedInputFile(content, filename=buf.name)
+                            chat_id=target_temp_chat,
+                            document=types.BufferedInputFile(content, filename=buf.name),
+                            disable_notification=True
                         )
                         doc_ids.append(msg.document.file_id)
                         all_file_ids.append(msg.document.file_id)
                     else:
                         msg = await bot.send_photo(
-                            chat_id=DOCS_CHANNEL_ID,
-                            photo=types.BufferedInputFile(content, filename=buf.name)
+                            chat_id=target_temp_chat,
+                            photo=types.BufferedInputFile(content, filename=buf.name),
+                            disable_notification=True
                         )
                         photo_ids.append(msg.photo[-1].file_id)
                         all_file_ids.append(msg.photo[-1].file_id)
@@ -2151,7 +2159,6 @@ async def direct_upload_docs_api(request):
             extracted_phone = phone_input or (d_data.get("phones") or "").strip()
             new_driver_phone = extracted_phone if (extracted_phone and extracted_phone != "Не указан") else (prev_driver_phone or "Не указан")
         else:
-            # Сохранение только номера(ов) телефона без файлов
             raw_json = {}
             sorted_files = []
             new_truck_plate = prev_truck_plate or "НЕ РАСПОЗНАН"
@@ -2186,8 +2193,8 @@ async def direct_upload_docs_api(request):
         conn.commit()
         conn.close()
 
-        # Публикуем текстовую сводку в ТГ-канал с данными
-        header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ (WEB APP)" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ (WEB APP)"
+        # 1. Отправляем в канал СТРОГО 1 текстовое сообщение
+        header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
         admin_msg = (
             f"**{header_title}**\n\n"
             f"📅 {date_str} | 📍 {route_str}\n"
@@ -2197,7 +2204,7 @@ async def direct_upload_docs_api(request):
         )
         await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        # Если были загружены файлы — формируем 1 собранный PDF и присылаем в канал
+        # 2. Отправляем в канал СТРОГО 1 объединенный отсортированный PDF документ
         if all_file_ids:
             clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
             clean_truck = re.sub(r'[^\w]', '', new_truck_plate)
@@ -2209,7 +2216,7 @@ async def direct_upload_docs_api(request):
                 if sorted_pdf_buf:
                     pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
                     await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
-            elif photo_ids:
+            else:
                 pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, user_info, ai_formatted_data, sorted_files)
                 pdf_bytes = pdf_buf.getvalue()
                 if pdf_bytes:
