@@ -753,185 +753,7 @@ def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -
     except ValueError:
         return False
 
-
-
-# ==================== СТРОГИЙ ИИ-СКАНЕР ДОКУМЕНТОВ (ФИНАЛЬНЫЙ КОД) ====================
-
-EXPLICIT_SCANNER_PROMPT = """
-Ты — специализированный ИИ-агент глубокого анализа и пространственной геометрии транспортных и логистических документов (CMR, ТТН, Инвойсы, Паспорта, СТС).
-
---------------------------------------------------
-ГЛАВНАЯ ЗАДАЧА:
-Определить точные физические границы бумажного листа, его ориентацию в пространстве и наличие помех (пальцы, тени) для последующего кадрирования и реставрации.
-
---------------------------------------------------
-СТРОЖАЙШИЕ ЗАПРЕТЫ И ПРАВИЛА (100% СОХРАННОСТЬ ДАННЫХ):
-1. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО выдумывать, менять, подрисовывать, модифицировать или заменять хотя бы один символ, букву, цифру, дату, номер ТС, ИНН, подпись, штамп или печать.
-2. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО принимать пальцы рук, край стола, торпеду автомобиля или посторонние предметы за углы документа.
-3. Документ должен остаться на 100% юридически аутентичным и достоверным.
-
---------------------------------------------------
-ИНСТРУКЦИЯ ПО ПОШАГОВОМУ АНАЛИЗУ:
-1. ПОИСК УГЛОВ (CORNERS):
-   - Найди 4 ИСТИННЫХ физических угла самого бумажного листа.
-   - Если угол перекрыт пальцем, мысленно продли прямые линии краев листа до их естественного пересечения.
-2. ОРИЕНТАЦИЯ (ROTATE):
-   - Определи угол поворота кадра (0, 90, 180 или 270 градусов), чтобы текст читался строго СВЕРХУ ВНИЗ.
-3. ДЕТЕКЦИЯ ПОМЕХ:
-   - Зафиксируй, есть ли на документе перекрытия пальцами рук.
-
---------------------------------------------------
-ФОРМАТ ВЫХОДНЫХ ДАННЫХ:
-Верни результат СТРОГО в формате JSON без кавычек markdown:
-
-{
-  "corners": [
-    [y_top_left, x_top_left],
-    [y_top_right, x_top_right],
-    [y_bottom_right, x_bottom_right],
-    [y_bottom_left, x_bottom_left]
-  ],
-  "rotate": 0,
-  "has_fingers": true
-}
-
-Координаты y и x нормированы от 0 до 1000.
-"""
-
-
-def ai_inpaint_remove_fingers(img, finger_mask):
-    """
-    Нейросетевая реставрация (Navier-Stokes Inpainting):
-    Удаляет пальцы и восстанавливает на их месте чистую текстуру бумаги.
-    """
-    import cv2
-
-    if finger_mask is None or cv2.countNonZero(finger_mask) == 0:
-        return img
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    dilated_mask = cv2.dilate(finger_mask, kernel, iterations=2)
-    return cv2.inpaint(img, dilated_mask, inpaintRadius=7, flags=cv2.INPAINT_NS)
-
-
-def four_point_transform(image, pts):
-    """
-    Выравнивает перспективу и приводит документ к пропорциям листа CMR/A4 (1 : 1.414)
-    """
-    import cv2
-    import numpy as np
-
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]  # ВЛ
-    rect[2] = pts[np.argmax(s)]  # НП
-
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # ВП
-    rect[3] = pts[np.argmax(diff)]  # НЛ
-
-    (tl, tr, br, bl) = rect
-    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB))
-    maxHeight = int(maxWidth * 1.414)  # Стандартная пропорция A4/CMR
-
-    dst = np.array(
-        [
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1],
-        ],
-        dtype="float32",
-    )
-
-    M = cv2.getPerspectiveTransform(rect, dst)
-    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-
-
-def find_document_contours_cv(img):
-    """Резервный поиск 4 углов листа через OpenCV"""
-    import cv2
-    import numpy as np
-
-    orig_h, orig_w = img.shape[:2]
-    ratio = orig_h / 1000.0
-    small_h = 1000
-    small_w = int(orig_w / ratio)
-    resized = cv2.resize(img, (small_w, small_h))
-
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    edged = cv2.Canny(blur, 40, 150)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(
-        closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < (small_w * small_h * 0.30):
-            continue
-
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-
-        if len(approx) == 4:
-            return approx.reshape(4, 2) * ratio
-
-        hull = cv2.convexHull(c)
-        peri_hull = cv2.arcLength(hull, True)
-        approx_hull = cv2.approxPolyDP(hull, 0.02 * peri_hull, True)
-        if len(approx_hull) == 4:
-            return approx_hull.reshape(4, 2) * ratio
-
-    return None
-
-
-def advance_homomorphic_scan_filter(img):
-    """
-    Гомоморфное выравнивание фона:
-    - Делает бумагу белой, убирает тени.
-    - 100% сохраняет оригинальный цвет печатей, подписей и текста.
-    """
-    import cv2
-    import numpy as np
-
-    h, w = img.shape[:2]
-    pad_h, pad_w = int(h * 0.01), int(w * 0.01)
-    if pad_h > 0 and pad_w > 0:
-        img = img[pad_h : h - pad_h, pad_w : w - pad_w]
-
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-
-    kernel_size = max(31, int(min(h, w) / 25) | 1)
-    bg_light = cv2.dilate(
-        l, cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-    )
-    bg_light = cv2.medianBlur(bg_light, kernel_size)
-
-    l_norm = cv2.divide(l, bg_light, scale=255.0)
-    l_norm = np.clip((l_norm.astype(np.float32) - 10) * 1.15, 0, 255).astype(
-        np.uint8
-    )
-    l_norm[l_norm > 215] = 255
-
-    merged_lab = cv2.merge([l_norm, a, b])
-    scanned_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
-
-    sharp_kernel = np.array(
-        [[0, -0.1, 0], [-0.1, 1.4, -0.1], [0, -0.1, 0]], dtype=np.float32
-    )
-    return cv2.filter2D(scanned_bgr, -1, sharp_kernel)
-
-
-# ==================== ДИАГНОСТИРУЕМЫЙ ИИ-СКАНЕР ====================
+# ==================== ИИ-СКАНЕР ДОКУМЕНТОВ (ФИНАЛЬНЫЙ ПОЛНЫЙ КОД) ====================
 
 from pydantic import BaseModel, Field
 
@@ -970,8 +792,175 @@ EXPLICIT_SCANNER_PROMPT = """
 """
 
 
+def find_document_contours_cv(img):
+    """Гарантированный резервный поиск углов листа через Otsu бинаризацию (НИКОГДА НЕ ВОЗВРАЩАЕТ None)"""
+    import cv2
+    import numpy as np
+
+    orig_h, orig_w = img.shape[:2]
+    ratio = orig_h / 1000.0
+    small_h = 1000
+    small_w = int(orig_w / ratio)
+    resized = cv2.resize(img, (small_w, small_h))
+
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Otsu бинаризация для нахождения белого листа
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(
+        closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < (small_w * small_h * 0.20):
+            continue
+
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4:
+            return approx.reshape(4, 2) * ratio
+
+        rect = cv2.minAreaRect(c)
+        box = cv2.boxPoints(rect)
+        return np.float32(box) * ratio
+
+    # Запасной вариант: рамка листа с отступом 2%
+    m_y = float(orig_h * 0.02)
+    m_x = float(orig_w * 0.02)
+    return np.array(
+        [
+            [m_x, m_y],
+            [orig_w - m_x, m_y],
+            [orig_w - m_x, orig_h - m_y],
+            [m_x, orig_h - m_y],
+        ],
+        dtype="float32",
+    )
+
+
+def four_point_transform(image, pts):
+    """Перспективное выравнивание с 100% защитой от ошибок NoneType"""
+    import cv2
+    import numpy as np
+
+    if pts is None or len(pts) != 4:
+        return image
+
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # ВЛ
+    rect[2] = pts[np.argmax(s)]  # НП
+
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # ВП
+    rect[3] = pts[np.argmax(diff)]  # НЛ
+
+    (tl, tr, br, bl) = rect
+    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
+
+    if maxWidth <= 0 or maxHeight <= 0:
+        return image
+
+    dst = np.array(
+        [
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1],
+        ],
+        dtype="float32",
+    )
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+
+
+def ai_inpaint_remove_fingers_and_crop_edges(img):
+    """
+    1. Детектирует и удаляет палец слева (Inpainting Navier-Stokes).
+    2. Делает аккуратный срез 2.5% полей (Smart Trim), полностью отсекая остатки фаланги.
+    """
+    import cv2
+    import numpy as np
+
+    h, w = img.shape[:2]
+
+    # 1. Поиск оттенков кожи по краям (до 14% глубины кадра)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    lower_skin1 = np.array([0, 15, 50], dtype=np.uint8)
+    upper_skin1 = np.array([25, 255, 255], dtype=np.uint8)
+    mask1 = cv2.inRange(hsv, lower_skin1, upper_skin1)
+
+    lower_skin2 = np.array([160, 15, 50], dtype=np.uint8)
+    upper_skin2 = np.array([180, 255, 255], dtype=np.uint8)
+    mask2 = cv2.inRange(hsv, lower_skin2, upper_skin2)
+
+    skin_mask = cv2.bitwise_or(mask1, mask2)
+
+    border_mask = np.zeros((h, w), dtype=np.uint8)
+    m_h, m_w = int(h * 0.10), int(w * 0.14)
+    border_mask[:m_h, :] = 255
+    border_mask[h - m_h :, :] = 255
+    border_mask[:, :m_w] = 255
+    border_mask[:, w - m_w :] = 255
+
+    finger_mask = cv2.bitwise_and(skin_mask, border_mask)
+
+    if cv2.countNonZero(finger_mask) > 0:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        dilated_mask = cv2.dilate(finger_mask, kernel, iterations=2)
+        img = cv2.inpaint(
+            img, dilated_mask, inpaintRadius=7, flags=cv2.INPAINT_NS
+        )
+
+    # 2. Smart Trim: аккуратный срез 2.5% внешних полей
+    crop_y = int(h * 0.025)
+    crop_x = int(w * 0.025)
+    if (h - 2 * crop_y) > 100 and (w - 2 * crop_x) > 100:
+        img = img[crop_y : h - crop_y, crop_x : w - crop_x]
+
+    return img
+
+
+def advance_homomorphic_scan_filter(img):
+    """
+    Сохраняющая локальная контрастность (CLAHE + Bilateral Filtering):
+    - Четкая сетка таблиц и бледный шрифт.
+    - Сохранность 100% печатей, штампов и подписей.
+    - Без выжигания фона и без белых слепых пятен.
+    """
+    import cv2
+    import numpy as np
+
+    filtered = cv2.bilateralFilter(img, d=5, sigmaColor=30, sigmaSpace=30)
+    lab = cv2.cvtColor(filtered, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l_enhanced = clahe.apply(l)
+
+    blur = cv2.GaussianBlur(l_enhanced, (0, 0), 2.0)
+    l_sharp = cv2.addWeighted(l_enhanced, 1.3, blur, -0.3, 0)
+    l_final = cv2.convertScaleAbs(l_sharp, alpha=1.05, beta=10)
+
+    merged_lab = cv2.merge([l_final, a, b])
+    return cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+
+
 async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
-    """Главная функция обработки фото в сканер с подробным логированием"""
+    """Главная функция обработки фото с поддержкой всех Gemini моделей и безаварийным фоллбэком"""
     try:
         import cv2
         import numpy as np
@@ -989,24 +978,31 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         rotate_angle = 0
         ai_success = False
 
-        # 1. Проверка настроек Gemini API
         if not GEMINI_API_KEY:
             logging.error(
                 "❌ ОШИБКА: Переменная GEMINI_API_KEY не задана на сервере!"
             )
         elif not gemini_client or not HAS_GENAI:
             logging.error(
-                "❌ ОШИБКА: gemini_client не инициализирован или не импортирован google-genai!"
+                "❌ ОШИБКА: gemini_client не инициализирован или нет библиотеки google-genai!"
             )
         else:
             logging.info(
                 f"🚀 Запуск ИИ-сканера Gemini... Размер фото: {orig_w}x{orig_h}, байт: {len(image_bytes)}"
             )
 
+            # Оптимальный приоритет моделей на основе доступных квот:
             models_to_try = [
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3-flash",
+                "gemini-2.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash-lite",
+                "gemini-3.1-pro",
+                "gemini-2.5-pro",
                 "gemini-2.0-flash",
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
             ]
             mime_type = detect_mime_type(image_bytes, "")
             part = genai_types.Part.from_bytes(
@@ -1105,11 +1101,19 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
                                 )
                                 break
                 except Exception as e_model:
-                    logging.error(f"❌ Ошибка запроса к модели {m_name}: {e_model}")
+                    err_msg = str(e_model)
+                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                        logging.warning(
+                            f"⚠️ Лимит квоты Gemini превышен ({m_name}). Пробуем следующую модель..."
+                        )
+                    else:
+                        logging.error(
+                            f"❌ Ошибка запроса к модели {m_name}: {e_model}"
+                        )
 
         if not ai_success:
             logging.warning(
-                "⚠️ ИИ Gemini не вернул координаты. Запускаем резервный поиск OpenCV..."
+                "⚠️ ИИ Gemini не вернул координаты. Запускаем гарантированный резервный поиск..."
             )
 
         # 2. Поворот кадра (если необходимо)
@@ -1127,10 +1131,10 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         # 4. Обрезка перспективы
         warped = four_point_transform(img, corners)
 
-        # 5. Удаление пальцев
+        # 5. Удаление пальцев слева + Smart Trim (2.5%)
         inpainted = ai_inpaint_remove_fingers_and_crop_edges(warped)
 
-        # 6. Финальный фильтр
+        # 6. Финальный бережный фильтр контраста (CLAHE)
         scanned_final = advance_homomorphic_scan_filter(inpainted)
 
         _, encoded_img = cv2.imencode(
@@ -1144,6 +1148,8 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
             exc_info=True,
         )
         return image_bytes
+
+
 def get_category_priority(cat_str: str) -> int:
     """Возвращает числовой приоритет сортировки документов:
     1: Паспорт
