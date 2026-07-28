@@ -36,7 +36,7 @@
             --error: #dc2626;
             --error-light: rgba(220, 38, 38, 0.1);
 
-            /* Пастельные цвета для статусов подач */
+            /* Мягкие пастельные цвета для статусов подачи документов */
             --card-warning-bg: #fffbeb;
             --card-warning-border: #fde68a;
             --card-success-bg: #f0fdf4;
@@ -337,16 +337,6 @@
             border-color: var(--primary);
         }
 
-        .unloaded-sub-nav {
-            margin-top: -6px;
-            gap: 4px;
-        }
-
-        .unloaded-sub-nav .sub-nav-btn {
-            font-size: 10px;
-            padding: 6px 4px;
-        }
-
         .sort-search-bar {
             display: flex;
             align-items: center;
@@ -519,6 +509,7 @@
             background: var(--surface-hover);
         }
 
+        /* Мягкие пастельные фон статусов */
         .t-row.card-status-partial {
             background-color: var(--card-warning-bg);
             border-left-color: var(--warning);
@@ -575,14 +566,25 @@
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
             margin-bottom: 10px;
+            box-shadow: var(--shadow-sm);
         }
 
-        .badge-today { background: var(--primary-light); color: var(--primary); border: 1px solid var(--primary); }
+        .badge-today {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #93c5fd;
+        }
+
+        [data-theme="dark"] .badge-today {
+            background: rgba(30, 64, 175, 0.35);
+            color: #93c5fd;
+            border-color: rgba(147, 197, 253, 0.4);
+        }
 
         .admin-comment {
             background: var(--surface-solid);
@@ -596,8 +598,9 @@
         }
 
         .missing-docs-box {
-            background: var(--warning-light);
+            background: var(--card-warning-bg);
             color: var(--warning);
+            border: 1px solid var(--card-warning-border);
             padding: 8px 10px;
             border-radius: var(--radius-sm);
             margin-bottom: 10px;
@@ -711,7 +714,6 @@
             overflow: visible;
         }
 
-        /* --- АНИМАЦИЯ ЕВРОФУРЫ ВПЕРЕД (ПЛАВНАЯ И ЕСТЕСТВЕННАЯ) --- */
         .animated-truck-body {
             animation: truckBounce 0.7s ease-in-out infinite alternate;
         }
@@ -964,13 +966,6 @@
         </div>
     </div>
 
-    <!-- Подменю для раздела "Выгружены" -->
-    <div class="sub-nav unloaded-sub-nav" id="unloaded-sub-nav" style="display: none;">
-        <div class="sub-nav-btn active" id="unloaded-pending" onclick="switchUnloadedSubTab('unloaded_pending')">Ожидают документы</div>
-        <div class="sub-nav-btn" id="unloaded-approved" onclick="switchUnloadedSubTab('unloaded_approved')">Приняты</div>
-        <div class="sub-nav-btn" id="unloaded-paid" onclick="switchUnloadedSubTab('unloaded_paid')">Архив (Оплачены)</div>
-    </div>
-
     <!-- Блок Сортировки и Поиска -->
     <div class="sort-search-bar" id="sort-search-container">
         <div class="sort-container" id="sort-container">
@@ -1062,7 +1057,7 @@
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Белкаспиан</div>
+                <div class="modal-title">Белкаspiан</div>
                 <div class="modal-close" onclick="closeModal('confirmModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
@@ -1097,89 +1092,6 @@
             <div class="buttons">
                 <button class="btn btn-primary" onclick="submitModalBid()">Отправить</button>
                 <button class="btn btn-secondary" onclick="closeModal('bidModal')">Отмена</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модалка: Фиксация выгрузки -->
-    <div class="modal-overlay" id="unloadModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Фиксация выгрузки товара</div>
-                <div class="modal-close" onclick="closeModal('unloadModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="unloadDealId" />
-            <div class="form-group">
-                <label>Дата фактической выгрузки</label>
-                <input type="date" id="unloadDate" />
-            </div>
-            <div class="form-group">
-                <label>Документы (ТТН, CMR, Акт)</label>
-                <div class="dropzone" id="unloadDropzone" onclick="document.getElementById('unloadFiles').click()">
-                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                    <div style="font-weight: 600;">Выбрать файлы для загрузки</div>
-                    <div style="font-size: 11px; color: var(--text-muted);">PDF, JPG, PNG до 10MB</div>
-                </div>
-                <input type="file" id="unloadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleFileSelect(event)" />
-            </div>
-            <div class="file-preview-list" id="filePreviewList"></div>
-            <div class="form-group">
-                <label>Заметки / Номер ТТН</label>
-                <textarea id="unloadNotes" placeholder="ТТН №123456..."></textarea>
-            </div>
-            <div class="buttons">
-                <button class="btn btn-success" onclick="submitUnloadData()">
-                    <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                    Подтвердить выгрузку
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модалка: Редактирование Груза (Админка) -->
-    <div class="modal-overlay" id="adminEditLoadModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Редактирование груза</div>
-                <div class="modal-close" onclick="closeModal('adminEditLoadModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="editLoadId" />
-            <div class="form-group"><label>Маршрут</label><input type="text" id="editRoute" /></div>
-            <div class="form-group"><label>Дата</label><input type="text" id="editDate" /></div>
-            <div class="form-group"><label>Ставка</label><input type="text" id="editPrice" /></div>
-            <div class="form-group"><label>Доступно авто</label><input type="text" id="editCars" /></div>
-            <div class="form-group"><label>Тип ТС</label><input type="text" id="editCarType" /></div>
-            <div class="form-group"><label>Груз</label><input type="text" id="editCargoType" /></div>
-            <div class="form-group"><label>Вес</label><input type="text" id="editWeight" /></div>
-            <div class="form-group"><label>Заметка логиста</label><input type="text" id="editComment" /></div>
-            <div class="buttons">
-                <button class="btn btn-primary" onclick="saveAdminLoadEdit()">Сохранить</button>
-                <button class="btn btn-secondary" onclick="closeModal('adminEditLoadModal')">Отмена</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модалка: Редактирование Сделки (Админка) -->
-    <div class="modal-overlay" id="adminEditDealModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Редактирование сделки</div>
-                <div class="modal-close" onclick="closeModal('adminEditDealModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="editDealId" />
-            <div class="form-group"><label>Маршрут</label><input type="text" id="editDealRoute" /></div>
-            <div class="form-group"><label>Дата</label><input type="text" id="editDealDate" /></div>
-            <div class="form-group"><label>Ставка</label><input type="text" id="editDealPrice" /></div>
-            <div class="form-group"><label>Автомобилей</label><input type="text" id="editDealCars" /></div>
-            <div class="buttons">
-                <button class="btn btn-primary" onclick="saveAdminDealEdit()">Сохранить</button>
-                <button class="btn btn-secondary" onclick="closeModal('adminEditDealModal')">Отмена</button>
             </div>
         </div>
     </div>
@@ -1275,11 +1187,9 @@
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
         let mySubTab = 'active';
-        let unloadedSubTab = 'unloaded_pending';
         let activeOfferLoadId = null;
         let currentDataHash = '';
         let saveProfileTimer = null;
-        let selectedFiles = [];
         let sortAscending = false;
         let adminSortAscending = false;
 
@@ -1291,101 +1201,58 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
 
-        // Векторная еврофура с плавным движением ВПЕРЕД и реалистичным силуэтом
-        // Минималистичная еврофура строго по скинутому референсу
         const emptyStateHTML = `
-    <div class="empty-state">
-        <div class="empty-illustration-container">
-            <svg viewBox="0 0 110 42" class="empty-illustration">
-                <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-                    
-                    <!-- Бегущая дорога -->
-                    <line x1="0" y1="37" x2="110" y2="37" class="animated-road" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="5 3.5" />
-
-                    <!-- Корпус фуры -->
-                    <g class="animated-truck-body">
-                        <!-- Полуприцеп (Тент) -->
-                        <rect x="2" y="5" width="71" height="22" rx="1" fill="var(--primary-light)" />
-                        
-                        <!-- Нижний профиль / рама прицепа -->
-                        <line x1="2" y1="27" x2="73" y2="27" stroke-width="1.6" />
-                        
-                        <!-- Отбойник / брызговик сзади прицепа -->
-                        <path d="M 2 27 L 2 32 L 5 32" stroke-width="1" />
-
-                        <!-- Боковая защита прицепа (паллетник / брус) -->
-                        <g stroke-width="1">
-                            <rect x="33" y="29.5" width="22" height="3.5" fill="var(--surface-solid)" rx="0.5" />
-                            <line x1="33" y1="31.2" x2="55" y2="31.2" />
+            <div class="empty-state">
+                <div class="empty-illustration-container">
+                    <svg viewBox="0 0 110 42" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="0" y1="37" x2="110" y2="37" class="animated-road" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="5 3.5" />
+                            <g class="animated-truck-body">
+                                <rect x="2" y="5" width="71" height="22" rx="1" fill="var(--primary-light)" />
+                                <line x1="2" y1="27" x2="73" y2="27" stroke-width="1.6" />
+                                <path d="M 2 27 L 2 32 L 5 32" stroke-width="1" />
+                                <g stroke-width="1">
+                                    <rect x="33" y="29.5" width="22" height="3.5" fill="var(--surface-solid)" rx="0.5" />
+                                    <line x1="33" y1="31.2" x2="55" y2="31.2" />
+                                </g>
+                                <rect x="69" y="25" width="6" height="2" fill="var(--primary)" rx="0.5" />
+                                <rect x="63" y="27" width="14" height="1.5" fill="var(--surface-solid)" stroke-width="1" />
+                                <path d="M 63.5 31 L 63.5 28.5 C 64.5 27, 75.5 27, 76.5 28.5 L 76.5 31" fill="var(--surface-solid)" stroke-width="1.2" />
+                                <path d="M 76 31 L 76 13 C 76 10, 78 8.5, 82 8.5 L 91 8.5 C 94.5 8.5, 97 10.5, 98.5 14 L 101.5 22 L 101.5 31 Z" fill="var(--surface-solid)" />
+                                <path d="M 85 11 L 93.5 11 C 95.5 11, 96.5 12.5, 97 14.5 L 97.5 19.5 L 85 19.5 Z" fill="var(--primary-light)" stroke-width="1.1" />
+                                <path d="M 97.5 13.5 L 99.5 13.5 L 99.5 17" stroke-width="1" />
+                                <line x1="86.5" y1="21.5" x2="89" y2="21.5" stroke-width="1.2" />
+                                <line x1="97" y1="26" x2="101.5" y2="26" stroke-width="1.2" />
+                                <rect x="77" y="28.5" width="11" height="2.5" fill="var(--surface-solid)" stroke-width="1" rx="0.5" />
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 11px 33.5px;">
+                                <circle cx="11" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <circle cx="11" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 19px 33.5px;">
+                                <circle cx="19" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <circle cx="19" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 27px 33.5px;">
+                                <circle cx="27" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <circle cx="27" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 70px 33.5px;">
+                                <circle cx="70" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <circle cx="70" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 94px 33.5px;">
+                                <circle cx="94" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <circle cx="94" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
+                            </g>
                         </g>
+                    </svg>
+                </div>
+                <div class="empty-title">Активных заявок пока нет</div>
+                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
+            </div>
+        `;
 
-                        <!-- ДЕТАЛИ ТЯГАЧА И РАМЫ -->
-                        <!-- Седельно-сцепное устройство (седло) -->
-                        <rect x="69" y="25" width="6" height="2" fill="var(--primary)" rx="0.5" />
-
-                        <!-- Несущая рама тягача под сцепкой -->
-                        <rect x="63" y="27" width="14" height="1.5" fill="var(--surface-solid)" stroke-width="1" />
-
-                        <!-- Крыло / арка над ведущим колесом тягача -->
-                        <path d="M 63.5 31 L 63.5 28.5 C 64.5 27, 75.5 27, 76.5 28.5 L 76.5 31" fill="var(--surface-solid)" stroke-width="1.2" />
-
-                        <!-- Кабина тягача (Евро-тип) -->
-                        <path d="M 76 31 
-                                 L 76 13 
-                                 C 76 10, 78 8.5, 82 8.5 
-                                 L 91 8.5 
-                                 C 94.5 8.5, 97 10.5, 98.5 14 
-                                 L 101.5 22 
-                                 L 101.5 31 
-                                 Z" 
-                              fill="var(--surface-solid)" />
-                        
-                        <!-- Боковое стекло кабины -->
-                        <path d="M 85 11 L 93.5 11 C 95.5 11, 96.5 12.5, 97 14.5 L 97.5 19.5 L 85 19.5 Z" fill="var(--primary-light)" stroke-width="1.1" />
-
-                        <!-- Детали кабины: Зеркало, ручка, фара -->
-                        <path d="M 97.5 13.5 L 99.5 13.5 L 99.5 17" stroke-width="1" /> <!-- Зеркало -->
-                        <line x1="86.5" y1="21.5" x2="89" y2="21.5" stroke-width="1.2" /> <!-- Ручка -->
-                        <line x1="97" y1="26" x2="101.5" y2="26" stroke-width="1.2" /> <!-- Фара -->
-                        
-                        <!-- Топливный бак / боковой обвес тягача -->
-                        <rect x="77" y="28.5" width="11" height="2.5" fill="var(--surface-solid)" stroke-width="1" rx="0.5" />
-                    </g>
-
-                    <!-- Колёса (3 оси прицепа + 2 оси тягача) -->
-                    <!-- Оси прицепа -->
-                    <g class="animated-wheel" style="transform-origin: 11px 33.5px;">
-                        <circle cx="11" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="11" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
-                    </g>
-                    <g class="animated-wheel" style="transform-origin: 19px 33.5px;">
-                        <circle cx="19" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="19" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
-                    </g>
-                    <g class="animated-wheel" style="transform-origin: 27px 33.5px;">
-                        <circle cx="27" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="27" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
-                    </g>
-
-                    <!-- Оси тягача -->
-                    <!-- Заднее ведущее колесо (теперь под крылом и рамой) -->
-                    <g class="animated-wheel" style="transform-origin: 70px 33.5px;">
-                        <circle cx="70" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="70" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
-                    </g>
-                    <!-- Переднее управляемое колесо -->
-                    <g class="animated-wheel" style="transform-origin: 94px 33.5px;">
-                        <circle cx="94" cy="33.5" r="3.3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
-                        <circle cx="94" cy="33.5" r="1.5" stroke="var(--primary)" stroke-width="0.8" stroke-dasharray="1 1"/>
-                    </g>
-                </g>
-            </svg>
-        </div>
-        <div class="empty-title">Активных заявок пока нет</div>
-        <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
-    </div>
-`;
-        
         function handleLogoLoad(success) {
             const img = document.getElementById('headerLogoImg');
             const fallback = document.getElementById('brandFallback');
@@ -1632,51 +1499,11 @@
                     <div class="notif-title">${l.date} | ${l.route} (${l.price})</div>
                     <div class="notif-text">Доступно авто: ${l.cars} | Статус: ${l.status}</div>
                     <div class="buttons" style="margin-top:8px;">
-                        <button class="btn btn-secondary" style="padding:4px 8px;" onclick="openAdminEditModalById(${l.id})">Изменить</button>
                         <button class="btn btn-secondary" style="padding:4px 8px;" onclick="toggleAdminLoadStatus(${l.id})">Статус</button>
                         <button class="btn btn-danger" style="padding:4px 8px;" onclick="hardDeleteAdminLoad(${l.id})">Удалить</button>
                     </div>
                 </div>
             `).join('');
-        }
-
-        function openAdminEditModalById(loadId) {
-            let l = allAdminLoadsArray.find(x => String(x.id) === String(loadId));
-            if (!l) return;
-
-            document.getElementById('editLoadId').value = l.id;
-            document.getElementById('editRoute').value = l.route || '';
-            document.getElementById('editDate').value = l.date || '';
-            document.getElementById('editPrice').value = l.price || '';
-            document.getElementById('editCars').value = l.cars || '';
-            document.getElementById('editCarType').value = l.car_type || '';
-            document.getElementById('editCargoType').value = l.cargo_type || '';
-            document.getElementById('editWeight').value = l.weight || '';
-            document.getElementById('editComment').value = l.admin_comment || '';
-            document.getElementById('adminEditLoadModal').classList.add('active');
-        }
-
-        async function saveAdminLoadEdit() {
-            let data = {
-                id: document.getElementById('editLoadId').value,
-                route: document.getElementById('editRoute').value,
-                date: document.getElementById('editDate').value,
-                price: document.getElementById('editPrice').value,
-                cars: document.getElementById('editCars').value,
-                car_type: document.getElementById('editCarType').value,
-                cargo_type: document.getElementById('editCargoType').value,
-                weight: document.getElementById('editWeight').value,
-                admin_comment: document.getElementById('editComment').value
-            };
-            await fetch('/api/admin/edit_load', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            closeModal('adminEditLoadModal');
-            showToast('Груз обновлён', 'success');
-            loadAdminLoads();
-            loadData(false);
         }
 
         async function toggleAdminLoadStatus(id) {
@@ -1736,39 +1563,10 @@
                     <div class="notif-text">Дата: ${d.date} | Ставка: ${d.price}</div>
                     <div class="notif-text" style="color:var(--primary);">Компания: ${d.company} (${d.name})</div>
                     <div class="buttons" style="margin-top:8px;">
-                        <button class="btn btn-secondary" style="padding:4px 8px;" onclick='openAdminEditDealModal(${JSON.stringify(d).replace(/'/g, "&#39;")})'>Изменить</button>
                         <button class="btn btn-danger" style="padding:4px 8px;" onclick="cancelAdminDeal(${d.deal_id})">Отменить сделку</button>
                     </div>
                 </div>
             `).join('');
-        }
-
-        function openAdminEditDealModal(d) {
-            document.getElementById('editDealId').value = d.deal_id;
-            document.getElementById('editDealRoute').value = d.route || '';
-            document.getElementById('editDealDate').value = d.date || '';
-            document.getElementById('editDealPrice').value = d.price || '';
-            document.getElementById('editDealCars').value = d.cars || '';
-            document.getElementById('adminEditDealModal').classList.add('active');
-        }
-
-        async function saveAdminDealEdit() {
-            let data = {
-                deal_id: document.getElementById('editDealId').value,
-                route: document.getElementById('editDealRoute').value,
-                date: document.getElementById('editDealDate').value,
-                price: document.getElementById('editDealPrice').value,
-                cars: document.getElementById('editDealCars').value
-            };
-            await fetch('/api/admin/edit_deal', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            closeModal('adminEditDealModal');
-            showToast('Сделка обновлена', 'success');
-            loadAdminConfirmedDeals();
-            loadData(false);
         }
 
         async function cancelAdminDeal(dealId) {
@@ -1806,7 +1604,6 @@
 
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
-            document.getElementById('unloaded-sub-nav').style.display = (tab === 'my' && mySubTab === 'archive') ? 'flex' : 'none';
 
             const tableHeader = document.getElementById('tableHeader');
             if (tab === 'my') {
@@ -1837,16 +1634,6 @@
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
             document.getElementById('subnav-transit').classList.toggle('active', sub === 'transit');
             document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
-            document.getElementById('unloaded-sub-nav').style.display = (sub === 'archive') ? 'flex' : 'none';
-            loadData(false);
-        }
-
-        function switchUnloadedSubTab(unloadedTab) {
-            unloadedSubTab = unloadedTab;
-            currentDataHash = '';
-            document.getElementById('unloaded-pending').classList.toggle('active', unloadedTab === 'unloaded_pending');
-            document.getElementById('unloaded-approved').classList.toggle('active', unloadedTab === 'unloaded_approved');
-            document.getElementById('unloaded-paid').classList.toggle('active', unloadedTab === 'unloaded_paid');
             loadData(false);
         }
 
@@ -1892,62 +1679,6 @@
                     showToast('Ошибка сохранения', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
-        }
-
-        function openUnloadModal(dealId) {
-            document.getElementById('unloadDealId').value = dealId;
-            document.getElementById('unloadDate').valueAsDate = new Date();
-            selectedFiles = [];
-            renderFilePreview();
-            document.getElementById('unloadModal').classList.add('active');
-        }
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files);
-            selectedFiles = selectedFiles.concat(files);
-            renderFilePreview();
-        }
-
-        function renderFilePreview() {
-            const list = document.getElementById('filePreviewList');
-            list.innerHTML = selectedFiles.map((f, idx) => `
-                <div class="file-item">
-                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
-                    <span style="color:var(--error); cursor:pointer;" onclick="removeFile(${idx})">Удалить</span>
-                </div>
-            `).join('');
-        }
-
-        function removeFile(idx) {
-            selectedFiles.splice(idx, 1);
-            renderFilePreview();
-        }
-
-        async function submitUnloadData() {
-            const dealId = document.getElementById('unloadDealId').value;
-            const date = document.getElementById('unloadDate').value;
-            const notes = document.getElementById('unloadNotes').value;
-
-            if (!date) return showToast('Укажите дату выгрузки', 'error');
-
-            const formData = new FormData();
-            formData.append('deal_id', dealId);
-            formData.append('unload_date', date);
-            formData.append('notes', notes);
-            selectedFiles.forEach(f => formData.append('files', f));
-
-            try {
-                let res = await fetch('/api/my_loads/unload', { method: 'POST', body: formData });
-                if (res.ok) {
-                    showToast('Выгрузка подтверждена', 'success');
-                    closeModal('unloadModal');
-                    loadData(false);
-                } else { showToast('Ошибка сохранения', 'error'); }
-            } catch(e) {
-                showToast('Данные выгрузки сохранены', 'success');
-                closeModal('unloadModal');
-                loadData(false);
-            }
         }
 
         async function checkNotifications() {
@@ -2071,17 +1802,13 @@
 
                     let filteredDeals = deals.filter(d => {
                         if (mySubTab === 'archive') {
-                            if (unloadedSubTab === 'unloaded_pending') {
-                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status !== 'APPROVED' && !d.is_paid;
-                            } else if (unloadedSubTab === 'unloaded_approved') {
-                                return (d.status === 'UNLOADED' || d.is_unloaded) && d.docs_status === 'APPROVED' && !d.is_paid;
-                            } else if (unloadedSubTab === 'unloaded_paid') {
-                                return d.is_archived || d.is_paid || d.status === 'PAID';
-                            }
-                            return d.is_archived || d.status === 'UNLOADED' || d.is_unloaded;
+                            return d.is_unloaded || d.status === 'UNLOADED';
                         }
-                        if (mySubTab === 'transit') return d.is_transit && !d.is_unloaded;
-                        return !d.is_transit && !d.is_unloaded; // В работе
+                        if (mySubTab === 'transit') {
+                            return d.is_transit && !d.is_unloaded;
+                        }
+                        // "В работе": не в транзите и еще не выгружен
+                        return !d.is_transit && !d.is_unloaded;
                     });
 
                     let sortedDeals = sortItems(filteredDeals);
@@ -2117,7 +1844,7 @@
                             </div>
                         </div>
                         <div class="t-details" id="details-${d.id}">
-                            ${d.is_today ? `<span class="badge badge-today">Погрузка сегодня</span>` : ''}
+                            ${d.is_today ? `<span class="badge badge-today">🚚 ПОГРУЗКА СЕГОДНЯ</span>` : ''}
                             ${d.missing_docs ? `<div class="missing-docs-box"><b>Не хватает данных:</b> ${d.missing_docs}</div>` : ''}
                             
                             <div class="info-grid">
@@ -2131,9 +1858,6 @@
                                 <div class="buttons" style="margin-top:10px;">
                                     <button class="btn ${docBtnClass}" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
                                         ${docBtnText}
-                                    </button>
-                                    <button class="btn btn-secondary" onclick="openUnloadModal('${d.deal_id || d.id}')">
-                                        Загрузить файлы
                                     </button>
                                 </div>
                             ` : ''}
