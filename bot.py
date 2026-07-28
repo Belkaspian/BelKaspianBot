@@ -931,8 +931,47 @@ def advance_homomorphic_scan_filter(img):
     return cv2.filter2D(scanned_bgr, -1, sharp_kernel)
 
 
+# ==================== ДИАГНОСТИРУЕМЫЙ ИИ-СКАНЕР ====================
+
+from pydantic import BaseModel, Field
+
+
+class CornerPoint(BaseModel):
+    x: int = Field(description="Координата X от 0 до 1000")
+    y: int = Field(description="Координата Y от 0 до 1000")
+
+
+class DocumentScanGeometry(BaseModel):
+    top_left: CornerPoint
+    top_right: CornerPoint
+    bottom_right: CornerPoint
+    bottom_left: CornerPoint
+    rotate: int = Field(
+        default=0, description="Угол поворота: 0, 90, 180 или 270"
+    )
+
+
+EXPLICIT_SCANNER_PROMPT = """
+Ты — специализированный ИИ-агент пространственной геометрии транспортных документов (CMR, ТТН, Инвойсы).
+
+Найди 4 точных внешних угла САМОГО БУМАЖНОГО ЛИСТА для выравнивания перспективы.
+- Игнорируй пальцы рук, стол, торпеду машины и весь фон за пределами листа.
+- Указанные 4 точки должны лежать СТРОГО НА УГЛАХ БУМАГИ.
+- Определи угол поворота rotate (0, 90, 180, 270), чтобы текст читался сверху вниз.
+
+Верни СТРОГО JSON вида:
+{
+  "top_left": {"x": 100, "y": 50},
+  "top_right": {"x": 900, "y": 50},
+  "bottom_right": {"x": 900, "y": 950},
+  "bottom_left": {"x": 100, "y": 950},
+  "rotate": 0
+}
+"""
+
+
 async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
-    """Главная функция обработки фото в сканер"""
+    """Главная функция обработки фото в сканер с подробным логированием"""
     try:
         import cv2
         import numpy as np
@@ -940,70 +979,140 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
+            logging.error(
+                "❌ Сканер: Не удалось декодировать изображение из image_bytes"
+            )
             return image_bytes
 
         orig_h, orig_w = img.shape[:2]
         corners = None
         rotate_angle = 0
+        ai_success = False
 
-        # 1. Запрос к ИИ Gemini с расширенным строгим промптом
-        if GEMINI_API_KEY and gemini_client and HAS_GENAI:
-            try:
-                models_to_try = [
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                ]
-                part = genai_types.Part.from_bytes(
-                    data=image_bytes, mime_type="image/jpeg"
-                )
-                config = genai_types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0.0
-                )
+        # 1. Проверка настроек Gemini API
+        if not GEMINI_API_KEY:
+            logging.error(
+                "❌ ОШИБКА: Переменная GEMINI_API_KEY не задана на сервере!"
+            )
+        elif not gemini_client or not HAS_GENAI:
+            logging.error(
+                "❌ ОШИБКА: gemini_client не инициализирован или не импортирован google-genai!"
+            )
+        else:
+            logging.info(
+                f"🚀 Запуск ИИ-сканера Gemini... Размер фото: {orig_w}x{orig_h}, байт: {len(image_bytes)}"
+            )
 
-                response = None
-                for m_name in models_to_try:
-                    try:
-                        if hasattr(gemini_client, "aio"):
-                            response = (
-                                await gemini_client.aio.models.generate_content(
-                                    model=m_name,
-                                    contents=[part, EXPLICIT_SCANNER_PROMPT],
-                                    config=config,
-                                )
-                            )
-                        else:
-                            response = await asyncio.to_thread(
-                                gemini_client.models.generate_content,
+            models_to_try = [
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+                "gemini-1.5-pro",
+            ]
+            mime_type = detect_mime_type(image_bytes, "")
+            part = genai_types.Part.from_bytes(
+                data=image_bytes, mime_type=mime_type
+            )
+
+            config = genai_types.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0.0
+            )
+
+            for m_name in models_to_try:
+                try:
+                    logging.info(
+                        f"⏳ Отправка запроса в Gemini (модель: {m_name})..."
+                    )
+                    if hasattr(gemini_client, "aio"):
+                        response = (
+                            await gemini_client.aio.models.generate_content(
                                 model=m_name,
                                 contents=[part, EXPLICIT_SCANNER_PROMPT],
                                 config=config,
                             )
-                        if response and response.text:
-                            break
-                    except Exception:
-                        pass
+                        )
+                    else:
+                        response = await asyncio.to_thread(
+                            gemini_client.models.generate_content,
+                            model=m_name,
+                            contents=[part, EXPLICIT_SCANNER_PROMPT],
+                            config=config,
+                        )
 
-                if response and response.text:
-                    match_json = re.search(
-                        r"\{.*\}", response.text.strip(), re.DOTALL
-                    )
-                    if match_json:
-                        parsed = json.loads(match_json.group(0))
-                        c_list = parsed.get("corners")
-                        rotate_angle = int(parsed.get("rotate", 0))
+                    if response and response.text:
+                        raw_text = response.text.strip()
+                        logging.info(f"✅ Gemini ({m_name}) ответил: {raw_text}")
 
-                        if c_list and len(c_list) == 4:
-                            pts_px = []
-                            for point in c_list:
-                                y_px = float(point[0]) * orig_h / 1000.0
-                                x_px = float(point[1]) * orig_w / 1000.0
-                                pts_px.append([x_px, y_px])
-                            corners = np.array(pts_px, dtype="float32")
-            except Exception as e_ai:
-                logging.warning(f"AI Vision Scan Error: {e_ai}")
+                        match_json = re.search(r"\{.*\}", raw_text, re.DOTALL)
+                        if match_json:
+                            parsed = json.loads(match_json.group(0))
 
-        # 2. Авто-поворот кадра
+                            tl = parsed.get("top_left") or parsed.get("topLeft")
+                            tr = parsed.get("top_right") or parsed.get(
+                                "topRight"
+                            )
+                            br = parsed.get("bottom_right") or parsed.get(
+                                "bottomRight"
+                            )
+                            bl = parsed.get("bottom_left") or parsed.get(
+                                "bottomLeft"
+                            )
+                            rotate_angle = int(parsed.get("rotate", 0))
+
+                            if (
+                                isinstance(tl, dict)
+                                and isinstance(tr, dict)
+                                and isinstance(br, dict)
+                                and isinstance(bl, dict)
+                            ):
+                                pts_px = [
+                                    [
+                                        float(tl.get("y", 0)) * orig_h / 1000.0,
+                                        float(tl.get("x", 0)) * orig_w / 1000.0,
+                                    ],
+                                    [
+                                        float(tr.get("y", 0)) * orig_h / 1000.0,
+                                        float(tr.get("x", 0)) * orig_w / 1000.0,
+                                    ],
+                                    [
+                                        float(br.get("y", 0)) * orig_h / 1000.0,
+                                        float(br.get("x", 0)) * orig_w / 1000.0,
+                                    ],
+                                    [
+                                        float(bl.get("y", 0)) * orig_h / 1000.0,
+                                        float(bl.get("x", 0)) * orig_w / 1000.0,
+                                    ],
+                                ]
+                                corners = np.array(pts_px, dtype="float32")
+                                ai_success = True
+                                logging.info(
+                                    "🎯 Углы успешно извлечены из ответа ИИ!"
+                                )
+                                break
+                            elif (
+                                isinstance(parsed.get("corners"), list)
+                                and len(parsed["corners"]) == 4
+                            ):
+                                c_list = parsed["corners"]
+                                pts_px = []
+                                for point in c_list:
+                                    y_px = float(point[0]) * orig_h / 1000.0
+                                    x_px = float(point[1]) * orig_w / 1000.0
+                                    pts_px.append([x_px, y_px])
+                                corners = np.array(pts_px, dtype="float32")
+                                ai_success = True
+                                logging.info(
+                                    "🎯 Углы извлечены из массива corners!"
+                                )
+                                break
+                except Exception as e_model:
+                    logging.error(f"❌ Ошибка запроса к модели {m_name}: {e_model}")
+
+        if not ai_success:
+            logging.warning(
+                "⚠️ ИИ Gemini не вернул координаты. Запускаем резервный поиск OpenCV..."
+            )
+
+        # 2. Поворот кадра (если необходимо)
         if rotate_angle == 90:
             img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
         elif rotate_angle == 180:
@@ -1011,34 +1120,17 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         elif rotate_angle == 270:
             img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        # 3. Резервный поиск углов через OpenCV
+        # 3. Резервный поиск углов
         if corners is None:
             corners = find_document_contours_cv(img)
 
-        # 4. Обрезка и геометрия
-        if corners is not None:
-            warped = four_point_transform(img, corners)
-        else:
-            warped = img
+        # 4. Обрезка перспективы
+        warped = four_point_transform(img, corners)
 
-        # 5. ИИ-Inpainting пальцев
-        h, w = warped.shape[:2]
-        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-        lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-        upper_skin = np.array([25, 255, 255], dtype=np.uint8)
-        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        # 5. Удаление пальцев
+        inpainted = ai_inpaint_remove_fingers_and_crop_edges(warped)
 
-        border_mask = np.zeros((h, w), dtype=np.uint8)
-        m_h, m_w = int(h * 0.08), int(w * 0.08)
-        border_mask[:m_h, :] = 255
-        border_mask[h - m_h :, :] = 255
-        border_mask[:, :m_w] = 255
-        border_mask[:, w - m_w :] = 255
-        finger_mask = cv2.bitwise_and(skin_mask, border_mask)
-
-        inpainted = ai_inpaint_remove_fingers(warped, finger_mask)
-
-        # 6. Финальная нормализация освещения
+        # 6. Финальный фильтр
         scanned_final = advance_homomorphic_scan_filter(inpainted)
 
         _, encoded_img = cv2.imencode(
@@ -1047,9 +1139,11 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         return encoded_img.tobytes()
 
     except Exception as e:
-        logging.error(f"Error in scan_document_with_ai_agent: {e}")
+        logging.error(
+            f"❌ Критическая ошибка в scan_document_with_ai_agent: {e}",
+            exc_info=True,
+        )
         return image_bytes
-
 def get_category_priority(cat_str: str) -> int:
     """Возвращает числовой приоритет сортировки документов:
     1: Паспорт
