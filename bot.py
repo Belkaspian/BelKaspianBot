@@ -1471,12 +1471,15 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     prev_truck_plate = ""
     prev_driver_short_name = ""
 
+    prev_trailer_plate = ""
+    prev_driver_phone = ""
+    
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
-                   l.cargo_type, l.details, l.text 
+                   l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ?
@@ -1489,6 +1492,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             cargo_info = f"{row[3] or ''} {row[4] or ''} {row[5] or ''}".lower()
             if "полиэтилен" in cargo_info or "polyethylene" in cargo_info:
                 is_polyethylene = True
+            prev_trailer_plate = row[6] or ""
+            prev_driver_phone = row[7] or ""
         conn.close()
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
@@ -1499,11 +1504,27 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
+    # Умная сохранность предыдущих данных (Частичная замена)
     new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
+    if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
+        new_truck_plate = prev_truck_plate
+
     new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
+    if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
+        new_trailer_plate = prev_trailer_plate
+
     full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
     new_driver_short_name = extract_surname_and_name(full_driver_name)
-    new_driver_phone = (d_data.get("phones") or notes or "Не указан").strip()
+    if new_driver_short_name == "Не распознан" and prev_driver_short_name:
+        new_driver_short_name = prev_driver_short_name
+
+    extracted_phone = (d_data.get("phones") or notes or "").strip()
+    if extracted_phone and extracted_phone != "Не указан":
+        new_driver_phone = extracted_phone
+    elif prev_driver_phone:
+        new_driver_phone = prev_driver_phone
+    else:
+        new_driver_phone = "Не указан"
 
     missing_items = []
 
@@ -2608,11 +2629,21 @@ async def handle_channel_post(message: types.Message):
     conn.close()
     
     for cargo_id in created_cargo_ids:
+        # Получаем дату груза для уведомления
+        cursor.execute("SELECT date, route FROM loads WHERE load_id = ?", (cargo_id,))
+        c_row = cursor.fetchone()
+        c_date = c_row[0] if c_row else "ближайшую дату"
+        
         for u_id, subs, u_status in all_users:
             if u_status == 'BLOCKED':
                 continue
             if subs and direction in [s.strip() for s in subs.split(",")]:
                 await send_cargo_to_user(u_id, cargo_id)
+                add_notification(
+                    u_id, 
+                    "📦 Новый груз", 
+                    f"Появился груз на {c_date} по направлению {direction}"
+                )
                 await asyncio.sleep(0.05)
 
 # ==================== WEB APP БЭКЕНД И REST API ====================
@@ -3288,6 +3319,73 @@ async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
+async def direct_upload_docs_api(request):
+    try:
+        reader = await request.multipart()
+        deal_id = None
+        user_id = 0
+        phone_input = ""
+        file_ids = []
+
+        while True:
+            field = await reader.next()
+            if field is None:
+                break
+            if field.name == 'deal_id':
+                deal_id = int(await field.text())
+            elif field.name == 'user_id':
+                user_id = int(await field.text())
+            elif field.name == 'phone':
+                phone_input = (await field.text()).strip()
+            elif field.name == 'files':
+                filename = field.filename
+                content = await field.read()
+                if content:
+                    buf = io.BytesIO(content)
+                    buf.name = filename or "document.jpg"
+                    msg = await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=types.BufferedInputFile(content, filename=buf.name), caption="Загруженный файл с Web App")
+                    file_ids.append(msg.document.file_id if msg.document else msg.photo[-1].file_id)
+
+        if not deal_id or not user_id:
+            return web.json_response({"error": "Ошибка валидации параметров"}, status=400)
+
+        # Вызываем обработку через AI
+        ai_formatted, sorted_files, raw_json = await process_docs_with_ai([], file_ids, phone_input)
+        
+        # Обновляем статус сделки в БД
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        t_data = raw_json.get("truck") or {}
+        tr_data = raw_json.get("trailer") or {}
+        d_data = raw_json.get("driver") or {}
+        
+        truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
+        trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
+        drv_name = extract_surname_and_name(d_data.get("full_name") or "")
+        drv_phone = phone_input or d_data.get("phones") or "Не указан"
+        
+        missing = []
+        if truck_plate == "НЕ РАСПОЗНАН": missing.append("Техпаспорт тягача")
+        if trailer_plate == "НЕ РАСПОЗНАН": missing.append("Техпаспорт прицепа")
+        if drv_name == "Не распознан": missing.append("Паспорт / ВУ водителя")
+        if drv_phone in ["Не указан", ""]: missing.append("Номер телефона")
+
+        docs_status = "FULL" if not missing else "PARTIAL"
+        missing_str = ", ".join(missing)
+
+        cursor.execute("""
+            UPDATE confirmed_deals 
+            SET docs_submitted = 1, docs_status = ?, missing_docs = ?, 
+                last_truck_plate = ?, last_trailer_plate = ?, last_driver_name = ?, driver_phone = ?
+            WHERE id = ? AND user_id = ?
+        """, (docs_status, missing_str, truck_plate, trailer_plate, drv_name, drv_phone, deal_id, user_id))
+        conn.commit()
+        conn.close()
+
+        return web.json_response({"status": "success", "docs_status": docs_status})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
 async def web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
@@ -3302,6 +3400,7 @@ async def web_server():
     app.router.add_post("/api/profile", profile_post_api)
     app.router.add_post("/api/book/{id}", book_load_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
+    app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
 
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
