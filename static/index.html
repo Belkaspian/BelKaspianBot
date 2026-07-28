@@ -71,9 +71,9 @@
             --error: #f87171;
             --error-light: rgba(248, 113, 113, 0.15);
 
-            --card-warning-bg: rgba(245, 158, 11, 0.12);
+            --card-warning-bg: rgba(245, 158, 11, 0.14);
             --card-warning-border: rgba(245, 158, 11, 0.35);
-            --card-success-bg: rgba(16, 185, 129, 0.12);
+            --card-success-bg: rgba(16, 185, 129, 0.14);
             --card-success-border: rgba(16, 185, 129, 0.35);
             
             --shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);
@@ -509,7 +509,7 @@
             background: var(--surface-hover);
         }
 
-        /* Мягкие пастельные фон статусов */
+        /* Мягкие пастельные фоны статусов */
         .t-row.card-status-partial {
             background-color: var(--card-warning-bg);
             border-left-color: var(--warning);
@@ -521,21 +521,37 @@
         }
 
         .col-date { font-weight: 600; color: var(--text-muted); font-size: 11px; }
-        .col-route { font-weight: 600; color: var(--text); font-size: 11px; line-height: 1.3; display: flex; flex-direction: column; overflow: hidden; padding-right: 4px; }
+        
+        /* Двухстрочный красивый вид Маршрута */
+        .col-route { 
+            font-weight: 600; 
+            color: var(--text); 
+            font-size: 11px; 
+            line-height: 1.25; 
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+            padding-right: 4px; 
+        }
         .col-route span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .col-route span.dest { color: var(--text-muted); font-weight: 500; font-size: 10px; }
+        
         .col-price { font-weight: 700; color: var(--success); text-align: right; font-size: 12px; }
-        .col-truck { font-weight: 600; color: var(--text); font-size: 10px; text-align: center; display: flex; flex-direction: column; line-height: 1.2; justify-content: center; }
+        
+        /* Двухстрочный вид Номеров авто (Тягач / Прицеп) */
+        .col-truck { 
+            font-weight: 600; 
+            color: var(--text); 
+            font-size: 10px; 
+            text-align: center; 
+            display: flex; 
+            flex-direction: column; 
+            line-height: 1.2; 
+            justify-content: center; 
+        }
         .col-truck span.trailer { color: var(--text-muted); font-size: 9px; font-weight: 500; }
         
-        .btn-compact {
-            padding: 4px 8px !important;
-            font-size: 10px !important;
-            border-radius: 4px !important;
-            width: auto !important;
-            flex: none !important;
-        }
-        
+        .col-arrow { text-align: right; color: var(--text-muted); transition: transform 0.25s ease; display: flex; justify-content: flex-end; }
         .t-row.expanded .col-arrow { transform: rotate(180deg); color: var(--primary); }
 
         .t-details {
@@ -616,6 +632,7 @@
             margin-bottom: 10px;
             font-size: 11px;
             font-weight: 500;
+            line-height: 1.5;
         }
 
         .buttons { display: flex; gap: 8px; }
@@ -645,6 +662,14 @@
         .btn-primary { background: var(--primary); }
         .btn-secondary { background: var(--surface-solid); color: var(--text); border: 1px solid var(--border); }
         .btn-danger { background: var(--error); }
+
+        .btn-compact {
+            padding: 5px 9px !important;
+            font-size: 10.5px !important;
+            border-radius: 6px !important;
+            width: auto !important;
+            flex: none !important;
+        }
 
         .profile-card {
             background: var(--surface-solid);
@@ -851,6 +876,7 @@
             background: var(--bg);
             cursor: pointer;
             margin-bottom: 12px;
+            transition: border-color 0.2s ease;
         }
 
         .file-preview-list {
@@ -1067,7 +1093,7 @@
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Белкаspiан</div>
+                <div class="modal-title">Подтверждение заказа</div>
                 <div class="modal-close" onclick="closeModal('confirmModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
@@ -1075,13 +1101,16 @@
             <div id="confirmModalText" style="font-size:13px; margin-bottom:16px; color:var(--text);">
                 Подтвердить забор груза по указанной ставке?
             </div>
+            <div class="form-group" id="confirmQtyBox" style="display:none;">
+                <label>Количество авто для забора</label>
+                <input type="number" id="confirmCarsQty" value="1" min="1" max="10" />
+            </div>
             <div class="buttons">
                 <button class="btn btn-success" id="confirmModalYesBtn">Подтвердить</button>
                 <button class="btn btn-secondary" onclick="closeModal('confirmModal')">Отмена</button>
             </div>
         </div>
     </div>
-
     <!-- Модалка: Своя ставка -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
@@ -1102,6 +1131,42 @@
             <div class="buttons">
                 <button class="btn btn-primary" onclick="submitModalBid()">Отправить</button>
                 <button class="btn btn-secondary" onclick="closeModal('bidModal')">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка: Прямая загрузка файлов и телефона из Web App -->
+    <div class="modal-overlay" id="directUploadModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Подача документов по грузу</div>
+                <div class="modal-close" onclick="closeModal('directUploadModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="uploadModalDealId" />
+            <div class="form-group">
+                <label>Номер телефона водителя</label>
+                <input type="text" id="uploadModalPhone" placeholder="+375 / +7 (999) 000-00-00" />
+            </div>
+            <div class="form-group">
+                <label>Документы (СТС, ВУ, Паспорт)</label>
+                <div class="dropzone" id="directUploadDropzone" 
+                     onclick="document.getElementById('directUploadFiles').click()"
+                     ondragover="event.preventDefault(); this.style.borderColor='var(--primary)';"
+                     ondragleave="this.style.borderColor='var(--border)';"
+                     ondrop="handleDropFiles(event)">
+                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px; margin-bottom: 6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <div style="font-weight: 600;">Перетащите файлы сюда или нажмите</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">Поддерживаются PDF и фото документов</div>
+                </div>
+                <input type="file" id="directUploadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleDirectFileSelect(event)" />
+            </div>
+            <div class="file-preview-list" id="directFilePreviewList"></div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitDirectUploadData()">
+                    ✅ Завершить и отправить
+                </button>
             </div>
         </div>
     </div>
@@ -1177,52 +1242,10 @@
                 </div>
             </div>
 
-            <div id="adminCarrierFilterBox" style="display: none; margin-bottom: 10px;">
-                <select id="adminCarrierSelect" onchange="renderAdminConfirmedDeals()">
-                    <option value="ALL">Все перевозчики</option>
-                </select>
-            </div>
-
             <div id="adminContentBody"><div class="loader"><div class="spinner"></div>Загрузка...</div></div>
         </div>
     </div>
 
-    <!-- Модалка: Прямая загрузка файлов и телефона из Web App -->
-    <div class="modal-overlay" id="directUploadModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Подача документов по грузу</div>
-                <div class="modal-close" onclick="closeModal('directUploadModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="uploadModalDealId" />
-            <div class="form-group">
-                <label>Номер телефона водителя</label>
-                <input type="text" id="uploadModalPhone" placeholder="+375 / +7 (999) 000-00-00" />
-            </div>
-            <div class="form-group">
-                <label>Документы (СТС, ВУ, Паспорт)</label>
-                <div class="dropzone" id="directUploadDropzone" 
-                     onclick="document.getElementById('directUploadFiles').click()"
-                     ondragover="event.preventDefault(); this.style.borderColor='var(--primary)';"
-                     ondragleave="this.style.borderColor='var(--border)';"
-                     ondrop="handleDropFiles(event)">
-                    <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                    <div style="font-weight: 600;">Перетащите файлы сюда или нажмите</div>
-                    <div style="font-size: 11px; color: var(--text-muted);">Поддерживаются PDF и фото документов</div>
-                </div>
-                <input type="file" id="directUploadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleDirectFileSelect(event)" />
-            </div>
-            <div class="file-preview-list" id="directFilePreviewList"></div>
-            <div class="buttons">
-                <button class="btn btn-primary" onclick="submitDirectUploadData()">
-                    ✅ Завершить и отправить
-                </button>
-            </div>
-        </div>
-    </div>
-   
     <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -1247,73 +1270,8 @@
         let allAdminLoadsArray = [];
         let allAdminDeals = [];
         let directSelectedFiles = [];
-
-        function openDirectUploadModal(dealId) {
-            document.getElementById('uploadModalDealId').value = dealId;
-            document.getElementById('uploadModalPhone').value = '';
-            directSelectedFiles = [];
-            renderDirectFilePreview();
-            document.getElementById('directUploadModal').classList.add('active');
-        }
-
-        function handleDirectFileSelect(event) {
-            const files = Array.from(event.target.files);
-            directSelectedFiles = directSelectedFiles.concat(files);
-            renderDirectFilePreview();
-        }
-
-        function handleDropFiles(event) {
-            event.preventDefault();
-            document.getElementById('directUploadDropzone').style.borderColor = 'var(--border)';
-            if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
-                directSelectedFiles = directSelectedFiles.concat(Array.from(event.dataTransfer.files));
-                renderDirectFilePreview();
-            }
-        }
-
-        function renderDirectFilePreview() {
-            const list = document.getElementById('directFilePreviewList');
-            list.innerHTML = directSelectedFiles.map((f, idx) => `
-                <div class="file-item">
-                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
-                    <span style="color:var(--error); cursor:pointer;" onclick="removeDirectFile(${idx})">Удалить</span>
-                </div>
-            `).join('');
-        }
-
-        function removeDirectFile(idx) {
-            directSelectedFiles.splice(idx, 1);
-            renderDirectFilePreview();
-        }
-
-        async function submitDirectUploadData() {
-            const dealId = document.getElementById('uploadModalDealId').value;
-            const phone = document.getElementById('uploadModalPhone').value.trim();
-
-            if (directSelectedFiles.length === 0) {
-                return showToast('Выберите хотя бы один файл', 'error');
-            }
-
-            showToast('Отправка и обработка ИИ...', 'info');
-            const formData = new FormData();
-            formData.append('deal_id', dealId);
-            formData.append('user_id', getUserId());
-            formData.append('phone', phone);
-            directSelectedFiles.forEach(f => formData.append('files', f));
-
-            try {
-                let res = await fetch('/api/my_loads/direct_upload', { method: 'POST', body: formData });
-                if (res.ok) {
-                    showToast('Данные успешно сохранены!', 'success');
-                    closeModal('directUploadModal');
-                    loadData(false);
-                } else {
-                    showToast('Ошибка при загрузке', 'error');
-                }
-            } catch(e) {
-                showToast('Ошибка сети', 'error');
-            }
-        }
+        let previousUnreadCount = 0;
+        let activeBookingLoadId = null;
 
         const emptyStateHTML = `
             <div class="empty-state">
@@ -1445,7 +1403,7 @@
             }
         }
 
-        function showToast(message, type = 'info') {
+        function showToast(message, type = 'info', duration = 2500) {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = 'toast';
@@ -1454,21 +1412,34 @@
             setTimeout(() => {
                 toast.classList.add('hide');
                 setTimeout(() => toast.remove(), 260);
-            }, 2500);
+            }, duration);
         }
 
         function closeModal(id) {
             document.getElementById(id).classList.remove('active');
         }
 
-        function askConfirm(text, callback) {
+        function askConfirm(text, callback, maxCars = 1) {
             const modal = document.getElementById('confirmModal');
             document.getElementById('confirmModalText').textContent = text;
+            const qtyBox = document.getElementById('confirmQtyBox');
+            const qtyInput = document.getElementById('confirmCarsQty');
+
+            if (maxCars > 1) {
+                qtyBox.style.display = 'block';
+                qtyInput.max = maxCars;
+                qtyInput.value = 1;
+            } else {
+                qtyBox.style.display = 'none';
+                qtyInput.value = 1;
+            }
+
             const yesBtn = document.getElementById('confirmModalYesBtn');
             const handleYes = () => {
                 closeModal('confirmModal');
                 yesBtn.removeEventListener('click', handleYes);
-                callback(true);
+                const selectedQty = parseInt(qtyInput.value) || 1;
+                callback(true, selectedQty);
             };
             yesBtn.onclick = handleYes;
             modal.classList.add('active');
@@ -1524,7 +1495,6 @@
             document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
 
             document.getElementById('admin-sort-search-container').style.display = 'flex';
-            document.getElementById('adminCarrierFilterBox').style.display = (tab === 'confirmed') ? 'block' : 'none';
 
             if (tab === 'carriers') loadAdminCarriers();
             else if (tab === 'exchange') loadAdminLoads();
@@ -1765,7 +1735,6 @@
                 let data = await res.json();
                 if (res.ok) {
                     showToast('Инструкция отправлена в чат', 'success');
-                    // Закрываем Web App только на мобильных устройствах
                     const platform = (tg.platform || '').toLowerCase();
                     if (platform === 'android' || platform === 'ios') {
                         try { tg.close(); } catch(e) {}
@@ -1799,6 +1768,73 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
+        function openDirectUploadModal(dealId) {
+            document.getElementById('uploadModalDealId').value = dealId;
+            document.getElementById('uploadModalPhone').value = '';
+            directSelectedFiles = [];
+            renderDirectFilePreview();
+            document.getElementById('directUploadModal').classList.add('active');
+        }
+
+        function handleDirectFileSelect(event) {
+            const files = Array.from(event.target.files);
+            directSelectedFiles = directSelectedFiles.concat(files);
+            renderDirectFilePreview();
+        }
+
+        function handleDropFiles(event) {
+            event.preventDefault();
+            document.getElementById('directUploadDropzone').style.borderColor = 'var(--border)';
+            if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+                directSelectedFiles = directSelectedFiles.concat(Array.from(event.dataTransfer.files));
+                renderDirectFilePreview();
+            }
+        }
+
+        function renderDirectFilePreview() {
+            const list = document.getElementById('directFilePreviewList');
+            list.innerHTML = directSelectedFiles.map((f, idx) => `
+                <div class="file-item">
+                    <span>${f.name} (${Math.round(f.size/1024)} KB)</span>
+                    <span style="color:var(--error); cursor:pointer;" onclick="removeDirectFile(${idx})">Удалить</span>
+                </div>
+            `).join('');
+        }
+
+        function removeDirectFile(idx) {
+            directSelectedFiles.splice(idx, 1);
+            renderDirectFilePreview();
+        }
+
+        async function submitDirectUploadData() {
+            const dealId = document.getElementById('uploadModalDealId').value;
+            const phone = document.getElementById('uploadModalPhone').value.trim();
+
+            if (directSelectedFiles.length === 0) {
+                return showToast('Выберите хотя бы один файл', 'error');
+            }
+
+            showToast('Отправка и обработка ИИ...', 'info');
+            const formData = new FormData();
+            formData.append('deal_id', dealId);
+            formData.append('user_id', getUserId());
+            formData.append('phone', phone);
+            directSelectedFiles.forEach(f => formData.append('files', f));
+
+            try {
+                let res = await fetch('/api/my_loads/direct_upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    showToast('Данные успешно сохранены!', 'success');
+                    closeModal('directUploadModal');
+                    loadData(false);
+                } else {
+                    showToast('Ошибка при загрузке', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
+
         async function checkNotifications() {
             let userId = getUserId();
             if (!userId) return;
@@ -1807,6 +1843,15 @@
                 let data = await res.json();
                 let badge = document.getElementById('bellBadge');
                 let count = data.unread_count || 0;
+                
+                if (count > previousUnreadCount && previousUnreadCount !== 0) {
+                    const latest = data.notifications && data.notifications[0];
+                    if (latest) {
+                        showToast(`📦 ${latest.title}: ${latest.text}`, 'info', 3000);
+                    }
+                }
+                previousUnreadCount = count;
+
                 if (count > 0) {
                     badge.textContent = count;
                     badge.style.display = 'block';
@@ -1873,6 +1918,7 @@
                     let res = await fetch(`/api/loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
                     let rawLoads = data.loads || [];
+                    allAdminLoadsArray = rawLoads;
 
                     let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
                     if (searchQuery) {
@@ -1889,10 +1935,16 @@
                         return;
                     }
 
-                    tbody.innerHTML = sortedLoads.map(l => `
+                    tbody.innerHTML = sortedLoads.map(l => {
+                        let routeParts = (l.route || '').split('→');
+                        let routeHTML = routeParts.length >= 2 
+                            ? `<span>${routeParts[0].trim()}</span><span class="dest">→ ${routeParts[1].trim()}</span>`
+                            : `<span>${l.route}</span>`;
+
+                        return `
                         <div class="t-row catalog-row" id="row-${l.id}" onclick="toggleRow('${l.id}')">
                             <div class="col-date">${l.date}</div>
-                            <div class="col-route">${l.route}</div>
+                            <div class="col-route">${routeHTML}</div>
                             <div class="col-price">${l.price}</div>
                             <div class="col-arrow">
                                 <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
@@ -1905,13 +1957,13 @@
                                 <div class="info-item"><span>Вес / Объем</span><b>${l.weight || '22т'}</b></div>
                                 <div class="info-item"><span>Доступно</span><b>${l.cars} авто</b></div>
                             </div>
-                            ${l.admin_comment ? `<div class="admin-comment"><b>Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
+                            ${l.admin_comment ? `<div class="admin-comment"><b>💬 Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
                             <div class="buttons">
                                 <button class="btn btn-success" onclick="sendAction(${l.id}, 'confirm', event)">Подтвердить</button>
                                 <button class="btn btn-warning" onclick="openOfferModal(${l.id}, event)">Своя цена</button>
                             </div>
                         </div>
-                    `).join('');
+                    `}).join('');
 
                 } else if (currentTab === 'my') {
                     let res = await fetch(`/api/my_loads?user_id=${userId}&t=` + Date.now());
@@ -1925,7 +1977,6 @@
                         if (mySubTab === 'transit') {
                             return d.is_transit && !d.is_unloaded;
                         }
-                        // "В работе": не в транзите и еще не выгружен
                         return !d.is_transit && !d.is_unloaded;
                     });
 
@@ -1944,16 +1995,13 @@
                         if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
                         else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
 
-                        // Форматируем двухстрочный маршрут
-                        let routeParts = d.route.split('→');
+                        let routeParts = (d.route || '').split('→');
                         let routeHTML = routeParts.length >= 2 
                             ? `<span>${routeParts[0].trim()}</span><span class="dest">→ ${routeParts[1].trim()}</span>`
                             : `<span>${d.route}</span>`;
 
-                        // Форматируем двухстрочные номера авто
                         let truckHTML = `<div class="col-truck"><span>${d.truck_plate || '—'}</span><span class="trailer">${d.trailer_plate || '—'}</span></div>`;
 
-                        // Дифференцированные надписи для кнопок
                         let mainBtnText = "Подать данные";
                         let chatBtnText = "через чат";
                         let btnClass = "btn-primary";
@@ -1966,6 +2014,12 @@
                             btnClass = "btn-secondary";
                         }
 
+                        let formattedMissingDocs = "";
+                        if (d.missing_docs) {
+                            let items = d.missing_docs.split(', ').filter(x => x.trim());
+                            formattedMissingDocs = `<div class="missing-docs-box"><b>⚠️ Не хватает данных:</b><br>• ` + items.join('<br>• ') + `</div>`;
+                        }
+
                         return `
                         <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
                             <div class="col-date">${d.date}</div>
@@ -1976,16 +2030,15 @@
                                 <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
                             </div>
                         </div>
-                        
                         <div class="t-details" id="details-${d.id}">
                             ${d.is_today ? `<span class="badge badge-today">🚚 ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                            ${d.missing_docs ? `<div class="missing-docs-box"><b>⚠️ Не хватает данных:</b><br>• ${d.missing_docs.split(', ').join('<br>• ')}</div>` : ''}
+                            ${formattedMissingDocs}
                             
                             <div class="info-grid">
                                 <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
                                 <div class="info-item"><span>Телефон</span><b>${d.driver_phone || 'Не указан'}</b></div>
-                                <div class="info-item"><span>Тягач / Прицеп</span><b>${plateDisplay}</b></div>
-                                <div class="info-item"><span>Груз</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Тягач</span><b>${d.truck_plate || 'Не указан'}</b></div>
+                                <div class="info-item"><span>Прицеп</span><b>${d.trailer_plate || 'Не указан'}</b></div>
                             </div>
 
                             ${mySubTab === 'active' ? `
@@ -2049,26 +2102,19 @@
 
         async function sendAction(id, actionType, event) {
             event.stopPropagation();
-            
-            // Находим данные по грузу для получения доступного кол-ва
             let loadObj = allAdminLoadsArray.find(x => String(x.id) === String(id));
-            let maxCars = loadObj ? parseInt(loadObj.cars) || 1 : 1;
+            let maxCars = loadObj ? (parseInt(reMatchDigits(loadObj.cars)) || 1) : 1;
 
-            if (maxCars > 1) {
-                let qty = prompt(`Укажите количество авто для забора (доступно: ${maxCars}):`, "1");
-                if (!qty) return;
-                let parsedQty = parseInt(qty);
-                if (isNaN(parsedQty) || parsedQty < 1 || parsedQty > maxCars) {
-                    return showToast(`Укажите корректное число от 1 до ${maxCars}`, 'error');
+            askConfirm('Подтвердить забор груза по указанной ставке?', async (confirmed, qty) => {
+                if (confirmed) {
+                    await performBooking(id, 'confirm', '', '', String(qty));
                 }
-                await performBooking(id, 'confirm', '', '', String(parsedQty));
-            } else {
-                askConfirm('Подтвердить забор 1 груза по указанной ставке?', async (confirmed) => {
-                    if (confirmed) {
-                        await performBooking(id, 'confirm', '', '', '1');
-                    }
-                });
-            }
+            }, maxCars);
+        }
+
+        function reMatchDigits(str) {
+            let m = String(str || '').match(/\d+/);
+            return m ? m[0] : '1';
         }
 
         async function performBooking(id, actionType, customPrice, comment, qty) {
@@ -2139,7 +2185,7 @@
         loadData(false);
         setInterval(() => {
             if (currentTab === 'catalog' || currentTab === 'my') loadData(true);
-        }, 5000);
+        }, 4000);
     </script>
 </body>
 </html>
