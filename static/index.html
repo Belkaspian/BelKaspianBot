@@ -547,7 +547,7 @@
             padding-right: 4px;
         }
 
-        /* Двухстрочная ставка: Валюта снизу по центру */
+        /* Двухстрочная ставка */
         .col-price-box {
             display: flex;
             flex-direction: column;
@@ -558,7 +558,7 @@
         .col-price-box .amount { font-weight: 700; color: var(--success); font-size: 12px; }
         .col-price-box .currency { font-weight: 600; color: var(--text-muted); font-size: 9.5px; text-transform: uppercase; margin-top: 1px; }
         
-        /* Колонки авто с единым стилем шрифта */
+        /* Колонки авто */
         .col-truck { 
             font-weight: 600; 
             color: var(--text); 
@@ -807,8 +807,9 @@
             font-weight: 600;
         }
 
+        /* Обновленные стили пустой выдачи и реалистичной фуры */
         .empty-state {
-            padding: 42px 20px;
+            padding: 36px 16px;
             text-align: center;
             display: flex;
             flex-direction: column;
@@ -817,8 +818,8 @@
         }
 
         .empty-illustration-container {
-            width: 140px;
-            height: 60px;
+            width: 210px;
+            height: 75px;
             margin-bottom: 12px;
         }
 
@@ -829,25 +830,29 @@
         }
 
         .animated-truck-body {
-            animation: truckBounce 0.7s ease-in-out infinite alternate;
+            animation: truckBounce 1.4s ease-in-out infinite alternate;
         }
 
         .animated-road {
-            animation: roadMove 0.9s linear infinite;
+            stroke-dasharray: 6 5;
+            animation: roadMove 0.45s linear infinite;
         }
 
         .animated-wheel {
-            animation: wheelSpin 0.9s linear infinite;
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: wheelSpin 0.45s linear infinite;
         }
 
         @keyframes truckBounce {
             0% { transform: translateY(0); }
-            100% { transform: translateY(-0.8px); }
+            50% { transform: translateY(-1.2px); }
+            100% { transform: translateY(0.3px); }
         }
 
         @keyframes roadMove {
             from { stroke-dashoffset: 0; }
-            to { stroke-dashoffset: 10; }
+            to { stroke-dashoffset: -11; }
         }
 
         @keyframes wheelSpin {
@@ -976,9 +981,10 @@
             font-size: 11px;
         }
 
+        /* Обновленный тост-контейнер (внизу, не перекрывает вкладки) */
         .toast-container {
             position: fixed;
-            top: 16px;
+            bottom: 75px;
             left: 16px;
             right: 16px;
             max-width: 420px;
@@ -994,7 +1000,7 @@
             background: var(--surface);
             color: var(--text);
             border: 1px solid var(--border);
-            padding: 10px 14px;
+            padding: 9px 14px;
             border-radius: var(--radius-md);
             box-shadow: var(--shadow-lg);
             backdrop-filter: blur(12px);
@@ -1002,9 +1008,10 @@
             font-weight: 600;
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 10px;
-            pointer-events: auto;
-            animation: toastSlideDown 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+            pointer-events: none;
+            animation: toastSlideDown 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
         }
 
         .toast.hide {
@@ -1056,7 +1063,7 @@
         </div>
     </div>
 
-    <!-- Главная Навигация (Биржа / Мои грузы) -->
+    <!-- Главная Навигация -->
     <div class="main-nav">
         <div class="nav-btn active" id="tab-catalog" onclick="switchTab('catalog')">
             <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
@@ -1068,7 +1075,7 @@
         </div>
     </div>
 
-    <!-- Вложенные Статусы для "Моих Грузов" -->
+    <!-- Подстатусы для "Моих Грузов" -->
     <div class="sub-nav" id="my-sub-nav" style="display: none;">
         <div class="sub-nav-btn active" id="subnav-active" onclick="switchMySubTab('active')">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> В работе
@@ -1103,7 +1110,7 @@
             <button class="search-toggle-btn" onclick="toggleSearchInput()" title="Поиск">
                 <svg class="icon" viewBox="0 0 24 24" id="searchBtnIcon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </button>
-            <input type="text" id="searchInput" placeholder="Поиск по маршруту..." oninput="loadData(true)" />
+            <input type="text" id="searchInput" placeholder="Поиск по маршруту, авто, ТС..." oninput="loadData(false)" />
         </div>
     </div>
 
@@ -1169,7 +1176,7 @@
         </div>
     </div>
 
-    <!-- Модалка: Подтверждение действий -->
+    <!-- Модалка: Подтверждение -->
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1187,6 +1194,7 @@
             </div>
         </div>
     </div>
+
     <!-- Модалка: Своя ставка -->
     <div class="modal-overlay" id="bidModal">
         <div class="modal-card">
@@ -1211,7 +1219,7 @@
         </div>
     </div>
 
-    <!-- Модалка: Прямая загрузка файлов и телефона из Web App -->
+    <!-- Модалка: Прямая загрузка файлов -->
     <div class="modal-overlay" id="directUploadModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1324,7 +1332,6 @@
 
     <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
-
     <script>
         const tg = window.Telegram?.WebApp || {};
         try { tg.expand(); tg.ready(); } catch(e) {}
@@ -1349,25 +1356,45 @@
         let directSelectedFiles = [];
         let lastNotifId = 0;
 
+        // Реалистичный европейский евротягач с плавной анимацией
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 100 36" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="0" y1="32" x2="100" y2="32" class="animated-road" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="4 3" />
+                    <svg viewBox="0 0 160 42" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="0" y1="36" x2="160" y2="36" class="animated-road" stroke="var(--border)" stroke-width="1.5" />
+                            
                             <g class="animated-truck-body">
-                                <rect x="4" y="8" width="56" height="18" rx="2" fill="var(--primary-light)" />
-                                <path d="M 60 26 L 60 14 C 60 12, 62 10, 66 10 L 80 10 C 83 10, 86 12, 88 15 L 92 20 L 92 26 Z" fill="var(--surface-solid)" />
-                                <path d="M 72 13 L 81 13 C 83 13, 84 14, 85 16 L 86 19 L 72 19 Z" fill="var(--primary-light)" stroke-width="1" />
+                                <rect x="4" y="6" width="98" height="23" rx="1.5" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="1.4" />
+                                <line x1="4" y1="12" x2="102" y2="12" stroke="var(--primary)" stroke-opacity="0.3" stroke-dasharray="2 2" />
+                                <line x1="4" y1="18" x2="102" y2="18" stroke="var(--primary)" stroke-opacity="0.3" stroke-dasharray="2 2" />
+                                <rect x="6" y="27" width="12" height="3" fill="var(--surface-solid)" stroke="none" />
+                                
+                                <path d="M 104 29 L 104 10 C 104 8, 106 6, 110 6 L 128 6 C 132 6, 137 8, 139 12 L 143 19 L 143 29 Z" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4" />
+                                <path d="M 104 6 L 112 2 L 126 2 L 128 6" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="1.2" />
+                                <path d="M 124 8 L 135 8 C 137 8, 138 9, 139 12 L 140 16 L 124 16 Z" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="1" />
+                                <rect x="138" y="24" width="6" height="4" rx="1" fill="var(--primary)" />
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 18px 28px;">
-                                <circle cx="18" cy="28" r="3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.5"/>
+                            
+                            <g class="animated-wheel" style="transform-origin: 22px 32px;">
+                                <circle cx="22" cy="32" r="3.8" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <line x1="22" y1="28.2" x2="22" y2="35.8" stroke="var(--primary)" stroke-width="1" />
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 26px 28px;">
-                                <circle cx="26" cy="28" r="3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.5"/>
+                            <g class="animated-wheel" style="transform-origin: 34px 32px;">
+                                <circle cx="34" cy="32" r="3.8" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <line x1="34" y1="28.2" x2="34" y2="35.8" stroke="var(--primary)" stroke-width="1" />
                             </g>
-                            <g class="animated-wheel" style="transform-origin: 78px 28px;">
-                                <circle cx="78" cy="28" r="3" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.5"/>
+                            <g class="animated-wheel" style="transform-origin: 46px 32px;">
+                                <circle cx="46" cy="32" r="3.8" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <line x1="46" y1="28.2" x2="46" y2="35.8" stroke="var(--primary)" stroke-width="1" />
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 112px 32px;">
+                                <circle cx="112" cy="32" r="3.8" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <line x1="112" y1="28.2" x2="112" y2="35.8" stroke="var(--primary)" stroke-width="1" />
+                            </g>
+                            <g class="animated-wheel" style="transform-origin: 134px 32px;">
+                                <circle cx="134" cy="32" r="3.8" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.4"/>
+                                <line x1="134" y1="28.2" x2="134" y2="35.8" stroke="var(--primary)" stroke-width="1" />
                             </g>
                         </g>
                     </svg>
@@ -1449,7 +1476,7 @@
                 icon.innerHTML = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
             } else {
                 searchInput.value = '';
-                loadData(true);
+                loadData(false);
                 icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
             }
         }
@@ -1469,11 +1496,16 @@
             }
         }
 
-        function showToast(message, type = 'info', duration = 2500) {
+        // Неблокирующее уведомление
+        function showToast(message, type = 'info', duration = 1500) {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = 'toast';
             toast.innerHTML = `<span>${message}</span>`;
+            
+            toast.style.pointerEvents = 'auto';
+            toast.onclick = () => toast.remove();
+
             container.appendChild(toast);
             setTimeout(() => {
                 toast.classList.add('hide');
@@ -2023,10 +2055,21 @@
             return m ? m[0] : '1';
         }
 
+        function formatPlateShort(plate) {
+            if (!plate) return '?';
+            let p = plate.trim().toLowerCase();
+            if (p === '' || p === '—' || p === '-' || p.includes('не распознан') || p.includes('не указан')) {
+                return '?';
+            }
+            return plate.trim();
+        }
+
         async function loadData(isSilent = false) {
             if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
             let userId = getUserId();
             checkNotifications();
+
+            let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
 
             try {
                 if (currentTab === 'catalog') {
@@ -2035,14 +2078,16 @@
                     let rawLoads = data.loads || [];
                     allAdminLoadsArray = rawLoads;
 
-                    let searchQuery = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
                     if (searchQuery) {
-                        rawLoads = rawLoads.filter(l => `${l.route} ${l.date} ${l.price}`.toLowerCase().includes(searchQuery));
+                        rawLoads = rawLoads.filter(l => {
+                            let matchStr = `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment} ${l.country}`.toLowerCase();
+                            return matchStr.includes(searchQuery);
+                        });
                     }
 
                     let sortedLoads = sortItems(rawLoads);
                     let newHash = JSON.stringify(sortedLoads);
-                    if (isSilent && newHash === currentDataHash) return;
+                    if (isSilent && !searchQuery && newHash === currentDataHash) return;
 
                     currentDataHash = newHash;
                     if (!sortedLoads || sortedLoads.length === 0) {
@@ -2070,7 +2115,9 @@
                                 <div class="info-item"><span>Доступно</span><b>${l.cars} авто</b></div>
                             </div>
 
-                            ${l.admin_comment ? `<div class="admin-comment"><b>💬 Комментарий логиста:</b> ${l.admin_comment}</div>` : ''}
+                            <div class="admin-comment">
+                                <b>💬 Комментарий логиста:</b> ${l.admin_comment ? l.admin_comment : 'Комментарий отсутствует'}
+                            </div>
 
                             <div class="qty-selector-container">
                                 <span class="qty-selector-label">Количество авто:</span>
@@ -2103,9 +2150,16 @@
                         return !d.is_transit && !d.is_unloaded;
                     });
 
+                    if (searchQuery) {
+                        filteredDeals = filteredDeals.filter(d => {
+                            let matchStr = `${d.route} ${d.date} ${d.price} ${d.driver_name} ${d.driver_phone} ${d.truck_plate} ${d.trailer_plate} ${d.car_type} ${d.cargo_type}`.toLowerCase();
+                            return matchStr.includes(searchQuery);
+                        });
+                    }
+
                     let sortedDeals = sortItems(filteredDeals);
                     let newHash = JSON.stringify(sortedDeals);
-                    if (isSilent && newHash === currentDataHash) return;
+                    if (isSilent && !searchQuery && newHash === currentDataHash) return;
 
                     currentDataHash = newHash;
                     if (sortedDeals.length === 0) {
@@ -2118,12 +2172,14 @@
                         if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
                         else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
 
-                        let routeParts = (d.route || '').split('→');
+                        let routeParts = (d.route || '').split(/→|-|—/);
                         let routeHTML = routeParts.length >= 2 
-                            ? `<span>${routeParts[0].trim()}</span><span class="dest">→ ${routeParts[1].trim()}</span>`
+                            ? `<span>${routeParts[0].trim()}</span><span class="dest">${routeParts[1].trim()}</span>`
                             : `<span>${d.route}</span>`;
 
-                        let truckHTML = `<div class="col-truck"><span>${d.truck_plate || '—'}</span><span class="trailer">${d.trailer_plate || '—'}</span></div>`;
+                        let truckPlateShow = formatPlateShort(d.truck_plate);
+                        let trailerPlateShow = formatPlateShort(d.trailer_plate);
+                        let truckHTML = `<div class="col-truck"><span>${truckPlateShow}</span><span class="trailer">${trailerPlateShow}</span></div>`;
 
                         let mainBtnText = "Подать данные";
                         let chatBtnText = "через чат";
