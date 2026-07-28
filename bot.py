@@ -1517,7 +1517,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         new_driver_short_name = prev_driver_short_name
 
     extracted_phone = (d_data.get("phones") or notes or "").strip()
-    if extracted_phone and extracted_phone != "Не указан":
+    if extracted_phone and extracted_phone not in ["Не указан", ""]:
         new_driver_phone = extracted_phone
     elif prev_driver_phone:
         new_driver_phone = prev_driver_phone
@@ -1657,6 +1657,7 @@ async def handle_channel_post(message: types.Message):
     cursor.execute("SELECT user_id, subscriptions, status FROM users")
     all_users = cursor.fetchall()
     
+    clean_dir = direction.split()[0].strip()
     for cargo_id in created_cargo_ids:
         cursor.execute("SELECT date, route FROM loads WHERE load_id = ?", (cargo_id,))
         c_row = cursor.fetchone()
@@ -1665,11 +1666,12 @@ async def handle_channel_post(message: types.Message):
         for u_id, subs, u_status in all_users:
             if u_status == 'BLOCKED':
                 continue
-            if subs and direction in [s.strip() for s in subs.split(",")]:
+            user_subs_list = [s.strip() for s in (subs or "").split(",") if s.strip()]
+            if any(clean_dir.lower() in sub.lower() for sub in user_subs_list):
                 await send_cargo_to_user(u_id, cargo_id)
                 add_notification(
                     u_id, 
-                    "📦 Новый груз", 
+                    "Новый груз", 
                     f"Появился груз на {c_date} по направлению {direction}"
                 )
                 await asyncio.sleep(0.05)
@@ -1989,7 +1991,7 @@ async def my_loads_api(request):
         bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub = r
         c_date = parse_cargo_date(date_str)
         is_today = bool(c_date and c_date == msk_today)
-        is_transit = bool(c_date and msk_today > c_date)
+        is_transit = False  # Нерассмотренные заявки находятся только во "В работе"
 
         deals.append({
             "id": f"bid_{bid_id}",
@@ -2022,7 +2024,9 @@ async def my_loads_api(request):
 
         c_date = parse_cargo_date(date_str)
         is_today = bool(c_date and c_date == msk_today)
-        is_transit = bool(c_date and msk_today > c_date and not is_unl)
+        # Важнейшее правило: Переход в "Едут" происходит ТОЛЬКО если дата погрузки прошла И по грузу поданы документы!
+        has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
+        is_transit = bool(c_date and msk_today > c_date and not is_unl and has_submitted_docs)
 
         deals.append({
             "id": f"deal_{deal_id}",
@@ -2057,7 +2061,9 @@ async def direct_upload_docs_api(request):
         deal_id = None
         user_id = 0
         phone_input = ""
-        file_ids = []
+        photo_ids = []
+        doc_ids = []
+        all_file_ids = []
 
         while True:
             field = await reader.next()
@@ -2070,32 +2076,47 @@ async def direct_upload_docs_api(request):
             elif field.name == 'phone':
                 phone_input = (await field.text()).strip()
             elif field.name == 'files':
-                filename = field.filename
+                filename = field.filename or "file"
                 content = await field.read()
                 if content:
+                    mime = detect_mime_type(content, filename)
                     buf = io.BytesIO(content)
-                    buf.name = filename or "document.jpg"
-                    msg = await bot.send_document(
-                        chat_id=DOCS_CHANNEL_ID, 
-                        document=types.BufferedInputFile(content, filename=buf.name), 
-                        caption="📄 Прямая загрузка с Web App"
-                    )
-                    file_ids.append(msg.document.file_id if msg.document else msg.photo[-1].file_id)
+                    buf.name = filename
+                    
+                    if mime == "application/pdf":
+                        msg = await bot.send_document(
+                            chat_id=DOCS_CHANNEL_ID,
+                            document=types.BufferedInputFile(content, filename=buf.name)
+                        )
+                        doc_ids.append(msg.document.file_id)
+                        all_file_ids.append(msg.document.file_id)
+                    else:
+                        msg = await bot.send_photo(
+                            chat_id=DOCS_CHANNEL_ID,
+                            photo=types.BufferedInputFile(content, filename=buf.name)
+                        )
+                        photo_ids.append(msg.photo[-1].file_id)
+                        all_file_ids.append(msg.photo[-1].file_id)
 
         if not deal_id or not user_id:
             return web.json_response({"error": "Ошибка валидации параметров"}, status=400)
+
+        if not all_file_ids and not phone_input:
+            return web.json_response({"error": "Укажите номер телефона или прикрепите файлы"}, status=400)
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
-                   l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone, cd.route, cd.date, cd.price
+                   l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone, 
+                   cd.route, cd.date, cd.price
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ? AND cd.user_id = ?
         """, (deal_id, user_id))
         deal_row = cursor.fetchone()
 
+        was_previously_submitted = bool(deal_row[0]) if deal_row else False
         prev_truck_plate = deal_row[1] if deal_row else ""
         prev_driver_short_name = deal_row[2] if deal_row else ""
         prev_trailer_plate = deal_row[6] if deal_row else ""
@@ -2104,34 +2125,48 @@ async def direct_upload_docs_api(request):
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
 
-        ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai([], file_ids, phone_input)
+        cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+        u_row = cursor.fetchone()
+        user_info = f"👤 Перевозчик: tg://user?id={user_id}\n🏢 {u_row[0] if u_row else 'Не указана'}, {u_row[1] if u_row else 'Водитель'} {u_row[2] if u_row else ''}"
 
-        t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
-        tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
-        d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
-        p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
-        l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
+        if all_file_ids:
+            ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photo_ids, doc_ids, phone_input)
+            t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
+            tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+            d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
 
-        new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
-        if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
-            new_truck_plate = prev_truck_plate
+            new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
+            if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
+                new_truck_plate = prev_truck_plate
 
-        new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
-        if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
-            new_trailer_plate = prev_trailer_plate
+            new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
+            if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
+                new_trailer_plate = prev_trailer_plate
 
-        full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
-        new_driver_short_name = extract_surname_and_name(full_driver_name)
-        if new_driver_short_name == "Не распознан" and prev_driver_short_name:
-            new_driver_short_name = prev_driver_short_name
+            full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
+            new_driver_short_name = extract_surname_and_name(full_driver_name)
+            if new_driver_short_name == "Не распознан" and prev_driver_short_name:
+                new_driver_short_name = prev_driver_short_name
 
-        extracted_phone = phone_input or (d_data.get("phones") or "").strip()
-        if extracted_phone and extracted_phone not in ["Не указан", ""]:
-            new_driver_phone = extracted_phone
-        elif prev_driver_phone:
-            new_driver_phone = prev_driver_phone
+            extracted_phone = phone_input or (d_data.get("phones") or "").strip()
+            new_driver_phone = extracted_phone if (extracted_phone and extracted_phone != "Не указан") else (prev_driver_phone or "Не указан")
         else:
-            new_driver_phone = "Не указан"
+            # Сохранение только номера(ов) телефона без файлов
+            raw_json = {}
+            sorted_files = []
+            new_truck_plate = prev_truck_plate or "НЕ РАСПОЗНАН"
+            new_trailer_plate = prev_trailer_plate or "НЕ РАСПОЗНАН"
+            new_driver_short_name = prev_driver_short_name or "Не распознан"
+            new_driver_phone = phone_input or prev_driver_phone or "Не указан"
+
+            ai_formatted_data = (
+                f"Тягач: {new_truck_plate}\n"
+                f"Прицеп: {new_trailer_plate}\n"
+                f"Водитель: {new_driver_short_name}\n"
+                f"Номера телефонов: {new_driver_phone}\n"
+                f"Паспорт: Документы не загружены\n"
+                f"Водительское: Документы не загружены"
+            )
 
         missing_items = []
         if new_truck_plate == "НЕ РАСПОЗНАН": missing_items.append("Техпаспорт тягача")
@@ -2151,9 +2186,39 @@ async def direct_upload_docs_api(request):
         conn.commit()
         conn.close()
 
+        # Публикуем текстовую сводку в ТГ-канал с данными
+        header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ (WEB APP)" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ (WEB APP)"
+        admin_msg = (
+            f"**{header_title}**\n\n"
+            f"📅 {date_str} | 📍 {route_str}\n"
+            f"💰 {price_str}\n\n"
+            f"{user_info}\n\n"
+            f"{ai_formatted_data}"
+        )
+        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+
+        # Если были загружены файлы — формируем 1 собранный PDF и присылаем в канал
+        if all_file_ids:
+            clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
+            clean_truck = re.sub(r'[^\w]', '', new_truck_plate)
+            pdf_filename = f"{clean_name} - {clean_truck}.pdf"
+            file_caption = f"{date_str} {route_str}"
+
+            if doc_ids and len(doc_ids) == 1 and not photo_ids:
+                sorted_pdf_buf = await sort_pdf_pages(doc_ids[0], raw_json)
+                if sorted_pdf_buf:
+                    pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
+                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
+            elif photo_ids:
+                pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, user_info, ai_formatted_data, sorted_files)
+                pdf_bytes = pdf_buf.getvalue()
+                if pdf_bytes:
+                    pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
+
         return web.json_response({"status": "success", "docs_status": docs_status})
     except Exception as e:
-        logging.error(f"Error in direct_upload_docs_api: {e}")
+        logging.error(f"Error in direct_upload_docs_api: {e}", exc_info=True)
         return web.json_response({"error": str(e)}, status=400)
 
 async def set_unload_date_api(request):
@@ -2376,7 +2441,7 @@ async def book_load_api(request):
         conn.commit()
         conn.close()
 
-        add_notification(user_id, "✅ Груз забронирован", f"Вы забронировали груз {route_str} ({requested_cars} авто, {price_str}).")
+        add_notification(user_id, "Груз забронирован", f"Вы забронировали груз {route_str} ({requested_cars} авто, {price_str}).")
         await update_cargo_messages_for_all_users(load_id)
 
         admin_notification = (
@@ -2401,7 +2466,7 @@ async def book_load_api(request):
         conn.commit()
         conn.close()
 
-        add_notification(user_id, "⏳ Ставка отправлена", f"Ваша ставка {proposed_price} по грузу {route_str} отправлена логисту.")
+        add_notification(user_id, "Ставка отправлена", f"Ваша ставка {proposed_price} по грузу {route_str} отправлена логисту.")
 
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
@@ -2595,7 +2660,7 @@ async def admin_cancel_deal_api(request):
             conn.commit()
             conn.close()
 
-            add_notification(carrier_id, "⚠️ Сделка отменена", f"Ваша подтверждённая сделка по маршруту {route} отменена логистом.")
+            add_notification(carrier_id, "Сделка отменена", f"Ваша подтверждённая сделка по маршруту {route} отменена логистом.")
             try:
                 await bot.send_message(chat_id=carrier_id, text=f"⚠️ Ваш груз по маршруту {route} отменен администратором.")
             except Exception:
