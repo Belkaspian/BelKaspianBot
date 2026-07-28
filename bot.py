@@ -835,59 +835,155 @@ def find_document_contours_cv(img):
 
     return None
 
+# ==================== ПРОФЕССИОНАЛЬНЫЙ ИИ-СКАНЕР ====================
+
+
+def four_point_transform(image, pts):
+    """Перспективное выравнивание кадра по 4 точкам"""
+    import cv2
+    import numpy as np
+
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # ВЛ
+    rect[2] = pts[np.argmax(s)]  # НП
+
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # ВП
+    rect[3] = pts[np.argmax(diff)]  # НЛ
+
+    (tl, tr, br, bl) = rect
+    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
+
+    dst = np.array(
+        [
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1],
+        ],
+        dtype="float32",
+    )
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+
+
+def find_document_contours_cv(img):
+    """Поиск границ документа с защитой от ложных срабатываний"""
+    import cv2
+    import numpy as np
+
+    orig_h, orig_w = img.shape[:2]
+    ratio = orig_h / 1000.0
+    small_h = 1000
+    small_w = int(orig_w / ratio)
+    resized = cv2.resize(img, (small_w, small_h))
+
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Поиск внешних границ через Canny
+    edged = cv2.Canny(blur, 40, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(
+        closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        # Документ должен занимать не менее 35% площади снимка
+        if area < (small_w * small_h * 0.35):
+            continue
+
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            return approx.reshape(4, 2) * ratio
+
+        hull = cv2.convexHull(c)
+        peri_hull = cv2.arcLength(hull, True)
+        approx_hull = cv2.approxPolyDP(hull, 0.02 * peri_hull, True)
+        if len(approx_hull) == 4:
+            return approx_hull.reshape(4, 2) * ratio
+
+    return None
+
+
 def enhance_document_printer_scan(img):
     """
-    Превращает фото документа в идеальный скан с принтера:
-    - Делает бумагу белой, убирает серость и тени
-    - Повышает четкость и контраст текста
-    - Сохраняет оригинальный яркий цвет печатей и штампов
+    Естественная нормализация освещения (Division Normalization):
+    - Делает бумагу чистой и белой, удаляя тени от рук/телефона.
+    - НЕ искажает цвета печатей, подписей и рукописного текста.
+    - НЕ оставляет черного шума и синей сеток.
     """
     import cv2
     import numpy as np
 
-    # Микро-обрезка краев (0.8%), чтобы удалить возможные остатки пальцев/фона
+    # 1. Легкая подрезка краевых пикселей (0.5%), если остались артефакты стола
     h, w = img.shape[:2]
-    pad_h, pad_w = int(h * 0.008), int(w * 0.008)
-    if pad_h > 0 and pad_w > 0:
-        img = img[pad_h:h-pad_h, pad_w:w-pad_w]
+    crop_h, crop_w = int(h * 0.005), int(w * 0.005)
+    if crop_h > 0 and crop_w > 0:
+        img = img[crop_h : h - crop_h, crop_w : w - crop_w]
 
-    # Разделение на каналы L (яркость) и A, B (цвет)
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    # 2. Оценка фона освещения по каналам
+    channels = cv2.split(img)
+    norm_channels = []
+
+    # Размер ядра для поиска фона (зависит от разрешения)
+    bg_kernel_size = max(21, int(min(h, w) / 40) | 1)
+
+    for ch in channels:
+        # Морфологическое расширение удаляет тонкий текст и линии, оставляя свет фона
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (bg_kernel_size, bg_kernel_size)
+        )
+        bg = cv2.dilate(ch, kernel)
+        bg = cv2.medianBlur(bg, bg_kernel_size)
+
+        # Нормализация делением: (канал / фон) * 255
+        # Белая бумага становится ровной белой, а текст/печати сохраняют оригинальный цвет
+        norm = cv2.divide(ch, bg, scale=255.0)
+        norm_channels.append(norm)
+
+    norm_img = cv2.merge(norm_channels)
+
+    # 3. Мягкая коррекция контраста в пространстве LAB (без жесткой бинаризации)
+    lab = cv2.cvtColor(norm_img, cv2.COLOR_BGR2LAB)
     l_channel, a_channel, b_channel = cv2.split(lab)
 
-    # 1. Нормализация освещения фона (удаление неровного света и теней)
-    dilated = cv2.dilate(l_channel, np.ones((12, 12), np.uint8))
-    bg_blur = cv2.medianBlur(dilated, 25)
-    diff = cv2.absdiff(l_channel, bg_blur)
-    norm_l = 255 - diff
+    # Подтягиваем яркость L: бумагу высветляем до 255, темноту букв сохраняем
+    l_norm = cv2.normalize(
+        l_channel, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX
+    )
 
-    # 2. Адаптивная вытяжка контраста (бумага -> чисто белая 255, чернила -> темные)
-    p_low, p_high = np.percentile(norm_l, (12, 88))
-    if p_high > p_low:
-        stretch_l = np.clip((norm_l - p_low) * 255.0 / (p_high - p_low), 0, 255).astype(np.uint8)
-    else:
-        stretch_l = norm_l
+    # Легкое усиление контрастности текста
+    l_enhanced = cv2.convertScaleAbs(l_norm, alpha=1.12, beta=3)
 
-    # 3. Повышение резкости размытого текста (Unsharp Masking)
-    gaussian_blur = cv2.GaussianBlur(stretch_l, (0, 0), 2.5)
-    sharp_l = cv2.addWeighted(stretch_l, 1.6, gaussian_blur, -0.6, 0)
+    merged_lab = cv2.merge([l_enhanced, a_channel, b_channel])
+    result_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
 
-    # 4. Сохранение и усиление цвета печатей и подписей
-    a_boost = cv2.addWeighted(a_channel, 1.25, np.full_like(a_channel, 128), -0.25, 0)
-    b_boost = cv2.addWeighted(b_channel, 1.25, np.full_like(b_channel, 128), -0.25, 0)
+    # 4. Мягкий фильтр повышения резкости буквы (без шума)
+    sharp_kernel = np.array(
+        [[0, -0.15, 0], [-0.15, 1.6, -0.15], [0, -0.15, 0]], dtype=np.float32
+    )
+    final_scanned = cv2.filter2D(result_bgr, -1, sharp_kernel)
 
-    merged_lab = cv2.merge((sharp_l, a_boost, b_boost))
-    scanned_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+    return final_scanned
 
-    return scanned_bgr
 
 async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
-    """
-    Профессиональный ИИ-сканер документов:
-    1. Точный поиск 4 углов через Gemini Vision / OpenCV.
-    2. Перспективное выравнивание листа в ровный прямоугольник.
-    3. Приведение фона к чисто-белому качеству принтера и выравнивание четкости текста.
-    """
+    """Главная функция обработки фото в скан"""
     try:
         import cv2
         import numpy as np
@@ -900,33 +996,44 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
         orig_h, orig_w = img.shape[:2]
         corners = None
 
-        # ШАГ 1: Поиск углов с помощью Gemini Vision API
+        # 1. Попытка определить углы через Gemini ИИ
         if GEMINI_API_KEY and gemini_client and HAS_GENAI:
             try:
-                models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+                models_to_try = [
+                    "gemini-2.5-flash",
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                ]
                 scan_prompt = (
-                    "Ты — ИИ-агент сканера документов. Определи 4 угла бумажного листа ЦМР/документа. "
-                    "Верни СТРОГО JSON со списком координат 4 углов по порядку [верхний-левый, верхний-правый, нижний-правый, нижний-левый]: "
-                    "{\"corners\": [[y1, x1], [y2, x2], [y3, x3], [y4, x4]]}. Координаты от 0 до 1000."
+                    "Ты — ИИ сканер документов. Найди 4 ВНЕШНИХ угла листа ЦМР/документа (без стола и фона). "
+                    "Верни СТРОГО JSON с координатами 4 углов [верхний-левый, верхний-правый, нижний-правый, нижний-левый]: "
+                    '{"corners": [[y1, x1], [y2, x2], [y3, x3], [y4, x4]]}. Шкала от 0 до 1000.'
                 )
 
-                part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+                part = genai_types.Part.from_bytes(
+                    data=image_bytes, mime_type="image/jpeg"
+                )
                 config = genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.0
+                    response_mime_type="application/json", temperature=0.0
                 )
 
                 response = None
                 for m_name in models_to_try:
                     try:
-                        if hasattr(gemini_client, 'aio'):
-                            response = await gemini_client.aio.models.generate_content(
-                                model=m_name, contents=[part, scan_prompt], config=config
+                        if hasattr(gemini_client, "aio"):
+                            response = (
+                                await gemini_client.aio.models.generate_content(
+                                    model=m_name,
+                                    contents=[part, scan_prompt],
+                                    config=config,
+                                )
                             )
                         else:
                             response = await asyncio.to_thread(
                                 gemini_client.models.generate_content,
-                                model=m_name, contents=[part, scan_prompt], config=config
+                                model=m_name,
+                                contents=[part, scan_prompt],
+                                config=config,
                             )
                         if response and response.text:
                             break
@@ -935,7 +1042,7 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
 
                 if response and response.text:
                     raw_text = response.text.strip()
-                    match_json = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    match_json = re.search(r"\{.*\}", raw_text, re.DOTALL)
                     if match_json:
                         parsed = json.loads(match_json.group(0))
                         c_list = parsed.get("corners")
@@ -947,25 +1054,25 @@ async def scan_document_with_ai_agent(image_bytes: bytes) -> bytes:
                                 pts_px.append([x_px, y_px])
                             corners = np.array(pts_px, dtype="float32")
             except Exception as e_ai:
-                logging.warning(f"Scan AI Agent corner detection error: {e_ai}")
+                logging.warning(f"Scan AI corner error: {e_ai}")
 
-        # Резервный поиск углов через OpenCV, если Gemini не вернул результат
+        # 2. Резервный поиск через OpenCV
         if corners is None:
             corners = find_document_contours_cv(img)
 
-        # ШАГ 2: Перспективное выравнивание
+        # 3. Обрезка перспективы
         if corners is not None:
             warped = four_point_transform(img, corners)
         else:
-            # Если документ занимает весь кадр — легкая обрезка полей
-            crop_y = int(orig_h * 0.015)
-            crop_x = int(orig_w * 0.015)
-            warped = img[crop_y:orig_h-crop_y, crop_x:orig_w-crop_x]
+            # Если край не найден — берем документ целиком
+            warped = img
 
-        # ШАГ 3: Финальная обработка качества (Чистый белый фон + Четкий текст + Сохранение цвета печатей)
+        # 4. Осветление, выравнивание фона и улучшение читаемости
         scanned_final = enhance_document_printer_scan(warped)
 
-        _, encoded_img = cv2.imencode('.jpg', scanned_final, [int(cv2.IMWRITE_JPEG_QUALITY), 96])
+        _, encoded_img = cv2.imencode(
+            ".jpg", scanned_final, [int(cv2.IMWRITE_JPEG_QUALITY), 96]
+        )
         return encoded_img.tobytes()
 
     except Exception as e:
