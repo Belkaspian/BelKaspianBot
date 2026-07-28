@@ -721,6 +721,7 @@ class VehicleDetails(BaseModel):
     country: Optional[str] = Field(default="Не распознана", description="Страна регистрации")
 
 class DocumentDetails(BaseModel):
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта")
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
     expiry_date: Optional[str] = Field(default="Не указана", description="Срок действия документа")
@@ -728,7 +729,7 @@ class DocumentDetails(BaseModel):
     country: Optional[str] = Field(default="Не распознана", description="Страна выдачи")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
     phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
     passport: Optional[DocumentDetails] = None
@@ -777,7 +778,8 @@ def get_category_priority(cat_str: str) -> int:
     if 'trailer' in s or 'прицеп' in s or 'стс_прицеп' in s: return 40
     return 90
 
-async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
+# Вспомогательный вызов ИИ с передачей частей прямо из памяти
+async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False):
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -787,50 +789,19 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         "Водительское: Не распознано"
     )
 
-    all_files = (photos_file_ids or []) + (doc_file_ids or [])
-
-    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI or not all_files:
-        logging.warning("⚠️ process_docs_with_ai: Gemini API Key отсутствует или нет файлов.")
-        return fallback_text, all_files, {}
-
-    contents = []
-    user_instruction = (
-        "Внимательно изучи все прикреплённые документы и фотографии. "
-        "Определи и извлеки данные по водителям, паспортам, правам, тягачам и прицепам. "
-        f"Дополнительные примечания водителя / номер телефона: {text_notes or 'Нет'}"
-    )
-    contents.append(user_instruction)
-
-    for file_id in all_files:
-        try:
-            file_info = await bot.get_file(file_id)
-            buf = io.BytesIO()
-            await bot.download_file(file_info.file_path, destination=buf)
-            file_bytes = buf.getvalue()
-
-            mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
-            contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
-            logging.info(f"📄 Добавлен файл для ИИ: {file_info.file_path}, mime: {mime_type}, размер: {len(file_bytes)} байт")
-        except Exception as e:
-            logging.error(f"Error downloading document for AI: {e}")
-
-    if len(contents) <= 1:
-        return fallback_text, all_files, {}
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
+        return fallback_text, {}
 
     system_prompt = (
         "Ты — эксперт логистической компании по распознаванию международных документов водителей и ТС.\n"
         "1. Распознавай данные с 100% точностью!\n"
-        "2. Внимательно извлекай данные из всех страниц присланных PDF-файлов и фотографий.\n"
-        "3. Марки ТС: В свидетельствах о регистрации ТС обязательно проверяй графу 2 ('Марка, модель' / 'RUSUMI / MODELI'). "
-        "Строго разделяй марку (brand) и модель (model).\n"
-        "Примеры марок прицепов: KRONE, WIELTON, SCHMITZ CARGOBULL, KÖGEL, KÄSSBOHRER, SCHWARZMÜLLER, FLIEGL, TONAR, BODEX, GRUNWALD, MAZ.\n"
-        "Примеры марок тягачей: MAN, DAF, VOLVO, SCANIA, MERCEDES-BENZ, IVECO, RENAULT, SITRAK, FAW, HOWO, SHACMAN, KAMAZ, MAZ.\n"
-        "4. Номера телефонов: Если в заметках от водителя, подписях, надписях на фото ИЛИ на любых документах/печатях указан телефон — ОБЯЗАТЕЛЬНО внеси его в поле 'phones' водителя.\n"
-        "5. Страны регистрации и страны выдачи: ВСЕГДА ПИШИ СТРОГО НА РУССКОМ ЯЗЫКЕ (например: Беларусь, Узбекистан, Казахстан, Россия, Кыргызстан, Грузия, Азербайджан, Армения).\n"
-        "6. Даты окончания документов: Обязательно извлекай expiry_date (срок действия) для паспорта и водительских прав при наличии.\n"
-        "7. Для КАЖДОГО фото или страницы PDF укажи image_index (0, 1, 2...) и категорию (category): "
-        "'passport_front', 'passport_back', 'license_front', 'license_back', 'truck_front', 'trailer_front', 'truck_back', 'trailer_back', 'other'.\n"
-        "8. ФИО водителя и орган выдачи паспорта пиши строго в оригинальном написании с документа."
+        "2. ВАЖНО: ФИО водителя извлекай СТРОГО И ТОЛЬКО из ПАСПОРТА! Не бери ФИО с водительского удостоверения. "
+        "Если паспорт не загружен или ФИО в паспорте не видно — в поле 'full_name' водителя указывай 'Не распознан'.\n"
+        "3. Внимательно извлекай данные из всех страниц присланных PDF-файлов и фотографий.\n"
+        "4. Марки ТС: В свидетельствах о регистрации ТС проверяй марку (brand) и модель (model).\n"
+        "5. Номера телефонов: Если указан телефон — внеси его в поле 'phones'.\n"
+        "6. Даты окончания документов: Обязательно извлекай expiry_date для паспорта и прав.\n"
+        "7. Для каждой страницы укажи 'category' в 'image_roles'."
     )
 
     config = genai_types.GenerateContentConfig(
@@ -840,44 +811,30 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         temperature=0.1
     )
 
-    response = None
-    # Оптимальный приоритет моделей на основе ваших лимитов:
     models_to_try = [
-        # 1. Топовые флагманы для максимальной точности
         "gemini-3.6-flash",
         "gemini-3.5-flash",
         "gemini-3-flash",
         "gemini-2.5-flash",
-        # 2. Неисчерпаемый резерв с гигантским лимитом
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-2.5-flash-lite",
-        # 3. Отключенные модели в самом конце
         "gemini-3.1-pro",
         "gemini-2.5-pro",
         "gemini-2.0-flash",
     ]
 
+    response = None
     for model_name in models_to_try:
         try:
             if hasattr(gemini_client, 'aio'):
-                response = await gemini_client.aio.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config
-                )
+                response = await gemini_client.aio.models.generate_content(model=model_name, contents=contents, config=config)
             else:
-                response = await asyncio.to_thread(
-                    gemini_client.models.generate_content,
-                    model=model_name,
-                    contents=contents,
-                    config=config
-                )
+                response = await asyncio.to_thread(gemini_client.models.generate_content, model=model_name, contents=contents, config=config)
             if response and response.text:
-                logging.info(f"✅ Gemini успешно обработал документы на модели: {model_name}")
                 break
         except Exception as e:
-            logging.warning(f"⚠️ Модель {model_name} недоступна или выдала ошибку: {e}")
+            logging.warning(f"⚠️ Модель {model_name} недоступна: {e}")
 
     if response and response.text:
         try:
@@ -909,22 +866,45 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                 if show_model and m and m.lower() not in b.lower(): return f"{b} {m}"
                 return b
 
+            # Использование ФИО СТРОГО из Паспорта
+            p_full_name = (p.get("full_name") or d.get("full_name") or "").strip()
+            if p.get("number") in ["Не распознан", None, ""] or not p_full_name:
+                driver_full_name = "Не распознан"
+            else:
+                driver_full_name = p_full_name
+
             if is_polyethylene:
                 truck_brand = build_brand_str(t, show_model=False)
                 trailer_brand = build_brand_str(tr, show_model=False)
 
+                t_plate = t.get('plate') or 'Не распознан'
+                tr_plate = tr.get('plate') or 'Не распознан'
+
+                p_num = p.get('number') or 'Не распознан'
+                p_date = p.get('issue_date') or 'Не распознана'
+                p_auth = p.get('authority') or 'Не распознан'
+
+                l_num = l.get('number') or 'Не распознан'
+                l_date = l.get('issue_date') or 'Не распознана'
+                l_country = l.get('country') or 'Не распознана'
+
+                b_date = d.get('birth_date') or 'Не распознана'
+                b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
+
+                # Специальный формат для полиэтилена
                 formatted_output = (
-                    f"ТС (марка, г/н, страна регистрации): {truck_brand}, {t.get('plate') or 'Не распознан'}, {t.get('country') or 'Не распознана'}\n"
-                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand}, {tr.get('plate') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}\n"
-                    f"ФИО водителя: {d.get('full_name') or 'Не распознан'}\n"
+                    f"ТС (марка, г/н, страна регистрации): {truck_brand}, гос.ном.: {t_plate}, {t.get('country') or 'Не распознана'}\n"
+                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand}, гос.ном.: {tr_plate}, {tr.get('country') or 'Не распознана'}\n"
+                    f"ФИО водителя: {driver_full_name}\n"
                     f"Тел (росс): {phones_str}\n"
-                    f"Водительское удостоверение (№, когда и кем выдано): № {l.get('number') or 'Не распознан'} от {l.get('issue_date') or 'Не распознана'}г. {l.get('country') or 'Не распознана'}\n"
-                    f"Паспорт (серия, №, когда и кем выдан): № {p.get('number') or 'Не распознан'} выдан {p.get('issue_date') or 'Не распознана'}г. {p.get('authority') or 'Не распознан'}"
+                    f"Водительское удостоверение (№, когда и кем выдано): № {l_num} от {l_date}г., {l_country}\n"
+                    f"Паспорт (серия, №, когда и кем выдан): {p_num} выдан {p_date}г. {p_auth}\n"
+                    f"Дата рождения: {b_date_str}"
                 )
             else:
                 truck_str = f"{build_brand_str(t, show_model=True)}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
                 trailer_str = f"{build_brand_str(tr, show_model=True)}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
-                driver_str = f"{d.get('full_name') or 'Не распознан'}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
+                driver_str = f"{driver_full_name}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
                 passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}"
                 license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('country') or 'Не распознана'}"
 
@@ -937,20 +917,62 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
                     f"Водительское: {license_str}"
                 )
 
-            classified_file_priority = {}
-            for role in raw_json.get("image_roles") or []:
-                idx = role.get("image_index")
-                cat = role.get("category", "other")
-                if idx is not None and 0 <= idx < len(all_files):
-                    classified_file_priority[all_files[idx]] = get_category_priority(cat)
-
-            sorted_files = sorted(all_files, key=lambda fid: classified_file_priority.get(fid, 90))
-
-            return formatted_output, sorted_files, raw_json
+            return formatted_output, raw_json
         except Exception as e:
-            logging.error(f"Error parsing Gemini response JSON: {e}")
+            logging.error(f"Error parsing Gemini JSON: {e}")
 
-    return fallback_text, all_files, {}
+    return fallback_text, {}
+
+async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
+    all_files = (photos_file_ids or []) + (doc_file_ids or [])
+    contents = ["Внимательно изучи документы. ФИО извлекай СТРОГО с ПАСПОРТА. Телефон: " + (text_notes or "Нет")]
+
+    for file_id in all_files:
+        try:
+            file_info = await bot.get_file(file_id)
+            buf = io.BytesIO()
+            await bot.download_file(file_info.file_path, destination=buf)
+            file_bytes = buf.getvalue()
+            mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
+            contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+        except Exception as e:
+            logging.error(f"Download file error for AI: {e}")
+
+    formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene)
+    return formatted_text, all_files, raw_json
+
+# Генерация единого объединенного PDF из байтов в памяти без создания сообщений в чате
+async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
+    buffer = io.BytesIO()
+    images = []
+
+    for fname, content in raw_files:
+        mime = detect_mime_type(content, fname)
+        if mime == "application/pdf":
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(io.BytesIO(content))
+                # Если передан 1 PDF — возвращаем его сопоставленным
+                out_buf = io.BytesIO()
+                buffer.write(content)
+                return buffer.getvalue()
+            except Exception:
+                pass
+        else:
+            try:
+                img = Image.open(io.BytesIO(content))
+                img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                images.append(img)
+            except Exception as e:
+                logging.error(f"Error converting image to PDF: {e}")
+
+    if images:
+        images[0].save(buffer, format="PDF", save_all=True, append_images=images[1:])
+        return buffer.getvalue()
+
+    return b""
 
 async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
     try:
@@ -1049,8 +1071,7 @@ async def auto_clean_expired_cargos():
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
         await asyncio.sleep(30)
-
-# ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
+        # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -1091,9 +1112,9 @@ async def send_welcome_message(message: types.Message):
         reply_markup=get_chat_menu_inline_markup(message.from_user)
     )
 
-    # Принудительно отправляем нижнее меню кнопок в чат
+    # Принудительно восстанавливаем нижнюю кнопку главного меню в чате
     await message.answer(
-        "Используйте кнопку ниже для быстрого доступа к меню:",
+        "Используйте кнопку ниже для доступа к меню:",
         reply_markup=get_main_reply_markup(message.from_user)
     )
 
@@ -1400,8 +1421,15 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
     tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+    p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
 
-    driver_name = (d_data.get("full_name") or "Водитель").strip().upper()
+    # ФИО водителя извлекаем strictly из паспорта
+    p_full_name = (p_data.get("full_name") or "").strip()
+    if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+        driver_name = "ВОДИТЕЛЬ"
+    else:
+        driver_name = p_full_name.upper()
+
     truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
     trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
 
@@ -1535,10 +1563,11 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
         new_trailer_plate = prev_trailer_plate
 
-    full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
-    new_driver_short_name = extract_surname_and_name(full_driver_name)
-    if new_driver_short_name == "Не распознан" and prev_driver_short_name:
-        new_driver_short_name = prev_driver_short_name
+    p_full_name = (p_data.get("full_name") or "").strip()
+    if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+        new_driver_short_name = "Не распознан"
+    else:
+        new_driver_short_name = extract_surname_and_name(p_full_name)
 
     extracted_phone = (d_data.get("phones") or notes or "").strip()
     if extracted_phone and extracted_phone not in ["Не указан", ""]:
@@ -1548,35 +1577,32 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_driver_phone = "Не указан"
 
+    # Строгая проверка всех 5 обязательных компонентов
     missing_items = []
 
     p_num = p_data.get("number")
     p_exp = p_data.get("expiry_date")
-    if not p_num or p_num == "Не распознан":
-        if not prev_driver_short_name: missing_items.append("Паспорт")
+    if not p_num or p_num == "Не распознан" or new_driver_short_name == "Не распознан":
+        missing_items.append("Паспорт водителя")
     elif is_doc_expired_or_expiring_soon(p_exp, 15):
-        missing_items.append("Паспорт (просрочен/истекает)")
+        missing_items.append("Паспорт водителя (просрочен/истекает)")
 
     l_num = l_data.get("number")
     l_exp = l_data.get("expiry_date")
     if not l_num or l_num == "Не распознан":
-        if not prev_driver_short_name: missing_items.append("Водительское удостоверение")
+        missing_items.append("Водительское удостоверение")
     elif is_doc_expired_or_expiring_soon(l_exp, 15):
         missing_items.append("Водительское удостоверение (просрочено/истекает)")
 
-    if new_truck_plate == "НЕ РАСПОЗНАН":
+    if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]:
         missing_items.append("Техпаспорт тягача")
-    if new_trailer_plate == "НЕ РАСПОЗНАН":
+    if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"]:
         missing_items.append("Техпаспорт прицепа")
-    if new_driver_phone in ["Не указан", ""]:
+    if new_driver_phone in ["Не указан", "", "—"]:
         missing_items.append("Номер телефона")
 
-    if not missing_items:
-        docs_status = "FULL"
-        missing_docs_str = ""
-    else:
-        docs_status = "PARTIAL"
-        missing_docs_str = ", ".join(missing_items)
+    docs_status = "FULL" if not missing_items else "PARTIAL"
+    missing_docs_str = ", ".join(missing_items)
 
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
@@ -1676,16 +1702,57 @@ LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
 if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
 
+@dp.channel_post(F.text.startswith("/меню"))
+async def handle_admin_menu_command(message: types.Message):
+    if message.chat.id != ADMIN_CHANNEL_ID:
+        return
+        
+    menu_text = (
+        "⚙️ **Панель управления Админ-канала:**\n\n"
+        "• Для моментальной рассылки ВСЕМ пользователям отправьте сообщение с восклицательными знаками, например: `!Внимание! Завтра погрузки с 8:00!`\n"
+        "• Нажмите кнопку ниже, чтобы открыть веб-панель управления."
+    )
+    builder = InlineKeyboardBuilder()
+    web_app_url = f"{RENDER_URL}/webapp"
+    builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", web_app=WebAppInfo(url=web_app_url)))
+    
+    await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
+@dp.channel_post(F.text.startswith("!"))
+async def handle_admin_broadcast(message: types.Message):
+    if message.chat.id != ADMIN_CHANNEL_ID:
+        return
+        
+    broadcast_text = message.text.strip('!').strip()
+    if not broadcast_text:
+        return
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users WHERE status = 'ACTIVE'")
+    users = cursor.fetchall()
+    conn.close()
+
+    count = 0
+    for (u_id,) in users:
+        try:
+            await bot.send_message(chat_id=u_id, text=f"📢 **ВАЖНОЕ СООБЩЕНИЕ:**\n\n{broadcast_text}", parse_mode="Markdown")
+            count += 1
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+
+    await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=f"✅ Рассылка завершена! Сообщение доставлено {count} пользователям.")
+
 @dp.channel_post(F.chat.id.in_(LISTENED_CHATS))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
     raw_text = message.text or message.caption
-    if not raw_text:
+    if not raw_text or raw_text.startswith("!") or raw_text.startswith("/"):
         return
         
     direction = CHANNEL_TO_DIRECTION.get(chat_id)
     if not direction:
-        # Пост из админ-канала: автоматически определяем направление по тексту
         date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(raw_text)
         direction = detect_country(route_str or raw_text)
 
@@ -1728,7 +1795,126 @@ async def handle_channel_post(message: types.Message):
                 
     conn.close()
 
-# ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СТАВОК В ЧАТЕ ====================
+# ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СТАВОК В ЧАТЕ И АДМИНКЕ ====================
+
+@dp.callback_query(F.data.startswith("accept_bid_"))
+async def handle_accept_bid(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("accept_bid_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if not bid:
+        conn.close()
+        await callback.answer("Ставка не найдена.", show_alert=True)
+        return
+
+    load_id, user_id, requested_cars, rate = bid
+    cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+
+    if load:
+        route_str, date_str, details_text, cars_count_str = load
+        curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+        if curr_cars > requested_cars:
+            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - requested_cars), load_id))
+        else:
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+        for _ in range(requested_cars):
+            cursor.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+        cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+
+        add_notification(user_id, "Ставка принята!", f"Ваша ставка {rate} по грузу {route_str} была принята логистом.")
+        try:
+            await bot.send_message(chat_id=user_id, text=f"✅ Ваша ставка **{rate}** по грузу **{route_str}** успешно принята логистом!")
+        except Exception:
+            pass
+
+        await update_cargo_messages_for_all_users(load_id)
+        await callback.message.edit_text(callback.message.text + "\n\n✅ **СТАВКА ПРИНЯТА**")
+    else:
+        conn.close()
+        await callback.answer("Груз не найден.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("decline_bid_"))
+async def handle_decline_bid(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("decline_bid_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if bid:
+        load_id, user_id, rate = bid
+        cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
+        l_row = cursor.fetchone()
+        route_str = l_row[0] if l_row else "Груз"
+
+        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+
+        add_notification(user_id, "Ставка отклонена", f"Ваша ставка {rate} по грузу {route_str} была отклонена.")
+        try:
+            await bot.send_message(chat_id=user_id, text=f"❌ К сожалению, ваша ставка **{rate}** по грузу **{route_str}** была отклонена логистом.")
+        except Exception:
+            pass
+
+        await callback.message.edit_text(callback.message.text + "\n\n❌ **СТАВКА ОТКЛОНЕНА**")
+    else:
+        conn.close()
+        await callback.answer("Ставка не найдена.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("counter_bid_"))
+async def handle_counter_bid_start(callback: types.CallbackQuery, state: FSMContext):
+    bid_id = int(callback.data.replace("counter_bid_", ""))
+    await state.set_state(AdminCounterStates.waiting_for_counter_rate)
+    await state.update_data(counter_bid_id=bid_id)
+    await callback.message.reply("💡 Введите вашу встречную цену/ставку для перевозчика (например: `2600 USD`):")
+    await callback.answer()
+
+@dp.message(AdminCounterStates.waiting_for_counter_rate)
+async def handle_counter_bid_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    bid_id = data.get("counter_bid_id")
+    counter_rate = format_custom_rate(message.text.strip())
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if bid:
+        load_id, user_id, orig_rate = bid
+        cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
+        l_row = cursor.fetchone()
+        route_str = l_row[0] if l_row else "Груз"
+
+        cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ? WHERE bid_id = ?", (counter_rate, bid_id))
+        conn.commit()
+        conn.close()
+
+        add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} по грузу {route_str}.")
+        try:
+            await bot.send_message(chat_id=user_id, text=f"💡 Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваше предложение было: {orig_rate}).")
+        except Exception:
+            pass
+
+        await message.answer(f"✅ Встречная ставка {counter_rate} отправлена перевозчику!")
+    else:
+        conn.close()
+        await message.answer("Ставка не найдена.")
+
+    await state.clear()
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
@@ -1867,7 +2053,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
         )
         admin_builder.row(
-            types.InlineKeyboardButton(text="💡 Встречная ставка", callback_data=f"counter_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="💡 Своя ставка", callback_data=f"counter_bid_{bid_id}"),
             types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
         )
 
@@ -1934,7 +2120,7 @@ async def get_loads_api(request):
         if u_row and u_row[0]:
             user_subs = [s.strip() for s in u_row[0].split(',') if s.strip()]
 
-    # Если пользователь авторизован, но у него НЕТ включенных подписок — возвращаем пустой список на Бирже
+    # Если пользователь зашел, но отписан от всех направлений — Биржа пустая
     if user_id and not user_subs and not (country and country != 'ALL'):
         conn.close()
         return web.json_response({"loads": []})
@@ -1968,19 +2154,26 @@ async def get_loads_api(request):
     rows = cursor.fetchall()
     conn.close()
     
-    loads = [{
-        "id": r[0],
-        "route": r[1] if r[1] else "Не указан",
-        "date": r[2] if r[2] else "Срочно",
-        "cars": r[3] if r[3] else "1",
-        "price": r[4] if r[4] else "Торги",
-        "raw_text": r[5],
-        "cargo_type": r[6],
-        "weight": r[7],
-        "car_type": r[8],
-        "admin_comment": r[9],
-        "country": r[10]
-    } for r in rows]
+    msk_today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+
+    loads = []
+    for r in rows:
+        c_date = parse_cargo_date(r[2])
+        is_today = bool(c_date and c_date == msk_today)
+        loads.append({
+            "id": r[0],
+            "route": r[1] if r[1] else "Не указан",
+            "date": r[2] if r[2] else "Срочно",
+            "cars": r[3] if r[3] else "1",
+            "price": r[4] if r[4] else "Торги",
+            "raw_text": r[5],
+            "cargo_type": r[6],
+            "weight": r[7],
+            "car_type": r[8],
+            "admin_comment": r[9],
+            "country": r[10],
+            "is_today": is_today
+        })
     return web.json_response({"loads": loads})
 
 async def my_loads_api(request):
@@ -2109,16 +2302,14 @@ async def my_loads_api(request):
             
     return web.json_response({"deals": deals})
 
-# Прямая загрузка из Web App: отправляет 1 текстовую сводку с кликабельной ссылкой + 1 собранный PDF
+# Прямая загрузка из Web App: обрабатывает файлы в памяти без дублирования в личный чат
 async def direct_upload_docs_api(request):
     try:
         reader = await request.multipart()
         deal_id = None
         user_id = 0
         phone_input = ""
-        photo_ids = []
-        doc_ids = []
-        all_file_ids = []
+        raw_files = []
 
         while True:
             field = await reader.next()
@@ -2134,37 +2325,21 @@ async def direct_upload_docs_api(request):
                 filename = field.filename or "file"
                 content = await field.read()
                 if content:
-                    mime = detect_mime_type(content, filename)
-                    buf = io.BytesIO(content)
-                    buf.name = filename
-                    
-                    target_temp_chat = user_id if user_id else (ADMIN_ID if ADMIN_ID else DOCS_CHANNEL_ID)
-                    
-                    if mime == "application/pdf":
-                        msg = await bot.send_document(
-                            chat_id=target_temp_chat,
-                            document=types.BufferedInputFile(content, filename=buf.name),
-                            disable_notification=True
-                        )
-                        doc_ids.append(msg.document.file_id)
-                        all_file_ids.append(msg.document.file_id)
-                    else:
-                        msg = await bot.send_photo(
-                            chat_id=target_temp_chat,
-                            photo=types.BufferedInputFile(content, filename=buf.name),
-                            disable_notification=True
-                        )
-                        photo_ids.append(msg.photo[-1].file_id)
-                        all_file_ids.append(msg.photo[-1].file_id)
+                    raw_files.append((filename, content))
 
         if not deal_id or not user_id:
             return web.json_response({"error": "Ошибка валидации параметров"}, status=400)
 
-        if not all_file_ids and not phone_input:
+        if not raw_files and not phone_input:
             return web.json_response({"error": "Укажите номер телефона или прикрепите файлы"}, status=400)
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
+
+        # Ставим статус PROCESSING для анимации "⏳ считывание"
+        cursor.execute("UPDATE confirmed_deals SET docs_status = 'PROCESSING' WHERE id = ? AND user_id = ?", (deal_id, user_id))
+        conn.commit()
+
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
                    l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone, 
@@ -2178,20 +2353,30 @@ async def direct_upload_docs_api(request):
         was_previously_submitted = bool(deal_row[0]) if deal_row else False
         prev_truck_plate = deal_row[1] if deal_row else ""
         prev_driver_short_name = deal_row[2] if deal_row else ""
+        cargo_info = f"{deal_row[3] or ''} {deal_row[4] or ''} {deal_row[5] or ''}".lower() if deal_row else ""
+        is_polyethylene = bool("полиэтилен" in cargo_info or "polyethylene" in cargo_info)
         prev_trailer_plate = deal_row[6] if deal_row else ""
         prev_driver_phone = deal_row[7] if deal_row else ""
         route_str = deal_row[8] if deal_row else "Маршрут"
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
 
-        # Кликабельная ссылка на профиль перевозчика
+        # Кликабельная ссылка на профиль
         user_info = format_carrier_info(user_id)
 
-        if all_file_ids:
-            ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photo_ids, doc_ids, phone_input)
+        if raw_files:
+            contents = ["Изучи документы. ФИО извлекай СТРОГО из ПАСПОРТА. Номер телефона: " + (phone_input or "Нет")]
+            for fname, content in raw_files:
+                mime = detect_mime_type(content, fname)
+                contents.append(genai_types.Part.from_bytes(data=content, mime_type=mime))
+
+            ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, phone_input, is_polyethylene=is_polyethylene)
+            
             t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
             tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
             d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
+            p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
+            l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
             new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
             if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
@@ -2201,16 +2386,19 @@ async def direct_upload_docs_api(request):
             if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
                 new_trailer_plate = prev_trailer_plate
 
-            full_driver_name = (d_data.get("full_name") or "Не распознан").strip()
-            new_driver_short_name = extract_surname_and_name(full_driver_name)
-            if new_driver_short_name == "Не распознан" and prev_driver_short_name:
-                new_driver_short_name = prev_driver_short_name
+            p_full_name = (p_data.get("full_name") or "").strip()
+            if p_num := p_data.get("number"):
+                if p_num != "Не распознан" and p_full_name:
+                    new_driver_short_name = extract_surname_and_name(p_full_name)
+                else:
+                    new_driver_short_name = prev_driver_short_name or "Не распознан"
+            else:
+                new_driver_short_name = prev_driver_short_name or "Не распознан"
 
             extracted_phone = phone_input or (d_data.get("phones") or "").strip()
             new_driver_phone = extracted_phone if (extracted_phone and extracted_phone != "Не указан") else (prev_driver_phone or "Не указан")
         else:
             raw_json = {}
-            sorted_files = []
             new_truck_plate = prev_truck_plate or "НЕ РАСПОЗНАН"
             new_trailer_plate = prev_trailer_plate or "НЕ РАСПОЗНАН"
             new_driver_short_name = prev_driver_short_name or "Не распознан"
@@ -2225,11 +2413,20 @@ async def direct_upload_docs_api(request):
                 f"Водительское: Документы не загружены"
             )
 
+        # Строгая проверка всех 5 документов
         missing_items = []
-        if new_truck_plate == "НЕ РАСПОЗНАН": missing_items.append("Техпаспорт тягача")
-        if new_trailer_plate == "НЕ РАСПОЗНАН": missing_items.append("Техпаспорт прицепа")
-        if new_driver_short_name == "Не распознан": missing_items.append("Паспорт / ВУ водителя")
-        if new_driver_phone in ["Не указан", ""]: missing_items.append("Номер телефона")
+
+        p_num = raw_json.get("driver", {}).get("passport", {}).get("number")
+        if not p_num or p_num == "Не распознан" or new_driver_short_name == "Не распознан":
+            missing_items.append("Паспорт водителя")
+
+        l_num = raw_json.get("driver", {}).get("license", {}).get("number")
+        if not l_num or l_num == "Не распознан":
+            missing_items.append("Водительское удостоверение")
+
+        if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт тягача")
+        if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт прицепа")
+        if new_driver_phone in ["Не указан", "", "—"]: missing_items.append("Номер телефона")
 
         docs_status = "FULL" if not missing_items else "PARTIAL"
         missing_str = ", ".join(missing_items)
@@ -2243,7 +2440,7 @@ async def direct_upload_docs_api(request):
         conn.commit()
         conn.close()
 
-        # 1. Отправляем в канал СТРОГО 1 текстовое сообщение
+        # Отправляем 1 текст + 1 PDF в канал (в личные сообщения ничего не высылаем)
         header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
         admin_msg = (
             f"**{header_title}**\n\n"
@@ -2254,24 +2451,16 @@ async def direct_upload_docs_api(request):
         )
         await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
 
-        # 2. Отправляем в канал СТРОГО 1 объединенный отсортированный PDF документ
-        if all_file_ids:
+        if raw_files:
             clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
             clean_truck = re.sub(r'[^\w]', '', new_truck_plate)
             pdf_filename = f"{clean_name} - {clean_truck}.pdf"
             file_caption = f"{date_str} {route_str}"
 
-            if doc_ids and len(doc_ids) == 1 and not photo_ids:
-                sorted_pdf_buf = await sort_pdf_pages(doc_ids[0], raw_json)
-                if sorted_pdf_buf:
-                    pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
-                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
-            else:
-                pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, user_info, ai_formatted_data, sorted_files)
-                pdf_bytes = pdf_buf.getvalue()
-                if pdf_bytes:
-                    pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
+            pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data)
+            if pdf_bytes:
+                pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
 
         return web.json_response({"status": "success", "docs_status": docs_status})
     except Exception as e:
@@ -2528,6 +2717,10 @@ async def book_load_api(request):
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
             types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+        )
+        admin_builder.row(
+            types.InlineKeyboardButton(text="💡 Своя ставка", callback_data=f"counter_bid_{bid_id}"),
             types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
         )
 
