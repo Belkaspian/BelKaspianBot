@@ -1476,35 +1476,45 @@
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 120 40" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="5" y1="34" x2="115" y2="34" class="animated-road" stroke="var(--border)" stroke-width="1.5" />
-                            
+                    <svg viewBox="0 0 120 65" class="empty-illustration">
+                        <g fill="none" fill-rule="evenodd">
+                            <!-- Дорога -->
+                            <line x1="5" y1="58" x2="115" y2="58" stroke="var(--border)" stroke-width="2" stroke-linecap="round" class="animated-road" stroke-dasharray="6 5" />
+
+                            <!-- Кузов и Кабина -->
                             <g class="animated-truck-body">
-                                <rect x="12" y="10" width="56" height="19" rx="2" fill="var(--surface-solid)" />
-                                <line x1="18" y1="15" x2="62" y2="15" stroke="var(--primary)" stroke-width="0.8" opacity="0.4" />
-                                <line x1="18" y1="20" x2="62" y2="20" stroke="var(--primary)" stroke-width="0.8" opacity="0.4" />
-                                <path d="M 68 29 L 68 15 L 82 15 L 94 22 L 94 29 Z" fill="var(--surface-solid)" />
-                                <path d="M 80 17 L 90 22 L 80 22 Z" fill="var(--primary-light)" stroke-width="1" />
-                                <circle cx="92" cy="26" r="1" fill="var(--primary)" stroke="none" />
+                                <!-- Оранжевый контейнер -->
+                                <rect x="12" y="10" width="62" height="38" fill="#FF9100" />
+                                <rect x="23" y="18" width="35" height="3" rx="1.5" fill="#F57C00" />
+                                <rect x="23" y="24" width="35" height="3" rx="1.5" fill="#F57C00" />
+
+                                <!-- Синяя кабина -->
+                                <path d="M 74,20 L 92,20 C 97,20 101,26 104,33 L 104,48 L 74,48 Z" fill="#006FA6" />
+                                <!-- Окна -->
+                                <rect x="76" y="23" width="5" height="10" fill="#5A9EC8" />
+                                <path d="M 83,23 L 90,23 C 94,23 97,27 99,33 L 83,33 Z" fill="#5A9EC8" />
+                                <!-- Ручка двери -->
+                                <rect x="80" y="38" width="4" height="1.5" rx="0.75" fill="#004E78" />
+                                <!-- Фара -->
+                                <rect x="104" y="42" width="1.5" height="5" fill="#FF9100" />
+
+                                <!-- Серый рама-шасси -->
+                                <rect x="11" y="48" width="94.5" height="5" fill="#546E7A" />
                             </g>
-                            
-                            <g transform="translate(24, 29)">
+
+                            <!-- Колеса -->
+                            <g transform="translate(31, 51)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
-                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
+                                    <circle cx="0" cy="0" r="10" fill="#212121" />
+                                    <circle cx="0" cy="0" r="6.5" fill="#FFFFFF" />
+                                    <circle cx="0" cy="0" r="4" fill="#212121" />
                                 </g>
                             </g>
-                            <g transform="translate(42, 29)">
+                            <g transform="translate(88, 51)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
-                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
-                                </g>
-                            </g>
-                            <g transform="translate(84, 29)">
-                                <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
-                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
+                                    <circle cx="0" cy="0" r="10" fill="#212121" />
+                                    <circle cx="0" cy="0" r="6.5" fill="#FFFFFF" />
+                                    <circle cx="0" cy="0" r="4" fill="#212121" />
                                 </g>
                             </g>
                         </g>
@@ -2099,12 +2109,17 @@
             let list = [...items];
             list.sort((a, b) => {
                 let res = 0;
-                if (key === 'newest') res = (a.id || 0) - (b.id || 0);
-                else if (key === 'date_load') res = (a.date || '').localeCompare(b.date || '');
-                else if (key === 'route') res = (a.route || '').localeCompare(b.route || '');
-                else if (key === 'price') {
-                    let numA = parseInt((a.price || '').replace(/\D/g, '')) || 0;
-                    let numB = parseInt((b.price || '').replace(/\D/g, '')) || 0;
+                if (key === 'newest') {
+                    let idA = parseInt(String(a.id || a.deal_id || a.bid_id || 0).replace(/\D/g, '')) || 0;
+                    let idB = parseInt(String(b.id || b.deal_id || b.bid_id || 0).replace(/\D/g, '')) || 0;
+                    res = idA - idB;
+                } else if (key === 'date_load') {
+                    res = (a.date || '').localeCompare(b.date || '', 'ru', { numeric: true });
+                } else if (key === 'route') {
+                    res = (a.route || '').localeCompare(b.route || '', 'ru');
+                } else if (key === 'price') {
+                    let numA = parseInt(String(a.price || '').replace(/\D/g, '')) || 0;
+                    let numB = parseInt(String(b.price || '').replace(/\D/g, '')) || 0;
                     res = numA - numB;
                 }
                 return sortAscending ? res : -res;
@@ -2277,6 +2292,21 @@
             }
         }
 
+
+        function formatIsoDate(str) {
+            if (!str) return '';
+            str = str.trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+            let m = str.match(/^(\d{1,2})[\./](\d{1,2})(?:[\./](\d{2,4}))?$/);
+            if (m) {
+                let day = m[1].padStart(2, '0');
+                let month = m[2].padStart(2, '0');
+                let year = m[3] ? (m[3].length === 2 ? '20' + m[3] : m[3]) : new Date().getFullYear();
+                return `${year}-${month}-${day}`;
+            }
+            return '';
+        }
+        
         function renderDealRow(d, isPending) {
             let cardStatusClass = '';
             if (isPending) cardStatusClass = 'card-status-partial';
@@ -2399,7 +2429,7 @@
                         <div class="form-group" style="margin-top: 10px;">
                             <label>Дата выгрузки</label>
                             <div style="display: flex; gap: 6px;">
-                                <input type="text" id="unload-date-${d.deal_id || d.id}" placeholder="ДД.ММ" value="${(d.unload_date || '').replace(/\.\d{4}$/, '').replace(/^\d{4}-/, '')}" style="max-width: 120px;" />
+                                <input type="date" id="unload-date-${d.deal_id || d.id}" value="${formatIsoDate(d.unload_date)}" onclick="try{this.showPicker()}catch(e){}" style="max-width: 150px; cursor: pointer;" />
                                 <button class="btn btn-success" style="width: auto;" onclick="setUnloadDate('${d.deal_id || d.id}', event)">
                                     Сохранить
                                 </button>
@@ -2538,8 +2568,28 @@
                         const pendingDeals = sortedDeals.filter(d => d.status === 'PENDING' || d.status === 'COUNTER');
                         const confirmedDeals = sortedDeals.filter(d => d.status !== 'PENDING' && d.status !== 'COUNTER');
 
-                        tbody.innerHTML = pendingDeals.map(d => renderDealRow(d, true)).join('') + 
-                                         confirmedDeals.map(d => renderDealRow(d, false)).join('');
+                        let htmlOutput = '';
+
+                        if (pendingDeals.length > 0) {
+                            htmlOutput += `
+                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--warning); text-transform:uppercase; padding:6px 4px 6px 4px;">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    Грузы находящиеся на согласовании
+                                </div>
+                                ${pendingDeals.map(d => renderDealRow(d, true)).join('')}
+                            `;
+                        }
+
+                        if (confirmedDeals.length > 0) {
+                            let topMargin = pendingDeals.length > 0 ? 'margin-top: 28px;' : '';
+                            htmlOutput += `
+                                <div style="${topMargin}">
+                                    ${confirmedDeals.map(d => renderDealRow(d, false)).join('')}
+                                </div>
+                            `;
+                        }
+
+                        tbody.innerHTML = htmlOutput;
                     } else {
                         tbody.innerHTML = sortedDeals.map(d => renderDealRow(d, false)).join('');
                     }
