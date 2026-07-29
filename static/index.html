@@ -757,21 +757,7 @@
             background: var(--surface-hover);
             border-color: var(--primary);
         }
-        .info-circle {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 15px;
-            height: 15px;
-            border-radius: 50%;
-            background: var(--primary);
-            color: #ffffff;
-            font-size: 10px;
-            font-weight: 800;
-            font-family: serif;
-            font-style: italic;
-            line-height: 1;
-        }
+
         .cargo-extra-box {
             background: var(--surface-solid);
             border: 1px solid var(--border);
@@ -913,6 +899,7 @@
             font-weight: 600;
         }
 
+        /* Обновленный лаконичный векторный силуэт Газели */
         .empty-state {
             padding: 36px 16px;
             text-align: center;
@@ -1468,7 +1455,7 @@
         let lastNotifId = 0;
         let userVerificationStatus = 'UNVERIFIED';
 
-        /* Узкая аккуратная Газель с зафиксированным центрированным вращением колес */
+        /* Обновленная лаконичная векторная Газель */
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
@@ -1477,16 +1464,13 @@
                             <line x1="0" y1="30" x2="100" y2="30" class="animated-road" stroke="var(--border)" stroke-width="1.5" />
                             
                             <g class="animated-truck-body">
-                                <rect x="18" y="8" width="38" height="18" rx="1.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
-                                <line x1="18" y1="23" x2="56" y2="23" stroke="var(--primary)" stroke-width="0.8" />
-                                
-                                <path d="M 56 26 L 56 13 L 68 13 L 78 19 L 78 26 Z" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
-                                <path d="M 67 15 L 75 20 L 67 20 Z" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="0.9" />
-                                <rect x="76" y="23" width="3" height="2" rx="0.5" fill="var(--primary)" />
-                                <line x1="65" y1="13" x2="65" y2="26" stroke="var(--primary)" stroke-width="0.8" />
+                                <rect x="16" y="9" width="40" height="17" rx="1.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
+                                <path d="M 56 26 L 56 14 L 66 14 L 76 20 L 76 26 Z" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
+                                <path d="M 65 16 L 73 21 L 65 21 Z" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="0.9" />
+                                <rect x="74" y="23" width="2" height="2" rx="0.5" fill="var(--primary)" />
                             </g>
                             
-                            <g transform="translate(28, 26)">
+                            <g transform="translate(26, 26)">
                                 <g class="animated-wheel">
                                     <circle cx="0" cy="0" r="3.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3"/>
                                     <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="var(--primary)" stroke-width="0.9" />
@@ -1600,6 +1584,7 @@
             }
         }
 
+        /* Лимит всплывающих тостов — максимум 3 штуки */
         function showToast(message, type = 'info', duration = 1500) {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
@@ -1610,6 +1595,11 @@
             toast.onclick = () => toast.remove();
 
             container.appendChild(toast);
+
+            while (container.children.length > 3) {
+                container.firstElementChild.remove();
+            }
+
             setTimeout(() => {
                 toast.classList.add('hide');
                 setTimeout(() => toast.remove(), 260);
@@ -2242,6 +2232,129 @@
             }
         }
 
+        function renderDealRow(d, isPending) {
+            let cardStatusClass = '';
+            if (isPending) cardStatusClass = 'card-status-partial';
+            else if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
+            else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
+
+            let routeParts = (d.route || '').split(/→|-|—/);
+            let routeHTML = routeParts.length >= 2 
+                ? `<span>${routeParts[0].trim()}</span><span class="dest">${routeParts[1].trim()}</span>`
+                : `<span>${d.route}</span>`;
+
+            let truckColHTML = isPending 
+                ? `<div class="col-truck"><span style="color:var(--warning); font-size:10px; font-weight:700;">Согласование</span></div>`
+                : buildTruckColHTML(d);
+
+            let isToday = checkIsToday(d.date, d.is_today);
+            let todayBadgeHTML = isToday ? `<span class="today-indicator">СЕГОДНЯ</span>` : '';
+
+            let mainBtnText = "Подать данные";
+            let btnClass = "btn-primary";
+            if (d.docs_status === 'PARTIAL') { mainBtnText = "Дополнить данные"; btnClass = "btn-warning"; }
+            else if (d.docs_status === 'FULL') { mainBtnText = "Редактировать данные"; btnClass = "btn-secondary"; }
+
+            let formattedMissingDocs = "";
+            if (d.missing_docs && !isPending) {
+                let items = d.missing_docs.split(', ').filter(x => x.trim());
+                formattedMissingDocs = `
+                    <div class="missing-docs-box">
+                        <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-weight:700;">
+                            <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            Не хватает данных:
+                        </div>
+                        • ` + items.join('<br>• ') + `
+                    </div>`;
+            }
+
+            let statusBoxHTML = "";
+            if (isPending) {
+                let msg = d.status === 'COUNTER' 
+                    ? `<b>ВСТРЕЧНОЕ ПРЕДЛОЖЕНИЕ ЛОГИСТА</b><br>Предложенная ставка: <b>${d.price}</b>. Проверьте личные сообщения бота для ответа.`
+                    : `<b>ЗАЯВКА НА СОГЛАСОВАНИИ</b><br>Предложенная ставка: <b>${d.price}</b>. Ожидается подтверждение логиста. Подача документов станет доступна после утверждения.`;
+
+                statusBoxHTML = `
+                    <div class="missing-docs-box" style="background:var(--card-warning-bg); color:var(--warning); border-color:var(--card-warning-border); margin-bottom:10px;">
+                        ${msg}
+                    </div>
+                `;
+            }
+
+            const folderIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+            const chatIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+
+            return `
+                <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
+                    <div class="col-date">
+                        <div>${d.date}</div>
+                        ${todayBadgeHTML}
+                    </div>
+                    <div class="col-route">${routeHTML}</div>
+                    ${truckColHTML}
+                    ${formatPriceHTML(d.price)}
+                    <div class="col-arrow">
+                        <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                </div>
+                <div class="t-details" id="details-${d.id}">
+                    ${d.is_today ? `<span class="badge badge-today">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
+                    ${statusBoxHTML}
+                    ${formattedMissingDocs}
+
+                    <div>
+                        <button class="info-toggle-btn" onclick="toggleCargoExtraInfo('${d.id}', event)">
+                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <span>Информация о грузе</span>
+                        </button>
+                    </div>
+
+                    <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none;">
+                        <div class="info-grid" style="margin-bottom:0;">
+                            <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
+                            <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                            <div class="info-item"><span>Вес / Объем</span><b>${d.weight || '22т'}</b></div>
+                            <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
+                        </div>
+                    </div>
+                    
+                    <div class="info-grid">
+                        <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
+                        <div class="info-item"><span>Телефон</span><b>${formatPhonesHTML(d.driver_phone)}</b></div>
+                        <div class="info-item"><span>Тягач</span><b>${d.truck_plate || 'Не указан'}</b></div>
+                        <div class="info-item"><span>Прицеп</span><b>${d.trailer_plate || 'Не указан'}</b></div>
+                    </div>
+
+                    ${!isPending && (mySubTab === 'active' || mySubTab === 'transit') ? `
+                        <div class="action-buttons-group">
+                            <button class="btn ${btnClass} btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
+                                ${folderIcon} ${mainBtnText}
+                            </button>
+                            <button class="btn btn-secondary btn-chat-action" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
+                                ${chatIcon}
+                                <div class="btn-stacked-text">
+                                    <span class="main-txt">Подать</span>
+                                    <span class="sub-txt">через чат</span>
+                                </div>
+                            </button>
+                        </div>
+                    ` : ''}
+
+                    ${mySubTab === 'transit' ? `
+                        <div class="form-group" style="margin-top: 10px;">
+                            <label>Дата выгрузки</label>
+                            <div style="display: flex; gap: 6px;">
+                                <input type="date" id="unload-date-${d.deal_id || d.id}" value="${d.unload_date || ''}" />
+                                <button class="btn btn-success" style="width: auto;" onclick="setUnloadDate('${d.deal_id || d.id}', event)">
+                                    Сохранить
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
         async function loadData(isSilent = false) {
             if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
             let userId = getUserId();
@@ -2340,12 +2453,8 @@
                     let deals = data.deals || [];
 
                     let filteredDeals = deals.filter(d => {
-                        if (mySubTab === 'archive') {
-                            return d.is_unloaded || d.status === 'UNLOADED';
-                        }
-                        if (mySubTab === 'transit') {
-                            return d.is_transit && !d.is_unloaded;
-                        }
+                        if (mySubTab === 'archive') return d.is_unloaded || d.status === 'UNLOADED';
+                        if (mySubTab === 'transit') return d.is_transit && !d.is_unloaded;
                         return !d.is_transit && !d.is_unloaded;
                     });
 
@@ -2366,135 +2475,57 @@
                         return;
                     }
 
-                    tbody.innerHTML = sortedDeals.map(d => {
-                        let isPendingBid = (d.status === 'PENDING' || d.status === 'COUNTER');
+                    if (mySubTab === 'active') {
+                        const pendingDeals = sortedDeals.filter(d => d.status === 'PENDING' || d.status === 'COUNTER');
+                        const confirmedDeals = sortedDeals.filter(d => d.status !== 'PENDING' && d.status !== 'COUNTER');
 
-                        let cardStatusClass = '';
-                        if (isPendingBid) cardStatusClass = 'card-status-partial';
-                        else if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
-                        else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
+                        let htmlOutput = '';
 
-                        let routeParts = (d.route || '').split(/→|-|—/);
-                        let routeHTML = routeParts.length >= 2 
-                            ? `<span>${routeParts[0].trim()}</span><span class="dest">${routeParts[1].trim()}</span>`
-                            : `<span>${d.route}</span>`;
-
-                        let truckHTML = buildTruckColHTML(d);
-
-                        let isToday = checkIsToday(d.date, d.is_today);
-                        let todayBadgeHTML = isToday ? `<span class="today-indicator">СЕГОДНЯ</span>` : '';
-
-                        let mainBtnText = "Подать данные";
-                        let btnClass = "btn-primary";
-
-                        if (d.docs_status === 'PARTIAL') {
-                            mainBtnText = "Дополнить данные";
-                            btnClass = "btn-warning";
-                        } else if (d.docs_status === 'FULL') {
-                            mainBtnText = "Редактировать данные";
-                            btnClass = "btn-secondary";
-                        }
-
-                        let formattedMissingDocs = "";
-                        if (d.missing_docs && !isPendingBid) {
-                            let items = d.missing_docs.split(', ').filter(x => x.trim());
-                            formattedMissingDocs = `
-                                <div class="missing-docs-box">
-                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-weight:700;">
-                                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                                        Не хватает данных:
+                        if (pendingDeals.length > 0) {
+                            htmlOutput += `
+                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--warning); text-transform:uppercase; margin:4px 0 8px 4px;">
+                                    <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    Заявки на согласовании (${pendingDeals.length})
+                                </div>
+                                <div class="table-container" style="margin-bottom: 16px;">
+                                    <div class="t-head">
+                                        <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Статус</div><div style="text-align: right;">Ставка</div><div></div>
                                     </div>
-                                    • ` + items.join('<br>• ') + `
-                                </div>`;
-                        }
-
-                        let pendingNoticeHTML = "";
-                        if (isPendingBid) {
-                            let statusText = d.status === 'COUNTER' 
-                                ? `💡 <b>ВСТРЕЧНОЕ ПРЕДЛОЖЕНИЕ ЛОГИСТА</b><br>Логист предложил вам ставку: <b>${d.price}</b>. Проверьте личные сообщения в боте для ответа.`
-                                : `⏳ <b>ЗАЯВКА НА СОГЛАСОВАНИИ</b><br>Ваше предложение по ставке (${d.price}) ожидает решения логиста. Подача документов станет доступна после подтверждения.`;
-
-                            pendingNoticeHTML = `
-                                <div class="missing-docs-box" style="background:var(--card-warning-bg); color:var(--warning); border-color:var(--card-warning-border); margin-bottom:10px;">
-                                    ${statusText}
+                                    ${pendingDeals.map(d => renderDealRow(d, true)).join('')}
                                 </div>
                             `;
                         }
 
-                        const folderIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
-                        const chatIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
-
-                        return `
-                        <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
-                            <div class="col-date">
-                                <div>${d.date}</div>
-                                ${todayBadgeHTML}
-                            </div>
-                            <div class="col-route">${routeHTML}</div>
-                            ${truckHTML}
-                            ${formatPriceHTML(d.price)}
-                            <div class="col-arrow">
-                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-                            </div>
-                        </div>
-                        <div class="t-details" id="details-${d.id}">
-                            ${d.is_today ? `<span class="badge badge-today">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                            
-                            ${pendingNoticeHTML}
-
-                            ${formattedMissingDocs}
-
-                            <div>
-                                <button class="info-toggle-btn" onclick="toggleCargoExtraInfo('${d.id}', event)">
-                                    <span class="info-circle">i</span>
-                                    <span>Информация о грузе</span>
-                                </button>
-                            </div>
-
-                            <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none;">
-                                <div class="info-grid" style="margin-bottom:0;">
-                                    <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
-                                    <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                                    <div class="info-item"><span>Вес / Объем</span><b>${d.weight || '22т'}</b></div>
-                                    <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
-                                </div>
-                            </div>
-                            
-                            <div class="info-grid">
-                                <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
-                                <div class="info-item"><span>Телефон</span><b>${formatPhonesHTML(d.driver_phone)}</b></div>
-                                <div class="info-item"><span>Тягач</span><b>${d.truck_plate || 'Не указан'}</b></div>
-                                <div class="info-item"><span>Прицеп</span><b>${d.trailer_plate || 'Не указан'}</b></div>
-                            </div>
-
-                            ${(mySubTab === 'active' || mySubTab === 'transit') && !isPendingBid ? `
-                                <div class="action-buttons-group">
-                                    <button class="btn ${btnClass} btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
-                                        ${folderIcon} ${mainBtnText}
-                                    </button>
-                                    <button class="btn btn-secondary btn-chat-action" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
-                                        ${chatIcon}
-                                        <div class="btn-stacked-text">
-                                            <span class="main-txt">Подать</span>
-                                            <span class="sub-txt">через чат</span>
-                                        </div>
-                                    </button>
-                                </div>
-                            ` : ''}
-
-                            ${mySubTab === 'transit' ? `
-                                <div class="form-group" style="margin-top: 10px;">
-                                    <label>Дата выгрузки</label>
-                                    <div style="display: flex; gap: 6px;">
-                                        <input type="date" id="unload-date-${d.deal_id || d.id}" value="${d.unload_date || ''}" />
-                                        <button class="btn btn-success" style="width: auto;" onclick="setUnloadDate('${d.deal_id || d.id}', event)">
-                                            Сохранить
-                                        </button>
+                        if (confirmedDeals.length > 0 || pendingDeals.length === 0) {
+                            if (pendingDeals.length > 0) {
+                                htmlOutput += `
+                                    <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--success); text-transform:uppercase; margin:8px 0 8px 4px;">
+                                        <svg class="icon" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        Подтверждённые грузы (${confirmedDeals.length})
                                     </div>
+                                `;
+                            }
+                            htmlOutput += `
+                                <div class="table-container">
+                                    <div class="t-head">
+                                        <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Номер ТС</div><div style="text-align: right;">Ставка</div><div></div>
+                                    </div>
+                                    ${confirmedDeals.map(d => renderDealRow(d, false)).join('')}
                                 </div>
-                            ` : ''}
-                        </div>
-                    `}).join('');
+                            `;
+                        }
+
+                        tbody.innerHTML = htmlOutput;
+                    } else {
+                        tbody.innerHTML = `
+                            <div class="table-container">
+                                <div class="t-head">
+                                    <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Номер ТС</div><div style="text-align: right;">Ставка</div><div></div>
+                                </div>
+                                ${sortedDeals.map(d => renderDealRow(d, false)).join('')}
+                            </div>
+                        `;
+                    }
                 }
             } catch(e) {
                 if (!isSilent) tbody.innerHTML = '<div class="loader">Ошибка загрузки данных</div>';
@@ -2637,19 +2668,31 @@
         }
 
         async function submitProfileChanges() {
-            await saveProfile();
+            let comp = document.getElementById('profCompany').value.trim();
+            let name = document.getElementById('profName').value.trim();
+            let phone = document.getElementById('profPhone').value.trim();
+
+            if (!comp || !name || !phone) {
+                return showToast('Заполните все данные профиля', 'error');
+            }
+
             try {
                 let res = await fetch('/api/submit_profile_changes', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ user_id: getUserId() })
+                    body: JSON.stringify({ 
+                        user_id: getUserId(),
+                        company: comp,
+                        name: name,
+                        phone: phone
+                    })
                 });
+                let data = await res.json();
                 if (res.ok) {
                     showToast('Изменения отправлены на рассмотрение', 'success');
                     loadProfile();
                 } else {
-                    let d = await res.json();
-                    showToast(d.error || 'Ошибка', 'error');
+                    showToast(data.error || 'Ошибка отправки', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
