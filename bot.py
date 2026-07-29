@@ -797,17 +797,24 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     debug_logs.append(f"📅 **Дата:** `{date_str}`")
     debug_logs.append(f"📂 **Пространство:** {space_name} (Space ID: `{space_id}`)")
 
-    cards = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
-    if not cards or not isinstance(cards, list):
-        cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
-    if not cards or not isinstance(cards, list):
-        cards = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
+    raw_res = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
+    if not raw_res:
+        raw_res = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
+    if not raw_res:
+        raw_res = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
+
+    # Безопасное извлечение списка карточек
+    cards = []
+    if isinstance(raw_res, list):
+        cards = raw_res
+    elif isinstance(raw_res, dict):
+        cards = raw_res.get("cards") or raw_res.get("data") or raw_res.get("results") or [raw_res]
     
-    if not cards or not isinstance(cards, list):
+    if not cards:
         debug_logs.append("❌ **Ошибка API Kaiten:** Не удалось получить список карточек. Проверьте `KAITEN_API_KEY`!")
         return None, "\n".join(debug_logs)
 
-    debug_logs.append(f"📦 Всего карточек в пространстве: `{len(cards)}` шт.")
+    debug_logs.append(f"📦 Всего карточек получено от API: `{len(cards)}` шт.")
 
     route_cities = extract_cities_from_route(route_str)
     day_month_match = re.search(r'(\d{1,2})[\./](\d{1,2})', date_str or "")
@@ -821,6 +828,9 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     cards_starting_with_93 = []
 
     for card in cards:
+        if not isinstance(card, dict):
+            continue
+
         title = (card.get("title") or card.get("name") or "").strip()
         
         if not re.search(r'^\s*93\b', title):
@@ -881,9 +891,12 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
     if candidate_cards:
         candidate_cards.sort(key=lambda x: x[0], reverse=True)
-        best_card = candidate_cards[0][1]
-        debug_logs.append(f"\n✅ **Найдена лучшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
-        return best_card, "\n".join(debug_logs)
+        best_item = candidate_cards[0]
+        best_card = best_item[1] if isinstance(best_item, (tuple, list)) and len(best_item) > 1 else best_item
+        
+        if isinstance(best_card, dict):
+            debug_logs.append(f"\n✅ **Найдена лучшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
+            return best_card, "\n".join(debug_logs)
 
     debug_logs.append("\n⚠️ **Итог:** Ни одна карточка 93... не подошла по фильтру.")
     return None, "\n".join(debug_logs)
@@ -924,21 +937,26 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
 
     if not card_id:
         res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
-        if isinstance(res, tuple):
-            card, debug_text = res
-        else:
-            card, debug_text = res, "Не удалось выполнить поиск карточки"
+        card = None
+        debug_text = "Не удалось выполнить поиск карточки"
 
-        if not card:
-            return False, debug_text
-        card_id = card["id"]
+        if isinstance(res, tuple) and len(res) == 2:
+            card, debug_text = res[0], res[1]
+        elif isinstance(res, dict):
+            card = res
+
+        if not card or not isinstance(card, dict):
+            return False, debug_text if isinstance(debug_text, str) else "Карточка не найдена"
+
+        card_id = card.get("id")
         card_title = card.get("title", "")
 
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (card_id, deal_id))
-        conn.commit()
-        conn.close()
+        if card_id:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (card_id, deal_id))
+            conn.commit()
+            conn.close()
 
     description_text = (
         f"Текст заявки / данные ТС:\n"
@@ -2995,9 +3013,9 @@ async def handle_kaiten_push_callback(callback: types.CallbackQuery):
     try:
         success, result = await push_data_to_kaiten(deal_id, callback.from_user.id, admin_user_name=admin_name)
 
-        if success:
-            card_id = result["card_id"]
-            card_url = result["url"]
+        if success and isinstance(result, dict):
+            card_id = result.get("card_id")
+            card_url = result.get("url")
             status_text = f"\n\n✅ **Внесено в Kaiten:** [{card_id}]({card_url}) (логист: @{callback.from_user.username or admin_name})"
             
             await callback.message.edit_text(
