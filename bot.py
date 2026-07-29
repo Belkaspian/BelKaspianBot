@@ -3442,6 +3442,51 @@ async def accept_counter_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
+async def decline_counter_api(request):
+    try:
+        data = await request.json()
+        raw_bid_id = data.get('bid_id', 0)
+        digits = re.findall(r'\d+', str(raw_bid_id))
+        bid_id = int(digits[0]) if digits else 0
+        user_id = int(data.get('user_id', 0))
+
+        if not bid_id or not user_id:
+            return web.json_response({"error": "Неверные данные"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT load_id, user_id, counter_rate FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
+        bid = cursor.fetchone()
+
+        if not bid:
+            conn.close()
+            return web.json_response({"error": "Заявка не найдена"}, status=404)
+
+        load_id, user_id, counter_rate = bid
+        cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
+        l_row = cursor.fetchone()
+        route_str = l_row[0] if l_row else "Груз"
+
+        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+
+        carrier_link = format_carrier_info(user_id)
+        admin_notification = (
+            f"**Перевозчик ОТКЛОНИЛ встречную ставку из Web App!**\n\n"
+            f"• Груз #{load_id} | Маршрут: {route_str}\n"
+            f"• Отклоненная ставка: {counter_rate}\n"
+            f"{carrier_link}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        except Exception:
+            pass
+
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+        
 async def admin_verify_pass_api(request):
     try:
         data = await request.json()
@@ -3683,6 +3728,7 @@ async def web_server():
     app.router.add_post("/api/submit_profile_changes", submit_profile_changes_api)
     app.router.add_post("/api/book/{id}", book_load_api)
     app.router.add_post("/api/accept_counter", accept_counter_api)
+    app.router.add_post("/api/decline_counter", decline_counter_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
     app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
 
