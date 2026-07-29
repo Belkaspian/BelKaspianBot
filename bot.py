@@ -623,11 +623,11 @@ def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -
 
     if username:
         clean_username = username.lstrip('@')
-        user_link = f'<a href="https://t.me/{clean_username}">@{clean_username}</a>'
+        user_mention = f"@{clean_username}"
     else:
-        user_link = f'<a href="tg://user?id={user_id}">{html.escape(display_name)}</a>'
+        user_mention = f"@{display_name} (ID: {user_id})"
 
-    return f"👤 Перевозчик: {user_link}\n🏢 {html.escape(comp)}, {html.escape(display_name)} {html.escape(phone)}"
+    return f"👤 Перевозчик: {user_mention}\n🏢 {comp}, {display_name} {phone}"
 
 def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment="", is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
@@ -690,11 +690,13 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
 async def send_cargo_to_user(user_id: int, cargo_id: int):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
-    u_status = cursor.fetchone()
-    if u_status and u_status[0] == 'BLOCKED':
+    cursor.execute("SELECT status, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+    if u_row and u_row[0] == 'BLOCKED':
         conn.close()
         return
+
+    is_verified = bool(u_row and u_row[1] == 'VERIFIED')
 
     cursor.execute("SELECT date, route, price, cars_count, details, status, admin_comment FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
@@ -705,6 +707,13 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         
     date_str, route_str, price_str, cars_str, details_text, status, admin_comment = row
     is_closed = (status in ['CLOSED', 'EXPIRED'])
+
+    # Если пользователь не верифицирован — скрываем ставку и информацию о грузе
+    if not is_verified:
+        price_str = "🔒 Скрыто"
+        details_text = ""
+        admin_comment = ""
+
     formatted_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment=admin_comment, is_closed=is_closed)
     
     builder = InlineKeyboardBuilder()
@@ -1998,11 +2007,16 @@ LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
 if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
 
-@dp.channel_post(F.text.startswith("/меню"))
+@dp.channel_post(F.text)
 async def handle_admin_menu_command(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
         return
-        
+
+    text_lower = (message.text or "").strip().lower()
+    # Поддерживаем любые регистры: /меню, /Меню, /menu, /menu@bot_name
+    if not (text_lower.startswith("/меню") or text_lower.startswith("/menu") or text_lower == "меню"):
+        return
+
     menu_text = (
         "⚙️ **Панель управления Админ-канала:**\n\n"
         "• Для моментальной рассылки ВСЕМ пользователям отправьте сообщение с восклицательными знаками, например: `!Внимание! Завтра погрузки с 8:00!`\n"
@@ -2010,9 +2024,14 @@ async def handle_admin_menu_command(message: types.Message):
     )
     builder = InlineKeyboardBuilder()
     web_app_url = f"{RENDER_URL}/webapp"
-    builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", web_app=WebAppInfo(url=web_app_url)))
     
-    await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    # Для сообщений в каналах Telegram разрешает только обычный url вместо web_app
+    builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=web_app_url))
+
+    try:
+        await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Ошибка отправки меню в админ-канал: {e}")
 
 @dp.channel_post(F.text.startswith("!"))
 async def handle_admin_broadcast(message: types.Message):
@@ -2198,7 +2217,10 @@ async def handle_counter_bid_start(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    await callback.message.reply("Укажите встречную ставку и при необходимости количество авто через | (например: `2600 USD | 2` или просто `2600 USD`):", parse_mode="Markdown")
+    await callback.message.reply(
+        "Укажите встречную ставку и количество авто через | или / (например: `2600 USD | 2` или `2600 USD / 1`):",
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("accept_counter_"))
@@ -2333,9 +2355,16 @@ async def handle_verify_edit_start(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
+    # Убираем клавиатуру со старого сообщения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     await callback.message.reply(
         "Введите новые данные пользователя в формате:\n"
-        "`Компания | ФИО Контакта | Телефон`"
+        "`Компания | ФИО Контакта | Телефон`",
+        parse_mode="Markdown"
     )
     await callback.answer()
 
@@ -3307,16 +3336,16 @@ async def book_load_api(request):
         add_notification(user_id, "Груз забронирован", f"Вы забронировали груз {route_str} ({requested_cars} авто, {price_str}).")
         await update_cargo_messages_for_all_users(load_id)
 
-        admin_notification = (
-            f"<b>НОВАЯ СТАВКА ИЗ WEB APP</b>\n\n"
-            f"• Рейс #{load_id} | Маршрут: {html.escape(route_str)}\n"
-            f"• Ставка: {html.escape(proposed_price)} | Авто: {requested_cars}\n\n"
+       admin_notification = (
+            f"**НОВАЯ СТАВКА ИЗ WEB APP**\n\n"
+            f"• Рейс #{load_id} | Маршрут: {route_str}\n"
+            f"• Ставка: {proposed_price} | Авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="HTML")
-        except Exception as e:
-            logging.error(f"Error sending admin bid notification: {e}")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+        except Exception:
+            pass
 
         return web.json_response({"status": "success"})
 
