@@ -255,7 +255,8 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN unload_date TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN is_unloaded INTEGER DEFAULT 0",
         "ALTER TABLE confirmed_deals ADD COLUMN status TEXT DEFAULT 'CONFIRMED'",
-        "ALTER TABLE confirmed_deals ADD COLUMN kaiten_card_id INTEGER"
+        "ALTER TABLE confirmed_deals ADD COLUMN kaiten_card_id INTEGER",
+        "ALTER TABLE confirmed_deals ADD COLUMN full_doc_text TEXT"
     ]
     for migration in migrations:
         try:
@@ -936,10 +937,11 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
         if r_deal:
             deal_id = r_deal[0]
 
-    cursor.execute("""
+   cursor.execute("""
         SELECT cd.kaiten_card_id, cd.route, cd.date, cd.price, cd.last_truck_plate,
                cd.last_trailer_plate, cd.last_driver_name, cd.driver_phone,
-               l.destination_country, u.company, u.name, u.phone
+               l.destination_country, u.company, u.name, u.phone, cd.full_doc_text,
+               cd.docs_status
         FROM confirmed_deals cd
         LEFT JOIN loads l ON cd.load_id = l.load_id
         LEFT JOIN users u ON cd.user_id = u.user_id
@@ -951,59 +953,52 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
     if not row:
         return False, f"Сделка #{deal_id} не найдена в базе данных"
 
-    saved_card_id, route_str, date_str, agreed_price, truck_plate, trailer_plate, driver_name, driver_phone, country_str, company_str, carrier_name, carrier_phone = row
+    saved_card_id, route_str, date_str, agreed_price, truck_plate, trailer_plate, driver_name, driver_phone, country_str, company_str, carrier_name, carrier_phone, full_doc_text, docs_status = row
 
-    card_id = saved_card_id
-    card_title = ""
+    ...
 
-    if not card_id:
-        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
-        card = None
-        debug_text = "Не удалось выполнить поиск карточки"
+    # Определяем нужный тип карточки в зависимости от полноты переданных документов
+    target_type_name = "Данные внесены" if docs_status == "FULL" else "Данные внесены частично"
+    type_id = await get_kaiten_type_id(target_type_name)
 
-        if isinstance(res, (tuple, list)):
-            if len(res) > 0 and isinstance(res[0], dict):
-                card = res[0]
-            if len(res) > 1 and isinstance(res[1], str):
-                debug_text = res[1]
-        elif isinstance(res, dict):
-            card = res
+    patch_payload = {"description": description_text}
+    if type_id:
+        patch_payload["type_id"] = type_id
 
-        if not card or not isinstance(card, dict):
-            return False, debug_text
+    update_res = await kaiten_api_request("PATCH", f"/cards/{card_id}", json_data=patch_payload)
 
-        card_id = card.get("id")
-        card_title = card.get("title", "")
+    # Комментарий к карточке: строго только название компании и ставка на двух строчках
+    carrier_title = company_str.strip() if (company_str and company_str.strip() not in ["Не указана", ""]) else (carrier_name or "Перевозчик")
+    comment_text = f"{carrier_title}\n{agreed_price or ''}".strip()
 
-        if card_id:
-            conn = sqlite3.connect("cargo_bot.db")
-            cursor = conn.cursor()
-            cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (card_id, deal_id))
-            conn.commit()
-            conn.close()
-
-    description_text = (
-        f"Текст заявки / данные ТС:\n"
-        f"Тягач: {truck_plate or 'Не указан'}\n"
-        f"Прицеп: {trailer_plate or 'Не указан'}\n"
-        f"ФИО водителя: {driver_name or 'Не указан'}\n"
-        f"Тел: {driver_phone or 'Не указан'}"
-    )
-
-    update_res = await kaiten_api_request("PATCH", f"/cards/{card_id}", json_data={"description": description_text})
-
-    carrier_company = company_str or "Не указана"
-    carrier_contact = carrier_name or "Перевозчик"
-    carrier_ph = carrier_phone or "Не указан"
-    comment_text = (
-        f"🚛 Данные внесены из Telegram-бота ({admin_user_name or 'Логист'})\n"
-        f"🏢 Перевозчик: {carrier_company} ({carrier_contact}, тел: {carrier_ph})\n"
-        f"💰 Согласованная ставка: {agreed_price}"
-    )
     await kaiten_api_request("POST", f"/cards/{card_id}/comments", json_data={"text": comment_text})
 
     card_url = f"https://{KAITEN_DOMAIN}/card/{card_id}"
     return True, {"card_id": card_id, "url": card_url, "title": card_title}
+
+
+KAITEN_TYPE_CACHE = {}
+
+async def get_kaiten_type_id(type_name_query: str):
+    key = type_name_query.strip().lower()
+    if key in KAITEN_TYPE_CACHE:
+        return KAITEN_TYPE_CACHE[key]
+
+    types_list = await kaiten_api_request("GET", "/card-types")
+    if not types_list or not isinstance(types_list, list):
+        types_list = await kaiten_api_request("GET", "/types")
+
+    if types_list and isinstance(types_list, list):
+        for t in types_list:
+            name = (t.get("name") or t.get("title") or "").strip().lower()
+            t_id = t.get("id")
+            if t_id:
+                KAITEN_TYPE_CACHE[name] = t_id
+                if key in name or name in key:
+                    KAITEN_TYPE_CACHE[key] = t_id
+
+    return KAITEN_TYPE_CACHE.get(key)
+
 
 async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str = ""):
     conn = sqlite3.connect("cargo_bot.db")
@@ -2182,9 +2177,10 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         cursor.execute("""
             UPDATE confirmed_deals 
             SET docs_submitted = 1, docs_status = ?, missing_docs = ?, 
-                last_truck_plate = ?, last_trailer_plate = ?, last_driver_name = ?, driver_phone = ?
+                last_truck_plate = ?, last_trailer_plate = ?, last_driver_name = ?, driver_phone = ?,
+                full_doc_text = ?
             WHERE id = ? AND user_id = ?
-        """, (docs_status, missing_docs_str, new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone, deal_id, user_id))
+        """, (docs_status, missing_docs_str, new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone, ai_formatted_data, deal_id, user_id))
         conn.commit()
         conn.close()
 
@@ -3456,9 +3452,10 @@ async def direct_upload_docs_api(request):
         cursor.execute("""
             UPDATE confirmed_deals 
             SET docs_submitted = 1, docs_status = ?, missing_docs = ?, 
-                last_truck_plate = ?, last_trailer_plate = ?, last_driver_name = ?, driver_phone = ?
+                last_truck_plate = ?, last_trailer_plate = ?, last_driver_name = ?, driver_phone = ?,
+                full_doc_text = ?
             WHERE id = ? AND user_id = ?
-        """, (docs_status, missing_str, new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone, deal_id, user_id))
+        """, (docs_status, missing_docs_str, new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone, ai_formatted_data, deal_id, user_id))
         conn.commit()
         conn.close()
 
