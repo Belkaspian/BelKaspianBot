@@ -780,15 +780,27 @@ def extract_cities_from_route(route_str: str) -> list:
 
 ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
 
+ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
+
 async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
     board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
     
     space_id = board_config["space_id"]
-    cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
+    board_id = board_config["board_id"]
+
+    # Запрашиваем карточки пространства
+    cards = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
+    if not cards or not isinstance(cards, list):
+        cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
+    if not cards or not isinstance(cards, list):
+        cards = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
     
     if not cards or not isinstance(cards, list):
+        logging.error(f"❌ Не удалось получить список карточек из Kaiten для space_id={space_id}")
         return None
+
+    logging.info(f"🔍 Найдено {len(cards)} карточек в Kaiten (space_id={space_id}). Начинаем фильтрацию...")
 
     route_cities = extract_cities_from_route(route_str)
     day_month_match = re.search(r'(\d{1,2})[\./](\d{1,2})', date_str or "")
@@ -798,19 +810,69 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     candidate_cards = []
 
     for card in cards:
-        # 1. Проверяем название колонки
-        col_data = card.get("column")
-        col_title = (col_data.get("title") if isinstance(col_data, dict) else str(col_data or "")).lower().strip()
-
-        # Поиск только среди разрешённых 4 колонок
-        if not any(allowed in col_title for allowed in ALLOWED_KAITEN_COLUMNS):
-            continue
-
         title = (card.get("title") or "").strip()
         
-        # 2. Название начинается строго на "93"
+        # 1. Название карточки должно начинаться на "93"
         if not re.search(r'^\s*93\b', title):
             continue
+
+        # 2. Безопасная проверка колонки (только если она передана объектом с title)
+        col_data = card.get("column")
+        if isinstance(col_data, dict):
+            col_title = (col_data.get("title") or "").lower().strip()
+            if col_title and not any(allowed in col_title for allowed in ALLOWED_KAITEN_COLUMNS):
+                continue
+
+        title_lower = title.lower()
+        score = 0
+
+        # Проверка маршрута (сопоставление городов)
+        matched_cities = 0
+        for city in route_cities:
+            if city in title_lower:
+                score += 4
+                matched_cities += 1
+
+        # Если ни один город маршрута не найден в названии — пропускаем
+        if route_cities and matched_cities == 0:
+            continue
+
+        # Проверка даты из полей due_date / due_datetime или заголовка
+        due_date_str = str(card.get("due_date") or card.get("due_datetime") or card.get("due_date_time") or "")
+        if due_date_str and target_day and target_month:
+            try:
+                m_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', due_date_str)
+                if m_date:
+                    c_month = int(m_date.group(2))
+                    c_day = int(m_date.group(3))
+                    if c_day == target_day and c_month == target_month:
+                        score += 5
+            except Exception:
+                pass
+
+        if target_day and str(target_day) in title_lower:
+            score += 1
+
+        if score > 0:
+            type_name = str(card.get("type", {}).get("name", "")).lower() if isinstance(card.get("type"), dict) else ""
+            description = (card.get("description") or "").strip()
+
+            priority_bonus = 0
+            if "данные не внесены" in type_name or "данные не внесены" in title_lower:
+                priority_bonus += 10
+            if not description or len(description) < 20:
+                priority_bonus += 5
+
+            candidate_cards.append((score + priority_bonus, card))
+
+    if candidate_cards:
+        candidate_cards.sort(key=lambda x: x[0], reverse=True)
+        best_card = candidate_cards[0][1]
+        logging.info(f"✅ Найдена карточка в Kaiten: '{best_card.get('title')}' (ID: {best_card.get('id')})")
+        return best_card
+
+    logging.warning(f"⚠️ Подходящая карточка '93...' для маршрута '{route_str}' и даты '{date_str}' не найдена.")
+    return None
 
         title_lower = title.lower()
         score = 0
