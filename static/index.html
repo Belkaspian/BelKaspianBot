@@ -1476,45 +1476,41 @@
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 120 65" class="empty-illustration">
-                        <g fill="none" fill-rule="evenodd">
-                            <!-- Дорога -->
-                            <line x1="5" y1="58" x2="115" y2="58" stroke="var(--border)" stroke-width="2" stroke-linecap="round" class="animated-road" stroke-dasharray="6 5" />
+                    <svg viewBox="0 0 120 60" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <!-- Линия дороги -->
+                            <line x1="5" y1="52" x2="115" y2="52" stroke="var(--border)" stroke-width="1.5" class="animated-road" stroke-dasharray="6 5" />
 
-                            <!-- Кузов и Кабина -->
+                            <!-- Каркас грузовика -->
                             <g class="animated-truck-body">
-                                <!-- Оранжевый контейнер -->
-                                <rect x="12" y="10" width="62" height="38" fill="#FF9100" />
-                                <rect x="23" y="18" width="35" height="3" rx="1.5" fill="#F57C00" />
-                                <rect x="23" y="24" width="35" height="3" rx="1.5" fill="#F57C00" />
+                                <!-- Контейнер -->
+                                <rect x="12" y="10" width="62" height="36" rx="2" fill="var(--surface-solid)" />
+                                <line x1="22" y1="20" x2="58" y2="20" opacity="0.35" stroke-width="1.2" />
+                                <line x1="22" y1="26" x2="58" y2="26" opacity="0.35" stroke-width="1.2" />
 
-                                <!-- Синяя кабина -->
-                                <path d="M 74,20 L 92,20 C 97,20 101,26 104,33 L 104,48 L 74,48 Z" fill="#006FA6" />
+                                <!-- Кабина -->
+                                <path d="M 74,46 L 74,18 L 92,18 C 97,18 101,24 104,31 L 104,46 Z" fill="var(--surface-solid)" />
                                 <!-- Окна -->
-                                <rect x="76" y="23" width="5" height="10" fill="#5A9EC8" />
-                                <path d="M 83,23 L 90,23 C 94,23 97,27 99,33 L 83,33 Z" fill="#5A9EC8" />
-                                <!-- Ручка двери -->
-                                <rect x="80" y="38" width="4" height="1.5" rx="0.75" fill="#004E78" />
-                                <!-- Фара -->
-                                <rect x="104" y="42" width="1.5" height="5" fill="#FF9100" />
+                                <rect x="77" y="22" width="5" height="10" stroke-width="1.2" opacity="0.6" />
+                                <path d="M 84,22 L 90,22 C 93,22 96,25 98,30 L 84,30 Z" stroke-width="1.2" opacity="0.6" />
+                                <!-- Ручка -->
+                                <line x1="80" y1="36" x2="84" y2="36" stroke-width="1.2" opacity="0.8" />
 
                                 <!-- Серый рама-шасси -->
-                                <rect x="11" y="48" width="94.5" height="5" fill="#546E7A" />
+                                <line x1="10" y1="46" x2="106" y2="46" stroke-width="1.5" />
                             </g>
 
                             <!-- Колеса -->
-                            <g transform="translate(31, 51)">
+                            <g transform="translate(31, 46)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="10" fill="#212121" />
-                                    <circle cx="0" cy="0" r="6.5" fill="#FFFFFF" />
-                                    <circle cx="0" cy="0" r="4" fill="#212121" />
+                                    <circle cx="0" cy="0" r="6.5" fill="var(--surface-solid)" />
+                                    <circle cx="0" cy="0" r="2" fill="var(--primary)" stroke="none" />
                                 </g>
                             </g>
-                            <g transform="translate(88, 51)">
+                            <g transform="translate(88, 46)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="10" fill="#212121" />
-                                    <circle cx="0" cy="0" r="6.5" fill="#FFFFFF" />
-                                    <circle cx="0" cy="0" r="4" fill="#212121" />
+                                    <circle cx="0" cy="0" r="6.5" fill="var(--surface-solid)" />
+                                    <circle cx="0" cy="0" r="2" fill="var(--primary)" stroke="none" />
                                 </g>
                             </g>
                         </g>
@@ -2368,20 +2364,28 @@
             const folderIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
             const chatIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
-            return `
-                <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
-                    <div class="col-date">
-                        <div>${d.date}</div>
-                        ${todayBadgeHTML}
+            let detailsHTML = '';
+
+            if (isPending) {
+                // Если груз на согласовании — выводим только информацию о грузе
+                detailsHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
+                        </div>
                     </div>
-                    <div class="col-route">${routeHTML}</div>
-                    ${truckColHTML}
-                    ${formatPriceHTML(d.price)}
-                    <div class="col-arrow">
-                        <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                    ${statusBoxHTML}
+                    
+                    <div class="info-grid" style="margin-top: 10px;">
+                        <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
+                        <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                        <div class="info-item"><span>Вес / Объем</span><b>${d.weight || '22т'}</b></div>
+                        <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
                     </div>
-                </div>
-                <div class="t-details" id="details-${d.id}">
+                `;
+            } else {
+                // Если груз подтвержден — привычный вид с данными авто и кнопкой подачи документов
+                detailsHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                         <div>
                             ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
@@ -2410,7 +2414,7 @@
                         <div class="info-item"><span>Прицеп</span><b>${d.trailer_plate || 'Не указан'}</b></div>
                     </div>
 
-                    ${!isPending && (mySubTab === 'active' || mySubTab === 'transit') ? `
+                    ${(mySubTab === 'active' || mySubTab === 'transit') ? `
                         <div class="action-buttons-group">
                             <button class="btn ${btnClass} btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
                                 ${folderIcon} ${mainBtnText}
@@ -2436,6 +2440,24 @@
                             </div>
                         </div>
                     ` : ''}
+                `;
+            }
+
+            return `
+                <div class="t-row ${cardStatusClass}" id="row-${d.id}" onclick="toggleRow('${d.id}')">
+                    <div class="col-date">
+                        <div>${d.date}</div>
+                        ${todayBadgeHTML}
+                    </div>
+                    <div class="col-route">${routeHTML}</div>
+                    ${truckColHTML}
+                    ${formatPriceHTML(d.price)}
+                    <div class="col-arrow">
+                        <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                </div>
+                <div class="t-details" id="details-${d.id}">
+                    ${detailsHTML}
                 </div>
             `;
         }
@@ -2572,7 +2594,7 @@
 
                         if (pendingDeals.length > 0) {
                             htmlOutput += `
-                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--warning); text-transform:uppercase; padding:6px 4px 6px 4px;">
+                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--warning); text-transform:uppercase; margin:4px 0 8px 4px;">
                                     <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                                     Грузы находящиеся на согласовании
                                 </div>
@@ -2581,11 +2603,16 @@
                         }
 
                         if (confirmedDeals.length > 0) {
-                            let topMargin = pendingDeals.length > 0 ? 'margin-top: 28px;' : '';
+                            const separatorStyle = pendingDeals.length > 0 
+                                ? 'margin: 20px 0 8px 4px; padding-top: 14px; border-top: 1px dashed var(--border);' 
+                                : 'margin: 4px 0 8px 4px;';
+
                             htmlOutput += `
-                                <div style="${topMargin}">
-                                    ${confirmedDeals.map(d => renderDealRow(d, false)).join('')}
+                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--success); text-transform:uppercase; ${separatorStyle}">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--success);"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                    Подтверждённые грузы
                                 </div>
+                                ${confirmedDeals.map(d => renderDealRow(d, false)).join('')}
                             `;
                         }
 
