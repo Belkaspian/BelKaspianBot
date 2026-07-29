@@ -1007,11 +1007,24 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
     card_title = ""
 
     if not card_id:
-        # Карточка еще не привязана — ищем через API
-        card = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
-        if not card:
-            return False, f"Карточка 93... на дату {date_str} не найдена в Kaiten!"
-        card_id = card["id"]
+        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        
+        card = None
+        debug_text = "Не удалось выполнить поиск карточки"
+
+        # Безопасно разбираем кортеж (карточка, логи)
+        if isinstance(res, (tuple, list)):
+            if len(res) > 0 and isinstance(res[0], dict):
+                card = res[0]
+            if len(res) > 1 and isinstance(res[1], str):
+                debug_text = res[1]
+        elif isinstance(res, dict):
+            card = res
+
+        if not card or not isinstance(card, dict):
+            return False, debug_text
+
+        card_id = card.get("id")
         card_title = card.get("title", "")
 
         # Сохраняем ID карточки в БД для последующих обновлений
