@@ -3339,10 +3339,10 @@ async def my_loads_api(request):
     return web.json_response({"deals": deals})
 
 async def direct_upload_docs_api(request):
+    deal_id = None
+    user_id = 0
     try:
         reader = await request.multipart()
-        deal_id = None
-        user_id = 0
         phone_input = ""
         raw_files = []
 
@@ -3371,6 +3371,7 @@ async def direct_upload_docs_api(request):
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
 
+        # Ставим промежуточный статус считывания
         cursor.execute("UPDATE confirmed_deals SET docs_status = 'PROCESSING' WHERE id = ? AND user_id = ?", (deal_id, user_id))
         conn.commit()
 
@@ -3394,7 +3395,6 @@ async def direct_upload_docs_api(request):
         route_str = deal_row[8] if deal_row else "Маршрут"
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
-        prev_docs_status = deal_row[11] if deal_row else "NONE"
         prev_missing_docs = deal_row[12] if deal_row else ""
 
         user_info = format_carrier_info(user_id)
@@ -3454,8 +3454,8 @@ async def direct_upload_docs_api(request):
         prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
         missing_items = []
 
-        p_num = p_data.get("number")
-        p_exp = p_data.get("expiry_date")
+        p_num = p_data.get("number") if raw_files else None
+        p_exp = p_data.get("expiry_date") if raw_files else None
         if p_num and p_num not in ["Не распознан", ""]:
             if is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
                 missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
@@ -3464,8 +3464,8 @@ async def direct_upload_docs_api(request):
             if not was_previously_submitted or is_passport_missing_prev or new_driver_short_name in ["Не распознан", ""]:
                 missing_items.append("Паспорт водителя")
 
-        l_num = l_data.get("number")
-        l_exp = l_data.get("expiry_date")
+        l_num = l_data.get("number") if raw_files else None
+        l_exp = l_data.get("expiry_date") if raw_files else None
         if l_num and l_num not in ["Не распознан", ""]:
             if is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
                 missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
@@ -3479,7 +3479,7 @@ async def direct_upload_docs_api(request):
         if new_driver_phone in ["Не указан", "", "—"]: missing_items.append("Номер телефона")
 
         docs_status = "FULL" if not missing_items else "PARTIAL"
-        missing_str = ", ".join(missing_items)
+        missing_docs_str = ", ".join(missing_items) # <--- ИСПРАВЛЕНО (было missing_str)
 
         cursor.execute("""
             UPDATE confirmed_deals 
@@ -3500,7 +3500,6 @@ async def direct_upload_docs_api(request):
             f"{ai_formatted_data}"
         )
 
-        # Создаем кнопки для Kaiten c реальным deal_id
         active_deal_id = deal_id or 0
         kaiten_builder = InlineKeyboardBuilder()
         kaiten_builder.row(
@@ -3517,14 +3516,6 @@ async def direct_upload_docs_api(request):
             )
         except Exception as e:
             logging.error(f"Markdown send failed in direct upload: {e}")
-            try:
-                await bot.send_message(
-                    chat_id=DOCS_CHANNEL_ID, 
-                    text=admin_msg.replace('*', ''), 
-                    reply_markup=kaiten_builder.as_markup()
-                )
-            except Exception as ex:
-                logging.error(f"Error sending docs to channel: {ex}")
 
         if raw_files:
             clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
@@ -3540,6 +3531,16 @@ async def direct_upload_docs_api(request):
         return web.json_response({"status": "success", "docs_status": docs_status})
     except Exception as e:
         logging.error(f"Error in direct_upload_docs_api: {e}", exc_info=True)
+        # Откат застрявшего статуса в случае ошибки
+        if deal_id:
+            try:
+                conn = sqlite3.connect("cargo_bot.db")
+                cursor = conn.cursor()
+                cursor.execute("UPDATE confirmed_deals SET docs_status = 'PARTIAL' WHERE id = ? AND docs_status = 'PROCESSING'", (deal_id,))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
         return web.json_response({"error": str(e)}, status=400)
 
 async def set_unload_date_api(request):
