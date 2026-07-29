@@ -2664,6 +2664,7 @@
                 let res = await fetch(`/api/profile?user_id=${userId}&t=` + Date.now());
                 let data = await res.json();
                 if (data.profile) {
+                    let prevStatus = userVerificationStatus;
                     userVerificationStatus = data.profile.verification_status || 'UNVERIFIED';
                     
                     document.getElementById('profCompany').value = data.profile.company || '';
@@ -2678,6 +2679,10 @@
                         let isActive = rawSubs.some(s => s.toLowerCase().includes(val.toLowerCase()) || val.toLowerCase().includes(s.toLowerCase()));
                         chip.classList.toggle('active', isActive);
                     });
+
+                    if (prevStatus !== 'VERIFIED' && userVerificationStatus === 'VERIFIED') {
+                        showToast('Верификация успешно подтверждена!', 'success');
+                    }
                 }
             } catch(e) {}
         }
@@ -2831,7 +2836,11 @@
 
         loadData(false);
         setInterval(() => {
-            if (currentTab === 'catalog' || currentTab === 'my') loadData(true);
+            if (currentTab === 'catalog' || currentTab === 'my') {
+                loadData(true);
+            } else if (currentTab === 'profile') {
+                loadProfile();
+            }
         }, 4000);
     </script>
 </body>
