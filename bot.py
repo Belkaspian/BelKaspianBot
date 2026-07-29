@@ -3284,7 +3284,32 @@ async def direct_upload_docs_api(request):
             f"{user_info}\n\n"
             f"{ai_formatted_data}"
         )
-        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+
+        # Создаем кнопки для Kaiten c реальным deal_id
+        active_deal_id = deal_id or 0
+        kaiten_builder = InlineKeyboardBuilder()
+        kaiten_builder.row(
+            types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{active_deal_id}"),
+            types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{active_deal_id}")
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=DOCS_CHANNEL_ID, 
+                text=admin_msg, 
+                reply_markup=kaiten_builder.as_markup(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Markdown send failed in direct upload: {e}")
+            try:
+                await bot.send_message(
+                    chat_id=DOCS_CHANNEL_ID, 
+                    text=admin_msg.replace('*', ''), 
+                    reply_markup=kaiten_builder.as_markup()
+                )
+            except Exception as ex:
+                logging.error(f"Error sending docs to channel: {ex}")
 
         if raw_files:
             clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
