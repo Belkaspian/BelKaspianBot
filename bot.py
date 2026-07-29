@@ -1963,7 +1963,8 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
                 await bot.send_message(chat_id=chat_id, text=f"• Подтверждено {confirm_cars} авто по ставке {rate}!")
 
     elif action_type == 'VERIFY_EDIT':
-        parts = [p.strip() for p in message_text.split('|')]
+        raw_del = '|' if '|' in message_text else ('/' if '/' in message_text else '|')
+        parts = [p.strip() for p in message_text.split(raw_del)]
         if len(parts) >= 3:
             comp, name, phone = parts[0], parts[1], parts[2]
             cursor.execute("""
@@ -1996,7 +1997,7 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
             await bot.send_message(chat_id=chat_id, text="• Данные профиля успешно обновлены у пользователя!")
         else:
-            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка формата! Используйте разделитель `|`: `Компания | ФИО | Телефон`")
+            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка формата! Используйте разделитель `|` или `/`: `Компания | ФИО | Телефон`")
 
     conn.close()
     return True
@@ -2007,14 +2008,9 @@ LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
 if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
 
-@dp.channel_post(F.text)
+@dp.channel_post(F.text.func(lambda text: text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
-        return
-
-    text_lower = (message.text or "").strip().lower()
-    # Поддерживаем любые регистры: /меню, /Меню, /menu, /menu@bot_name
-    if not (text_lower.startswith("/меню") or text_lower.startswith("/menu") or text_lower == "меню"):
         return
 
     menu_text = (
@@ -2024,15 +2020,13 @@ async def handle_admin_menu_command(message: types.Message):
     )
     builder = InlineKeyboardBuilder()
     web_app_url = f"{RENDER_URL}/webapp"
-    
-    # Для сообщений в каналах Telegram разрешает только обычный url вместо web_app
     builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=web_app_url))
 
     try:
         await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Ошибка отправки меню в админ-канал: {e}")
-
+        
 @dp.channel_post(F.text.startswith("!"))
 async def handle_admin_broadcast(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
