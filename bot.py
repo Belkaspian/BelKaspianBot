@@ -1768,16 +1768,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         new_driver_short_name = extract_surname_and_name(p_full_name)
 
     extracted_phone = (d_data.get("phones") or notes or "").strip()
-    if extracted_phone and extracted_phone not in ["Не указан", ""]:
-        new_driver_phone = normalize_phones(extracted_phone)
-    elif prev_driver_phone:
-        new_driver_phone = normalize_phones(prev_driver_phone)
-    else:
-        new_driver_phone = "Не указан"
-    elif prev_driver_phone:
-        new_driver_phone = prev_driver_phone
-    else:
-        new_driver_phone = "Не указан"
+    phone_source = extracted_phone if (extracted_phone and extracted_phone not in ["Не указан", ""]) else prev_driver_phone
+    new_driver_phone = normalize_phones(phone_source)
 
     prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
     missing_items = []
