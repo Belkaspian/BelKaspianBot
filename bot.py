@@ -3336,14 +3336,15 @@ async def book_load_api(request):
         add_notification(user_id, "Груз забронирован", f"Вы забронировали груз {route_str} ({requested_cars} авто, {price_str}).")
         await update_cargo_messages_for_all_users(load_id)
 
-       admin_notification = (
-            f"**НОВАЯ СТАВКА ИЗ WEB APP**\n\n"
+        admin_notification = (
+            f"**ГРУЗ ЗАБРАН ИЗ WEB APP**\n\n"
             f"• Рейс #{load_id} | Маршрут: {route_str}\n"
-            f"• Ставка: {proposed_price} | Авто: {requested_cars}\n\n"
+            f"• Дата: {date_str}\n"
+            f"• Ставка: {price_str} | Забрано авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
         except Exception:
             pass
 
@@ -3377,7 +3378,7 @@ async def book_load_api(request):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
         except Exception:
             pass
 
