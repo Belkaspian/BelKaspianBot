@@ -1634,6 +1634,7 @@ async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await message.answer("Подача данных отменена.", reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
+@dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
 async def handle_doc_finish(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_id = message.from_user.id
@@ -1657,13 +1658,16 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     prev_trailer_plate = ""
     prev_driver_short_name = ""
     prev_driver_phone = ""
+    prev_docs_status = "NONE"
+    prev_missing_docs = ""
 
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
-                   l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone
+                   l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone,
+                   cd.docs_status, cd.missing_docs
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ?
@@ -1678,6 +1682,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
                 is_polyethylene = True
             prev_trailer_plate = row[6] or ""
             prev_driver_phone = row[7] or ""
+            prev_docs_status = row[8] or "NONE"
+            prev_missing_docs = row[9] or ""
         conn.close()
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene, route_str=route_str)
@@ -1688,17 +1694,18 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
+    # Замена / слияние данных: если в новом файле элемент не распознан, сохраняем старый
     new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
-    if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
+    if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_truck_plate:
         new_truck_plate = prev_truck_plate
 
     new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
-    if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
+    if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_trailer_plate:
         new_trailer_plate = prev_trailer_plate
 
     p_full_name = (p_data.get("full_name") or "").strip()
     if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
-        new_driver_short_name = "Не распознан"
+        new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
     else:
         new_driver_short_name = extract_surname_and_name(p_full_name)
 
@@ -1710,21 +1717,30 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_driver_phone = "Не указан"
 
+    prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
     missing_items = []
 
+    # Проверка паспорта: если в новой загрузке нет файла паспорта, но ранее паспорт был сдан — сохраняем его как правильный
     p_num = p_data.get("number")
     p_exp = p_data.get("expiry_date")
-    if not p_num or p_num in ["Не распознан", ""] or new_driver_short_name == "Не распознан":
-        missing_items.append("Паспорт водителя")
-    elif is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
-        missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+    if p_num and p_num not in ["Не распознан", ""]:
+        if is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
+            missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+    else:
+        is_passport_missing_prev = any("Паспорт водителя" in item for item in prev_missing_list)
+        if not was_previously_submitted or is_passport_missing_prev or new_driver_short_name in ["Не распознан", ""]:
+            missing_items.append("Паспорт водителя")
 
+    # Проверка прав: аналогично сохраняем ранее сданные права
     l_num = l_data.get("number")
     l_exp = l_data.get("expiry_date")
-    if not l_num or l_num in ["Не распознан", ""]:
-        missing_items.append("Водительское удостоверение")
-    elif is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
-        missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+    if l_num and l_num not in ["Не распознан", ""]:
+        if is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
+            missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+    else:
+        is_license_missing_prev = any("Водительское удостоверение" in item for item in prev_missing_list)
+        if not was_previously_submitted or is_license_missing_prev:
+            missing_items.append("Водительское удостоверение")
 
     if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]:
         missing_items.append("Техпаспорт тягача")
@@ -2792,7 +2808,7 @@ async def direct_upload_docs_api(request):
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
                    l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone, 
-                   cd.route, cd.date, cd.price
+                   cd.route, cd.date, cd.price, cd.docs_status, cd.missing_docs
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ? AND cd.user_id = ?
@@ -2809,6 +2825,8 @@ async def direct_upload_docs_api(request):
         route_str = deal_row[8] if deal_row else "Маршрут"
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
+        prev_docs_status = deal_row[11] if deal_row else "NONE"
+        prev_missing_docs = deal_row[12] if deal_row else ""
 
         user_info = format_carrier_info(user_id)
 
@@ -2827,21 +2845,18 @@ async def direct_upload_docs_api(request):
             l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
             new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
-            if new_truck_plate in ["НЕ РАСПОЗНАН", ""] and prev_truck_plate:
+            if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_truck_plate:
                 new_truck_plate = prev_truck_plate
 
             new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
-            if new_trailer_plate in ["НЕ РАСПОЗНАН", ""] and prev_trailer_plate:
+            if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_trailer_plate:
                 new_trailer_plate = prev_trailer_plate
 
             p_full_name = (p_data.get("full_name") or "").strip()
-            if p_num := p_data.get("number"):
-                if p_num != "Не распознан" and p_full_name:
-                    new_driver_short_name = extract_surname_and_name(p_full_name)
-                else:
-                    new_driver_short_name = prev_driver_short_name or "Не распознан"
+            if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+                new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
             else:
-                new_driver_short_name = prev_driver_short_name or "Не распознан"
+                new_driver_short_name = extract_surname_and_name(p_full_name)
 
             extracted_phone = phone_input or (d_data.get("phones") or "").strip()
             new_driver_phone = extracted_phone if (extracted_phone and extracted_phone != "Не указан") else (prev_driver_phone or "Не указан")
@@ -2857,25 +2872,34 @@ async def direct_upload_docs_api(request):
                 f"Прицеп: {new_trailer_plate}\n"
                 f"Водитель: {new_driver_short_name}\n"
                 f"Номера телефонов: {new_driver_phone}\n"
-                f"Паспорт: Документы не загружены\n"
-                f"Водительское: Документы не загружены"
+                f"Паспорт: Сохранен ранее\n"
+                f"Водительское: Сохранено ранее"
             )
 
+        prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
         missing_items = []
 
+        # Проверка паспорта
         p_num = raw_json.get("driver", {}).get("passport", {}).get("number") if raw_json else None
         p_exp = raw_json.get("driver", {}).get("passport", {}).get("expiry_date") if raw_json else None
-        if not p_num or p_num in ["Не распознан", ""] or new_driver_short_name == "Не распознан":
-            missing_items.append("Паспорт водителя")
-        elif is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
-            missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+        if p_num and p_num not in ["Не распознан", ""]:
+            if is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
+                missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+        else:
+            is_passport_missing_prev = any("Паспорт водителя" in item for item in prev_missing_list)
+            if not was_previously_submitted or is_passport_missing_prev or new_driver_short_name in ["Не распознан", ""]:
+                missing_items.append("Паспорт водителя")
 
+        # Проверка прав
         l_num = raw_json.get("driver", {}).get("license", {}).get("number") if raw_json else None
         l_exp = raw_json.get("driver", {}).get("license", {}).get("expiry_date") if raw_json else None
-        if not l_num or l_num in ["Не распознан", ""]:
-            missing_items.append("Водительское удостоверение")
-        elif is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
-            missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+        if l_num and l_num not in ["Не распознан", ""]:
+            if is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
+                missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
+        else:
+            is_license_missing_prev = any("Водительское удостоверение" in item for item in prev_missing_list)
+            if not was_previously_submitted or is_license_missing_prev:
+                missing_items.append("Водительское удостоверение")
 
         if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт тягача")
         if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт прицепа")
