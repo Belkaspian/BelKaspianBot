@@ -317,6 +317,49 @@ def extract_surname_and_name(full_name: str) -> str:
         return f"{parts[0]} {parts[1]}"
     return parts[0] if parts else "Не распознан"
 
+def normalize_single_phone(phone_str: str) -> str:
+    if not phone_str:
+        return ""
+    digits = re.sub(r'\D', '', phone_str)
+    if not digits:
+        return phone_str.strip()
+
+    # Беларусь: 80291234567 -> +375291234567 (11 цифр, начинается с 80)
+    if len(digits) == 11 and digits.startswith('80'):
+        return f"+375{digits[2:]}"
+        
+    # РФ / Казахстан: 89551234567 -> +79551234567 (11 цифр, начинается с 8)
+    if len(digits) == 11 and digits.startswith('8'):
+        return f"+7{digits[1:]}"
+
+    # РФ / Казахстан с цифры 7 без плюса: 79551234567 -> +79551234567
+    if len(digits) == 11 and digits.startswith('7'):
+        return f"+{digits}"
+
+    # Беларусь с 375 без плюса: 375291234567 -> +375291234567
+    if len(digits) == 12 and digits.startswith('375'):
+        return f"+{digits}"
+
+    if phone_str.strip().startswith('+'):
+        return f"+{digits}"
+
+    return phone_str.strip()
+
+def normalize_phones(phone_str: str) -> str:
+    if not phone_str or phone_str.strip().lower() in ["не указан", "не распознан", "—", "-"]:
+        return "Не указан"
+
+    parts = re.split(r'[\/\,\;\n]+', phone_str)
+    normalized = []
+    for p in parts:
+        p_clean = p.strip()
+        if p_clean:
+            norm = normalize_single_phone(p_clean)
+            if norm and norm not in normalized:
+                normalized.append(norm)
+
+    return " / ".join(normalized) if normalized else phone_str.strip()
+
 def get_main_reply_markup(user: Optional[types.User] = None):
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="📱 Вызвать меню"))
@@ -663,15 +706,21 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
     
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
     messages_to_edit = cursor.fetchall()
+
+    # Получаем список пользователей, которые уже подтвердили этот груз
+    cursor.execute("SELECT DISTINCT user_id FROM confirmed_deals WHERE load_id = ?", (cargo_id,))
+    confirmed_users = {c[0] for c in cursor.fetchall()}
     conn.close()
 
     for u_id, msg_id in messages_to_edit:
         try:
-            if is_closed:
+            # Если груз закрыт ИЛИ конкретный пользователь его уже забронировал — убираем кнопки полностью
+            if is_closed or (u_id in confirmed_users):
+                card_text = f"✅ [ГРУЗ ЗАБРОНИРОВАН ВАМИ]\n\n{new_text}" if (u_id in confirmed_users) else new_text
                 await bot.edit_message_text(
                     chat_id=u_id,
                     message_id=msg_id,
-                    text=new_text,
+                    text=card_text,
                     reply_markup=None
                 )
             else:
@@ -824,7 +873,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
         "Если паспорт не загружен или ФИО в паспорте не видно — в поле 'full_name' водителя указывай 'Не распознан'.\n"
         "3. Внимательно извлекай данные из всех страниц присланных PDF-файлов и фотографий.\n"
         "4. Марки ТС: В свидетельствах о регистрации ТС проверяй марку (brand) и модель (model).\n"
-        "5. Номера телефонов: Если указан телефон — внеси его в поле 'phones'.\n"
+        "5. Номера телефонов: Извлекай телефоны. Если номер начинается с 89... меняй на +79..., если с 80... (Беларусь) — меняй на +375... и заноси в поле 'phones'.\n"
         "6. Даты окончания документов: Обязательно извлекай expiry_date (срок действия) для паспорта и водительских прав в формате ДД.ММ.ГГГГ.\n"
         "7. Для каждой страницы укажи 'category' в 'image_roles'."
     )
@@ -1721,7 +1770,11 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
 
     extracted_phone = (d_data.get("phones") or notes or "").strip()
     if extracted_phone and extracted_phone not in ["Не указан", ""]:
-        new_driver_phone = extracted_phone
+        new_driver_phone = normalize_phones(extracted_phone)
+    elif prev_driver_phone:
+        new_driver_phone = normalize_phones(prev_driver_phone)
+    else:
+        new_driver_phone = "Не указан"
     elif prev_driver_phone:
         new_driver_phone = prev_driver_phone
     else:
@@ -1824,7 +1877,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     await state.clear()
     
     if docs_status == "PARTIAL":
-        feedback_msg = f"• Данные переданы, но не полностью. Не хватает:\n• " + "\n• ".join(missing_items)
+        feedback_msg = f"⚠️ Данные переданы, но не полностью. Не хватает:\n• " + "\n• ".join(missing_items)
     else:
         feedback_msg = "• Все данные успешно переданы логисту!"
 
@@ -2528,10 +2581,14 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
     if action_type == "bid":
-        cursor.execute("""
-            INSERT INTO bids (load_id, user_id, cars, rate, comment)
-            VALUES (?, ?, ?, ?, '-')
-        """, (cargo_id, user_id, requested_cars, rate))
+        if requested_cars > current_cars:
+            requested_cars = current_cars
+
+        for _ in range(requested_cars):
+            cursor.execute("""
+                INSERT INTO bids (load_id, user_id, cars, rate, comment)
+                VALUES (?, ?, 1, ?, '-')
+            """, (cargo_id, user_id, rate))
         bid_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -3345,10 +3402,17 @@ async def book_load_api(request):
         return web.json_response({"status": "success"})
 
     elif action == 'bid':
-        cursor.execute("""
-            INSERT INTO bids (load_id, user_id, cars, rate, comment)
-            VALUES (?, ?, ?, ?, ?)
-        """, (load_id, user_id, requested_cars, proposed_price, carrier_comment or 'Своя ставка'))
+        # Ограничиваем количество запрашиваемых машин общим доступным остатком
+        if requested_cars > current_cars:
+            requested_cars = current_cars
+
+        # Добавляем ровно requested_cars записей на согласование (но не более доступных)
+        for _ in range(requested_cars):
+            cursor.execute("""
+                INSERT INTO bids (load_id, user_id, cars, rate, comment)
+                VALUES (?, ?, 1, ?, ?)
+            """, (load_id, user_id, proposed_price, carrier_comment or 'Своя ставка'))
+            
         bid_id = cursor.lastrowid
         conn.commit()
         conn.close()
