@@ -606,6 +606,8 @@ def parse_multiple_cargos(raw_text: str):
         
     return result_texts
 
+import html
+
 def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -> str:
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -621,11 +623,11 @@ def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -
 
     if username:
         clean_username = username.lstrip('@')
-        user_link = f"[@{clean_username}](tg://user?id={user_id})"
+        user_link = f'<a href="https://t.me/{clean_username}">@{clean_username}</a>'
     else:
-        user_link = f"[{display_name}](tg://user?id={user_id})"
+        user_link = f'<a href="tg://user?id={user_id}">{html.escape(display_name)}</a>'
 
-    return f"👤 Перевозчик: {user_link}\n🏢 {comp}, {display_name} {phone}"
+    return f"👤 Перевозчик: {user_link}\n🏢 {html.escape(comp)}, {html.escape(display_name)} {html.escape(phone)}"
 
 def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment="", is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
@@ -1842,19 +1844,40 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
     conn.commit()
 
     if action_type == 'COUNTER':
-        counter_rate = format_custom_rate(message_text.strip())
-        cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (target_id,))
+        input_text = message_text.strip()
+        cars_count = None
+        rate_raw = input_text
+
+        if '|' in input_text:
+            parts = input_text.split('|', 1)
+            rate_raw = parts[0].strip()
+            m_cars = re.search(r'\d+', parts[1])
+            if m_cars:
+                cars_count = int(m_cars.group(0))
+        elif '/' in input_text and not input_text.startswith('/'):
+            parts = input_text.split('/', 1)
+            rate_raw = parts[0].strip()
+            m_cars = re.search(r'\d+', parts[1])
+            if m_cars:
+                cars_count = int(m_cars.group(0))
+
+        counter_rate = format_custom_rate(rate_raw)
+
+        cursor.execute("SELECT load_id, user_id, rate, cars FROM bids WHERE bid_id = ?", (target_id,))
         bid = cursor.fetchone()
         if bid:
-            load_id, user_id, orig_rate = bid
+            load_id, user_id, orig_rate, orig_cars = bid
+            if cars_count is None or cars_count <= 0:
+                cars_count = orig_cars
+
             cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
             l_row = cursor.fetchone()
             route_str = l_row[0] if l_row else "Груз"
 
-            cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ? WHERE bid_id = ?", (counter_rate, target_id))
+            cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ?, cars = ? WHERE bid_id = ?", (counter_rate, cars_count, target_id))
             conn.commit()
 
-            add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} по грузу {route_str}.")
+            add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} на {cars_count} авто по грузу {route_str}.")
 
             counter_builder = InlineKeyboardBuilder()
             counter_builder.row(
@@ -1864,14 +1887,14 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
             try:
                 await bot.send_message(
                     chat_id=user_id, 
-                    text=f"Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваша ставка: {orig_rate}).\n\nПринимаете предложение?",
+                    text=f"Логист предложил встречную ставку **{counter_rate}** ({cars_count} авто) по грузу **{route_str}** (ваша ставка: {orig_rate}).\n\nПринимаете предложение?",
                     reply_markup=counter_builder.as_markup(),
                     parse_mode="Markdown"
                 )
             except Exception:
                 pass
 
-            await bot.send_message(chat_id=chat_id, text=f"• Встречная ставка {counter_rate} отправлена перевозчику!")
+            await bot.send_message(chat_id=chat_id, text=f"• Встречная ставка {counter_rate} ({cars_count} авто) отправлена перевозчику!")
 
     elif action_type == 'PARTIAL':
         m = re.search(r'\d+', message_text.strip())
@@ -2158,7 +2181,7 @@ async def handle_counter_bid_start(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    await callback.message.reply("Укажите встречную ставку для перевозчика (например: `2600 USD`):")
+    await callback.message.reply("Укажите встречную ставку и при необходимости количество авто через | (например: `2600 USD | 2` или просто `2600 USD`):", parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("accept_counter_"))
@@ -3259,15 +3282,15 @@ async def book_load_api(request):
         await update_cargo_messages_for_all_users(load_id)
 
         admin_notification = (
-            f"**ГРУЗ ЗАБРАН ИЗ WEB APP**\n\n"
-            f"• Рейс #{load_id} | Маршрут: {route_str}\n"
-            f"• Дата: {date_str} | Ставка: {price_str} | Забрано: {requested_cars} авто\n\n"
+            f"<b>НОВАЯ СТАВКА ИЗ WEB APP</b>\n\n"
+            f"• Рейс #{load_id} | Маршрут: {html.escape(route_str)}\n"
+            f"• Ставка: {html.escape(proposed_price)} | Авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
-        except Exception:
-            pass
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Error sending admin bid notification: {e}")
 
         return web.json_response({"status": "success"})
 
