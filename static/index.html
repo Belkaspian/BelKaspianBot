@@ -80,6 +80,11 @@
             -webkit-tap-highlight-color: transparent;
         }
 
+        .t-row, .t-details, .info-item, .admin-comment, .cargo-extra-box, .col-route, .col-truck {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+        }
+
         body {
             font-family: var(--font-main);
             background-color: var(--bg);
@@ -658,14 +663,18 @@
             gap: 8px;
         }
         .qty-btn {
-            width: 30px;
-            height: 30px;
+            width: 32px;
+            height: 32px;
+            min-width: 32px;
+            min-height: 32px;
+            aspect-ratio: 1 / 1;
+            flex-shrink: 0;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
             background: var(--bg);
             color: var(--text);
             font-weight: 700;
-            font-size: 15px;
+            font-size: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -682,7 +691,7 @@
             font-weight: 700;
             color: var(--text);
             width: 44px;
-            height: 30px;
+            height: 32px;
             text-align: center;
             background: var(--bg);
             border: 1px solid var(--border);
@@ -749,7 +758,6 @@
             font-weight: 600;
             color: var(--primary);
             cursor: pointer;
-            margin-bottom: 10px;
             transition: var(--spring-transition);
             box-shadow: var(--shadow-sm);
         }
@@ -775,7 +783,6 @@
             border-radius: 6px;
             font-size: 11px;
             font-weight: 700;
-            margin-bottom: 10px;
             box-shadow: var(--shadow-sm);
         }
 
@@ -899,7 +906,6 @@
             font-weight: 600;
         }
 
-        /* Обновленный лаконичный векторный силуэт Газели */
         .empty-state {
             padding: 36px 16px;
             text-align: center;
@@ -987,7 +993,9 @@
             max-width: 420px;
             box-shadow: var(--shadow-lg);
             max-height: 85vh;
-            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
             border: 1px solid var(--border);
         }
 
@@ -996,6 +1004,7 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 14px;
+            flex-shrink: 0;
         }
 
         .modal-title { font-weight: 700; font-size: 14px; color: var(--text); }
@@ -1006,6 +1015,12 @@
             padding: 4px;
             border-radius: 50%;
             display: flex;
+        }
+
+        #notifList {
+            overflow-y: auto;
+            flex: 1;
+            padding-right: 2px;
         }
 
         .notif-item {
@@ -1206,7 +1221,10 @@
 
     <!-- Уведомление о необходимости верификации -->
     <div id="verification-banner" class="missing-docs-box" style="display: none; margin-bottom: 12px; background: var(--card-warning-bg); border-color: var(--card-warning-border); color: var(--warning);">
-        <div style="font-weight: 700; font-size: 12px; margin-bottom: 2px;">⚠️ ТРЕБУЕТСЯ ВЕРИФИКАЦИЯ</div>
+        <div style="font-weight: 700; font-size: 12px; margin-bottom: 2px; display:flex; align-items:center; gap:6px;">
+            <svg class="icon" viewBox="0 0 24 24" style="stroke:var(--warning); width:15px; height:15px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            ТРЕБУЕТСЯ ВЕРИФИКАЦИЯ
+        </div>
         Для получения доступа к ценам, деталям грузов и бронированию необходимо заполнить профиль и пройти верификацию.
     </div>
 
@@ -1222,7 +1240,6 @@
             <div class="loader"><div class="spinner"></div>Загрузка данных...</div>
         </div>
     </div>
-
     <!-- Личный Кабинет -->
     <div id="profile-container" class="page-transition" style="display: none;">
         <div class="profile-card">
@@ -1455,33 +1472,39 @@
         let lastNotifId = 0;
         let userVerificationStatus = 'UNVERIFIED';
 
-        /* Обновленная лаконичная векторная Газель */
+        /* Минималистичный векторный грузовик */
         const emptyStateHTML = `
             <div class="empty-state">
                 <div class="empty-illustration-container">
-                    <svg viewBox="0 0 100 36" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="0" y1="30" x2="100" y2="30" class="animated-road" stroke="var(--border)" stroke-width="1.5" />
+                    <svg viewBox="0 0 120 40" class="empty-illustration">
+                        <g fill="none" stroke="var(--primary)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="5" y1="34" x2="115" y2="34" class="animated-road" stroke="var(--border)" stroke-width="1.5" />
                             
                             <g class="animated-truck-body">
-                                <rect x="16" y="9" width="40" height="17" rx="1.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
-                                <path d="M 56 26 L 56 14 L 66 14 L 76 20 L 76 26 Z" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3" />
-                                <path d="M 65 16 L 73 21 L 65 21 Z" fill="var(--primary-light)" stroke="var(--primary)" stroke-width="0.9" />
-                                <rect x="74" y="23" width="2" height="2" rx="0.5" fill="var(--primary)" />
+                                <rect x="12" y="10" width="56" height="19" rx="2" fill="var(--surface-solid)" />
+                                <line x1="18" y1="15" x2="62" y2="15" stroke="var(--primary)" stroke-width="0.8" opacity="0.4" />
+                                <line x1="18" y1="20" x2="62" y2="20" stroke="var(--primary)" stroke-width="0.8" opacity="0.4" />
+                                <path d="M 68 29 L 68 15 L 82 15 L 94 22 L 94 29 Z" fill="var(--surface-solid)" />
+                                <path d="M 80 17 L 90 22 L 80 22 Z" fill="var(--primary-light)" stroke-width="1" />
+                                <circle cx="92" cy="26" r="1" fill="var(--primary)" stroke="none" />
                             </g>
                             
-                            <g transform="translate(26, 26)">
+                            <g transform="translate(24, 29)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="3.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3"/>
-                                    <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="var(--primary)" stroke-width="0.9" />
-                                    <line x1="0" y1="-2.5" x2="0" y2="2.5" stroke="var(--primary)" stroke-width="0.9" />
+                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
+                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
                                 </g>
                             </g>
-                            <g transform="translate(68, 26)">
+                            <g transform="translate(42, 29)">
                                 <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="3.5" fill="var(--surface-solid)" stroke="var(--primary)" stroke-width="1.3"/>
-                                    <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="var(--primary)" stroke-width="0.9" />
-                                    <line x1="0" y1="-2.5" x2="0" y2="2.5" stroke="var(--primary)" stroke-width="0.9" />
+                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
+                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
+                                </g>
+                            </g>
+                            <g transform="translate(84, 29)">
+                                <g class="animated-wheel">
+                                    <circle cx="0" cy="0" r="4" fill="var(--surface-solid)" />
+                                    <circle cx="0" cy="0" r="1.5" fill="var(--primary)" stroke="none" />
                                 </g>
                             </g>
                         </g>
@@ -2094,7 +2117,7 @@
                 return `<div class="col-price-box"><span class="amount">Торги</span></div>`;
             }
             if (priceStr.includes('Скрыто')) {
-                return `<div class="col-price-box"><span class="amount" style="color:var(--text-muted); font-size:10px;">🔒 Скрыто</span></div>`;
+                return `<div class="col-price-box"><span class="amount" style="color:var(--text-muted); font-size:10px; display:flex; align-items:center; gap:3px;"><svg class="icon" viewBox="0 0 24 24" style="width:11px; height:11px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Скрыто</span></div>`;
             }
             let clean = priceStr.trim();
             let parts = clean.split(/\s+/);
@@ -2167,6 +2190,28 @@
             document.getElementById('bidModal').classList.add('active');
         }
 
+        async function acceptCounterOffer(bidId, event) {
+            if (event) event.stopPropagation();
+            askConfirm('Принять встречную ставку логиста?', async (confirmed) => {
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/accept_counter', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ bid_id: parseInt(bidId), user_id: getUserId() })
+                        });
+                        if (res.ok) {
+                            showToast('Встречная ставка принята!', 'success');
+                            loadData(false);
+                        } else {
+                            let err = await res.json();
+                            showToast(err.error || 'Ошибка', 'error');
+                        }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
+            });
+        }
+
         async function submitModalBid() {
             let price = document.getElementById('modalPrice').value.trim();
             let comment = document.getElementById('modalComment').value.trim();
@@ -2188,7 +2233,7 @@
 
         function buildTruckColHTML(d) {
             if (d.docs_status === 'PROCESSING') {
-                return `<div class="col-truck"><span style="color:var(--primary); font-size:10px; font-weight:700; white-space:nowrap;">⏳ считывание</span></div>`;
+                return `<div class="col-truck"><span style="color:var(--primary); font-size:10px; font-weight:700; white-space:nowrap; display:inline-flex; align-items:center; gap:3px;"><svg class="icon spinner" viewBox="0 0 24 24" style="width:11px; height:11px;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="10"/></svg>считывание</span></div>`;
             }
 
             let hasTruck = isValidPlate(d.truck_plate);
@@ -2270,13 +2315,22 @@
 
             let statusBoxHTML = "";
             if (isPending) {
-                let msg = d.status === 'COUNTER' 
-                    ? `<b>ВСТРЕЧНОЕ ПРЕДЛОЖЕНИЕ ЛОГИСТА</b><br>Предложенная ставка: <b>${d.price}</b>. Проверьте личные сообщения бота для ответа.`
+                let isCounter = (d.status === 'COUNTER');
+                let msg = isCounter 
+                    ? `<b>ВСТРЕЧНОЕ ПРЕДЛОЖЕНИЕ ЛОГИСТА</b><br>Предложенная ставка: <b>${d.price}</b>`
                     : `<b>ЗАЯВКА НА СОГЛАСОВАНИИ</b><br>Предложенная ставка: <b>${d.price}</b>. Ожидается подтверждение логиста. Подача документов станет доступна после утверждения.`;
+
+                let counterBtnHTML = isCounter ? `
+                    <button class="btn btn-success" style="margin-top:8px; width:100%; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:6px;" onclick="acceptCounterOffer('${d.bid_id || d.id}', event)">
+                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><polyline points="20 6 9 17 4 12"/></svg>
+                        Принять встречную ставку (${d.price})
+                    </button>
+                ` : '';
 
                 statusBoxHTML = `
                     <div class="missing-docs-box" style="background:var(--card-warning-bg); color:var(--warning); border-color:var(--card-warning-border); margin-bottom:10px;">
                         ${msg}
+                        ${counterBtnHTML}
                     </div>
                 `;
             }
@@ -2298,16 +2352,17 @@
                     </div>
                 </div>
                 <div class="t-details" id="details-${d.id}">
-                    ${d.is_today ? `<span class="badge badge-today">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                    ${statusBoxHTML}
-                    ${formattedMissingDocs}
-
-                    <div>
-                        <button class="info-toggle-btn" onclick="toggleCargoExtraInfo('${d.id}', event)">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
+                        </div>
+                        <button class="info-toggle-btn" style="margin-bottom:0;" onclick="toggleCargoExtraInfo('${d.id}', event)">
                             <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                             <span>Информация о грузе</span>
                         </button>
                     </div>
+                    ${statusBoxHTML}
+                    ${formattedMissingDocs}
 
                     <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none;">
                         <div class="info-grid" style="margin-bottom:0;">
@@ -2344,7 +2399,7 @@
                         <div class="form-group" style="margin-top: 10px;">
                             <label>Дата выгрузки</label>
                             <div style="display: flex; gap: 6px;">
-                                <input type="date" id="unload-date-${d.deal_id || d.id}" value="${d.unload_date || ''}" />
+                                <input type="text" id="unload-date-${d.deal_id || d.id}" placeholder="ДД.ММ" value="${(d.unload_date || '').replace(/\.\d{4}$/, '').replace(/^\d{4}-/, '')}" style="max-width: 120px;" />
                                 <button class="btn btn-success" style="width: auto;" onclick="setUnloadDate('${d.deal_id || d.id}', event)">
                                     Сохранить
                                 </button>
@@ -2403,8 +2458,9 @@
                                 <button class="btn btn-warning" onclick="openOfferModalInline(${l.id}, event)">Своя цена</button>
                             </div>
                         ` : `
-                            <button class="btn btn-secondary" style="width:100%; font-weight:700;" onclick="switchTab('profile')">
-                                🔒 Пройти верификацию для бронирования
+                            <button class="btn btn-secondary" style="width:100%; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:6px;" onclick="switchTab('profile')">
+                                <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                Пройти верификацию для бронирования
                             </button>
                         `;
 
@@ -2428,9 +2484,12 @@
                                 <div class="info-item"><span>Доступно</span><b>${l.cars} авто</b></div>
                             </div>
 
-                            <div class="admin-comment">
-                                <b>💬 Комментарий логиста:</b> ${l.admin_comment ? l.admin_comment : (isVerified ? 'Комментарий отсутствует' : '🔒 Доступно после верификации')}
-                            </div>
+                            ${l.admin_comment ? `
+                                <div class="admin-comment">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px; margin-right:4px; vertical-align:-2px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                    <b>Комментарий логиста:</b> ${l.admin_comment}
+                                </div>
+                            ` : ''}
 
                             ${isVerified ? `
                                 <div class="qty-selector-container">
@@ -2479,52 +2538,10 @@
                         const pendingDeals = sortedDeals.filter(d => d.status === 'PENDING' || d.status === 'COUNTER');
                         const confirmedDeals = sortedDeals.filter(d => d.status !== 'PENDING' && d.status !== 'COUNTER');
 
-                        let htmlOutput = '';
-
-                        if (pendingDeals.length > 0) {
-                            htmlOutput += `
-                                <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--warning); text-transform:uppercase; margin:4px 0 8px 4px;">
-                                    <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                    Заявки на согласовании (${pendingDeals.length})
-                                </div>
-                                <div class="table-container" style="margin-bottom: 16px;">
-                                    <div class="t-head">
-                                        <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Статус</div><div style="text-align: right;">Ставка</div><div></div>
-                                    </div>
-                                    ${pendingDeals.map(d => renderDealRow(d, true)).join('')}
-                                </div>
-                            `;
-                        }
-
-                        if (confirmedDeals.length > 0 || pendingDeals.length === 0) {
-                            if (pendingDeals.length > 0) {
-                                htmlOutput += `
-                                    <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--success); text-transform:uppercase; margin:8px 0 8px 4px;">
-                                        <svg class="icon" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                                        Подтверждённые грузы (${confirmedDeals.length})
-                                    </div>
-                                `;
-                            }
-                            htmlOutput += `
-                                <div class="table-container">
-                                    <div class="t-head">
-                                        <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Номер ТС</div><div style="text-align: right;">Ставка</div><div></div>
-                                    </div>
-                                    ${confirmedDeals.map(d => renderDealRow(d, false)).join('')}
-                                </div>
-                            `;
-                        }
-
-                        tbody.innerHTML = htmlOutput;
+                        tbody.innerHTML = pendingDeals.map(d => renderDealRow(d, true)).join('') + 
+                                         confirmedDeals.map(d => renderDealRow(d, false)).join('');
                     } else {
-                        tbody.innerHTML = `
-                            <div class="table-container">
-                                <div class="t-head">
-                                    <div>Дата</div><div>Маршрут</div><div style="text-align: center;">Номер ТС</div><div style="text-align: right;">Ставка</div><div></div>
-                                </div>
-                                ${sortedDeals.map(d => renderDealRow(d, false)).join('')}
-                            </div>
-                        `;
+                        tbody.innerHTML = sortedDeals.map(d => renderDealRow(d, false)).join('');
                     }
                 }
             } catch(e) {
@@ -2601,14 +2618,20 @@
                 badge.textContent = 'ВЕРИФИЦИРОВАН';
                 if (banner) banner.style.display = 'none';
 
-                let hasPending = Boolean(profile.pending_company || profile.pending_name || profile.pending_phone);
+                let hasPending = Boolean(
+                    (profile.pending_company || profile.pending_name || profile.pending_phone) &&
+                    (profile.pending_company !== profile.company || profile.pending_name !== profile.name || profile.pending_phone !== profile.phone)
+                );
+
                 actionArea.innerHTML = hasPending ? `
-                    <div style="font-size:11px; color:var(--warning); font-weight:600; text-align:center;">
-                        ⏳ Изменения профиля находятся на рассмотрении логиста
+                    <div style="font-size:11px; color:var(--warning); font-weight:600; text-align:center; display:flex; align-items:center; justify-content:center; gap:6px;">
+                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Изменения профиля находятся на рассмотрении логиста
                     </div>
                 ` : `
-                    <button class="btn btn-secondary" style="width:100%;" onclick="submitProfileChanges()">
-                        📩 Отправить изменения на рассмотрение
+                    <button class="btn btn-secondary" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:6px;" onclick="submitProfileChanges()">
+                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        Отправить изменения на рассмотрение
                     </button>
                 `;
             } else if (userVerificationStatus === 'PENDING') {
@@ -2620,8 +2643,9 @@
                 if (banner) banner.style.display = 'block';
 
                 actionArea.innerHTML = `
-                    <div style="font-size:11px; color:var(--warning); font-weight:600; text-align:center;">
-                        ⏳ Ваша заявка на верификацию находится на рассмотрении
+                    <div style="font-size:11px; color:var(--warning); font-weight:600; text-align:center; display:flex; align-items:center; justify-content:center; gap:6px;">
+                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--warning);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Ваша заявка на верификацию находится на рассмотрении
                     </div>
                 `;
             } else {
@@ -2633,8 +2657,9 @@
                 if (banner) banner.style.display = 'block';
 
                 actionArea.innerHTML = `
-                    <button class="btn btn-success" style="width:100%; font-weight:700;" onclick="requestVerification()">
-                        🛡️ Пройти верификацию
+                    <button class="btn btn-success" style="width:100%; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:6px;" onclick="requestVerification()">
+                        <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        Пройти верификацию
                     </button>
                 `;
             }
