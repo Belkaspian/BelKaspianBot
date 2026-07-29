@@ -254,7 +254,8 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN driver_phone TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN unload_date TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN is_unloaded INTEGER DEFAULT 0",
-        "ALTER TABLE confirmed_deals ADD COLUMN status TEXT DEFAULT 'CONFIRMED'"
+        "ALTER TABLE confirmed_deals ADD COLUMN status TEXT DEFAULT 'CONFIRMED'",
+        "ALTER TABLE confirmed_deals ADD COLUMN kaiten_card_id INTEGER"
     ]
     for migration in migrations:
         try:
@@ -735,6 +736,177 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                 )
         except Exception:
             pass
+
+KAITEN_DOMAIN = os.getenv("KAITEN_DOMAIN", "belkaspian.kaiten.ru")
+KAITEN_API_KEY = os.getenv("KAITEN_API_KEY", "")
+
+# Настройки досок
+KAITEN_BOARDS = {
+    "UZBEKISTAN": {"space_id": 589979, "board_id": 1341041},
+    "ASIA_CAUCASUS": {"space_id": 326566, "board_id": 764621}
+}
+
+async def kaiten_api_request(method: str, endpoint: str, json_data: dict = None, params: dict = None):
+    if not KAITEN_API_KEY:
+        logging.warning("⚠️ KAITEN_API_KEY не установлен!")
+        return None
+
+    url = f"https://{KAITEN_DOMAIN}/api/v1{endpoint}"
+    headers = {
+        "Authorization": f"Bearer {KAITEN_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method, url, headers=headers, json=json_data, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status in [200, 201]:
+                    return await resp.json()
+                else:
+                    err_text = await resp.text()
+                    logging.error(f"❌ Kaiten API error ({resp.status}): {err_text}")
+                    return None
+    except Exception as e:
+        logging.error(f"❌ Kaiten connection error: {e}")
+        return None
+
+def extract_cities_from_route(route_str: str) -> list:
+    if not route_str:
+        return []
+    parts = re.split(r'→|-|—|\/|\\', route_str)
+    return [p.strip().lower() for p in parts if len(p.strip()) >= 3]
+
+async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
+    is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
+    board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
+    
+    space_id = board_config["space_id"]
+    cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
+    
+    if not cards or not isinstance(cards, list):
+        return None
+
+    route_cities = extract_cities_from_route(route_str)
+    day_month_match = re.search(r'(\d{1,2})[\./](\d{1,2})', date_str or "")
+    target_day = int(day_month_match.group(1)) if day_month_match else None
+    target_month = int(day_month_match.group(2)) if day_month_match else None
+
+    candidate_cards = []
+
+    for card in cards:
+        title = (card.get("title") or "").strip()
+        
+        # Правило 1: Название начинается строго на "93"
+        if not re.search(r'^\s*93\b', title):
+            continue
+
+        title_lower = title.lower()
+        score = 0
+
+        # Проверка маршрута (города)
+        for city in route_cities:
+            if city in title_lower:
+                score += 3
+
+        # Проверка даты
+        due_date_str = card.get("due_date") or ""
+        if due_date_str and target_day and target_month:
+            try:
+                # Kaiten due_date в формате ISO YYYY-MM-DD
+                card_dt = datetime.strptime(due_date_str[:10], "%Y-%m-%d")
+                if card_dt.day == target_day and card_dt.month == target_month:
+                    score += 5
+            except Exception:
+                pass
+
+        if target_day and str(target_day) in title_lower:
+            score += 1
+
+        if score > 0:
+            # Приоритет карточкам с типом "Данные не внесены" или пустым описанием
+            type_name = str(card.get("type", {}).get("name", "")).lower() if isinstance(card.get("type"), dict) else ""
+            description = (card.get("description") or "").strip()
+
+            priority_bonus = 0
+            if "данные не внесены" in type_name or "данные не внесены" in title_lower:
+                priority_bonus += 10
+            if not description or len(description) < 20:
+                priority_bonus += 5
+
+            candidate_cards.append((score + priority_bonus, card))
+
+    if candidate_cards:
+        candidate_cards.sort(key=lambda x: x[0], reverse=True)
+        return candidate_cards[0][1]
+
+    return None
+
+async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str = ""):
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cd.kaiten_card_id, cd.route, cd.date, cd.price, cd.last_truck_plate,
+               cd.last_trailer_plate, cd.last_driver_name, cd.driver_phone,
+               l.destination_country, u.company, u.name, u.phone
+        FROM confirmed_deals cd
+        LEFT JOIN loads l ON cd.load_id = l.load_id
+        LEFT JOIN users u ON cd.user_id = u.user_id
+        WHERE cd.id = ?
+    """, (deal_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return False, "Сделка не найдена в базе данных"
+
+    saved_card_id, route_str, date_str, agreed_price, truck_plate, trailer_plate, driver_name, driver_phone, country_str, company_str, carrier_name, carrier_phone = row
+
+    card_id = saved_card_id
+    card_title = ""
+
+    if not card_id:
+        # Карточка еще не привязана — ищем через API
+        card = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        if not card:
+            return False, f"Карточка 93... на дату {date_str} не найдена в Kaiten!"
+        card_id = card["id"]
+        card_title = card.get("title", "")
+
+        # Сохраняем ID карточки в БД для последующих обновлений
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (card_id, deal_id))
+        conn.commit()
+        conn.close()
+
+    # Формируем текст описания карточки
+    description_text = (
+        f"Текст заявки / данные ТС:\n"
+        f"Тягач: {truck_plate or 'Не указан'}\n"
+        f"Прицеп: {trailer_plate or 'Не указан'}\n"
+        f"ФИО водителя: {driver_name or 'Не указан'}\n"
+        f"Тел: {driver_phone or 'Не указан'}"
+    )
+
+    # 1. Обновляем описание карточки
+    update_res = await kaiten_api_request("PATCH", f"/cards/{card_id}", json_data={"description": description_text})
+
+    # 2. Пишем комментарий с информацией о перевозчике и ставке
+    carrier_company = company_str or "Не указана"
+    carrier_contact = carrier_name or "Перевозчик"
+    carrier_ph = carrier_phone or "Не указан"
+    comment_text = (
+        f"🚛 Данные внесены из Telegram-бота ({admin_user_name or 'Логист'})\n"
+        f"🏢 Перевозчик: {carrier_company} ({carrier_contact}, тел: {carrier_ph})\n"
+        f"💰 Согласованная ставка: {agreed_price}"
+    )
+    await kaiten_api_request("POST", f"/cards/{card_id}/comments", json_data={"text": comment_text})
+
+    card_url = f"https://{KAITEN_DOMAIN}/card/{card_id}"
+    return True, {"card_id": card_id, "url": card_url, "title": card_title}
+
 
 async def send_cargo_to_user(user_id: int, cargo_id: int):
     conn = sqlite3.connect("cargo_bot.db")
@@ -1638,7 +1810,20 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
     )
 
     try:
-        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+        # Формируем кнопки для подачи данных в Kaiten
+        kaiten_builder = InlineKeyboardBuilder()
+        if deal_id:
+            kaiten_builder.row(
+                types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+                types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+            )
+
+        await bot.send_message(
+            chat_id=DOCS_CHANNEL_ID, 
+            text=admin_msg, 
+            reply_markup=kaiten_builder.as_markup() if deal_id else None,
+            parse_mode="Markdown"
+        )
 
         if documents:
             sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
@@ -1846,7 +2031,20 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     file_caption = f"{date_str} {route_str}"
 
     try:
-        await bot.send_message(chat_id=DOCS_CHANNEL_ID, text=admin_msg, parse_mode="Markdown")
+        # Формируем кнопки для подачи данных в Kaiten
+        kaiten_builder = InlineKeyboardBuilder()
+        if deal_id:
+            kaiten_builder.row(
+                types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+                types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+            )
+
+        await bot.send_message(
+            chat_id=DOCS_CHANNEL_ID, 
+            text=admin_msg, 
+            reply_markup=kaiten_builder.as_markup() if deal_id else None,
+            parse_mode="Markdown"
+        )
 
         if documents:
             sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
@@ -2640,7 +2838,62 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         
     await state.clear()
     await message.answer(f"{warning_text}Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
-    # ==================== WEB APP БЭКЕНД И REST API ====================
+    
+
+@dp.callback_query(F.data.startswith("kaiten_push_"))
+async def handle_kaiten_push_callback(callback: types.CallbackQuery):
+    deal_id = int(callback.data.replace("kaiten_push_", ""))
+    admin_name = callback.from_user.full_name or callback.from_user.username or "Логист"
+
+    # Временно обновляем статус на кнопке
+    try:
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardBuilder().row(
+            types.InlineKeyboardButton(text="⏳ Внесение в Kaiten...", callback_data="none")
+        ).as_markup())
+    except Exception:
+        pass
+
+    success, result = await push_data_to_kaiten(deal_id, callback.from_user.id, admin_user_name=admin_name)
+
+    if success:
+        card_id = result["card_id"]
+        card_url = result["url"]
+        status_text = f"\n\n✅ **Внесено в Kaiten:** [{card_id}]({card_url}) (логист: @{callback.from_user.username or admin_name})"
+        
+        await callback.message.edit_text(
+            callback.message.text + status_text,
+            reply_markup=None,
+            parse_mode="Markdown"
+        )
+        await callback.answer("Данные успешно внесены в Kaiten!", show_alert=True)
+    else:
+        # Если не удалось найти карточку — возвращаем кнопки назад
+        err_msg = result if isinstance(result, str) else "Ошибка работы с Kaiten"
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+            types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+        except Exception:
+            pass
+            
+        await callback.answer(f"⚠️ {err_msg}", show_alert=True)
+
+@dp.callback_query(F.data.startswith("kaiten_skip_"))
+async def handle_kaiten_skip_callback(callback: types.CallbackQuery):
+    admin_name = callback.from_user.username or callback.from_user.full_name or "Логист"
+    skip_text = f"\n\n⏭ **Пропущено логистом** (@{admin_name})"
+
+    await callback.message.edit_text(
+        callback.message.text + skip_text,
+        reply_markup=None,
+        parse_mode="Markdown"
+    )
+    await callback.answer("Заявка пропущена")
+
+# ==================== WEB APP БЭКЕНД И REST API ====================
 
 async def get_loads_api(request):
     country = request.query.get('country')
