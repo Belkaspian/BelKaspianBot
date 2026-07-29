@@ -1478,29 +1478,17 @@
                 <div class="empty-illustration-container">
                     <svg viewBox="0 0 120 60" class="empty-illustration">
                         <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <!-- Линия дороги -->
                             <line x1="5" y1="52" x2="115" y2="52" stroke="var(--border)" stroke-width="1.5" class="animated-road" stroke-dasharray="6 5" />
-
-                            <!-- Каркас грузовика -->
                             <g class="animated-truck-body">
-                                <!-- Контейнер -->
                                 <rect x="12" y="10" width="62" height="36" rx="2" fill="var(--surface-solid)" />
                                 <line x1="22" y1="20" x2="58" y2="20" opacity="0.35" stroke-width="1.2" />
                                 <line x1="22" y1="26" x2="58" y2="26" opacity="0.35" stroke-width="1.2" />
-
-                                <!-- Кабина -->
                                 <path d="M 74,46 L 74,18 L 92,18 C 97,18 101,24 104,31 L 104,46 Z" fill="var(--surface-solid)" />
-                                <!-- Окна -->
                                 <rect x="77" y="22" width="5" height="10" stroke-width="1.2" opacity="0.6" />
                                 <path d="M 84,22 L 90,22 C 93,22 96,25 98,30 L 84,30 Z" stroke-width="1.2" opacity="0.6" />
-                                <!-- Ручка -->
                                 <line x1="80" y1="36" x2="84" y2="36" stroke-width="1.2" opacity="0.8" />
-
-                                <!-- Серый рама-шасси -->
                                 <line x1="10" y1="46" x2="106" y2="46" stroke-width="1.5" />
                             </g>
-
-                            <!-- Колеса -->
                             <g transform="translate(31, 46)">
                                 <g class="animated-wheel">
                                     <circle cx="0" cy="0" r="6.5" fill="var(--surface-solid)" />
@@ -1613,22 +1601,18 @@
             }
         }
 
-        /* Лимит всплывающих тостов — максимум 3 штуки */
         function showToast(message, type = 'info', duration = 1500) {
             const container = document.getElementById('toastContainer');
+            if (!container) return;
             const toast = document.createElement('div');
             toast.className = 'toast';
             toast.innerHTML = `<span>${message}</span>`;
-            
             toast.style.pointerEvents = 'auto';
             toast.onclick = () => toast.remove();
-
             container.appendChild(toast);
-
             while (container.children.length > 3) {
                 container.firstElementChild.remove();
             }
-
             setTimeout(() => {
                 toast.classList.add('hide');
                 setTimeout(() => toast.remove(), 260);
@@ -1636,7 +1620,8 @@
         }
 
         function closeModal(id) {
-            document.getElementById(id).classList.remove('active');
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('active');
         }
 
         function askConfirm(text, callback) {
@@ -1670,7 +1655,6 @@
         async function submitAdminPassword() {
             let pass = document.getElementById('adminPassInput').value.trim();
             if (!pass) return;
-
             try {
                 let res = await fetch('/api/admin/verify_pass', {
                     method: 'POST',
@@ -1700,9 +1684,7 @@
             document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
             document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
-
             document.getElementById('admin-sort-search-container').style.display = 'flex';
-
             if (tab === 'carriers') loadAdminCarriers();
             else if (tab === 'exchange') loadAdminLoads();
             else if (tab === 'confirmed') loadAdminConfirmedDeals();
@@ -1729,16 +1711,13 @@
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let list = [...allAdminCarriersArray];
-
             if (searchQuery) {
                 list = list.filter(c => `${c.company} ${c.name} ${c.phone} ${c.user_id}`.toLowerCase().includes(searchQuery));
             }
-
             if (list.length === 0) {
                 body.innerHTML = '<div class="loader">Перевозчики не найдены</div>';
                 return;
             }
-
             body.innerHTML = list.map(c => `
                 <div class="notif-item">
                     <div class="notif-title">${c.company} | ${c.name}</div>
@@ -1775,16 +1754,13 @@
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let list = [...allAdminLoadsArray];
-
             if (searchQuery) {
                 list = list.filter(l => `${l.route} ${l.date} ${l.price}`.toLowerCase().includes(searchQuery));
             }
-
             if (list.length === 0) {
                 body.innerHTML = '<div class="loader">Грузы не найдены</div>';
                 return;
             }
-
             body.innerHTML = list.map(l => `
                 <div class="notif-item">
                     <div class="notif-title">${l.date} | ${l.route} (${l.price})</div>
@@ -1838,16 +1814,13 @@
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let filtered = allAdminDeals;
-
             if (searchQuery) {
                 filtered = filtered.filter(d => `${d.deal_id} ${d.route} ${d.company} ${d.name}`.toLowerCase().includes(searchQuery));
             }
-
             if (filtered.length === 0) {
                 body.innerHTML = '<div class="loader">Сделок не найдено</div>';
                 return;
             }
-
             body.innerHTML = filtered.map(d => `
                 <div class="notif-item">
                     <div class="notif-title">Сделка #${d.deal_id} | ${d.route}</div>
@@ -2204,7 +2177,22 @@
         async function acceptCounterOffer(bidId, event) {
             if (event) event.stopPropagation();
             askConfirm('Принять встречную ставку логиста?', async (confirmed) => {
-                ...
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/accept_counter', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ bid_id: parseInt(String(bidId).replace(/\D/g, '')), user_id: getUserId() })
+                        });
+                        if (res.ok) {
+                            showToast('Встречная ставка принята!', 'success');
+                            loadData(false);
+                        } else {
+                            let err = await res.json();
+                            showToast(err.error || 'Ошибка', 'error');
+                        }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
             });
         }
 
@@ -2216,7 +2204,7 @@
                         let res = await fetch('/api/decline_counter', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ bid_id: bidId, user_id: getUserId() })
+                            body: JSON.stringify({ bid_id: parseInt(String(bidId).replace(/\D/g, '')), user_id: getUserId() })
                         });
                         if (res.ok) {
                             showToast('Встречная ставка отклонена', 'info');
@@ -2295,7 +2283,6 @@
             }
         }
 
-
         function formatIsoDate(str) {
             if (!str) return '';
             str = str.trim();
@@ -2309,7 +2296,7 @@
             }
             return '';
         }
-        
+
         function renderDealRow(d, isPending) {
             let cardStatusClass = '';
             if (isPending) cardStatusClass = 'card-status-partial';
@@ -2380,7 +2367,6 @@
             let detailsHTML = '';
 
             if (isPending) {
-                // Если груз на согласовании — выводим только информацию о грузе
                 detailsHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                         <div>
@@ -2397,7 +2383,6 @@
                     </div>
                 `;
             } else {
-                // Если груз подтвержден — привычный вид с данными авто и кнопкой подачи документов
                 detailsHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                         <div>
@@ -2616,7 +2601,6 @@
                         }
 
                         if (confirmedDeals.length > 0) {
-                            // Заголовок "Подтверждённые грузы" выводится только если выше есть грузы на согласовании
                             const confirmedHeaderHTML = pendingDeals.length > 0 ? `
                                 <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--success); text-transform:uppercase; margin: 20px 0 8px 4px; padding-top: 14px; border-top: 1px dashed var(--border);">
                                     <svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px; stroke:var(--success);"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
@@ -2681,9 +2665,13 @@
                     let prevStatus = userVerificationStatus;
                     userVerificationStatus = data.profile.verification_status || 'UNVERIFIED';
                     
-                    document.getElementById('profCompany').value = data.profile.company || '';
-                    document.getElementById('profName').value = data.profile.name || '';
-                    document.getElementById('profPhone').value = data.profile.phone || '';
+                    const compEl = document.getElementById('profCompany');
+                    const nameEl = document.getElementById('profName');
+                    const phoneEl = document.getElementById('profPhone');
+
+                    if (document.activeElement !== compEl) compEl.value = data.profile.company || '';
+                    if (document.activeElement !== nameEl) nameEl.value = data.profile.name || '';
+                    if (document.activeElement !== phoneEl) phoneEl.value = data.profile.phone || '';
                     
                     renderVerificationControls(data.profile);
 
@@ -2695,7 +2683,7 @@
                     });
 
                     if (prevStatus !== 'VERIFIED' && userVerificationStatus === 'VERIFIED') {
-                        showToast('Верификация успешно подтверждена!', 'success');
+                        showToast('Верификация подтверждена!', 'success');
                     }
                 }
             } catch(e) {}
@@ -2850,7 +2838,7 @@
 
         loadData(false);
         setInterval(() => {
-            checkNotifications(); // Автоматическая проверка колокольчика каждые 4 секунды вне зависимости от вкладки
+            checkNotifications();
             if (currentTab === 'catalog' || currentTab === 'my') {
                 loadData(true);
             } else if (currentTab === 'profile') {
