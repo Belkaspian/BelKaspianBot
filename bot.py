@@ -780,8 +780,6 @@ def extract_cities_from_route(route_str: str) -> list:
 
 ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
 
-ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
-
 async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
     board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
@@ -789,7 +787,6 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     space_id = board_config["space_id"]
     board_id = board_config["board_id"]
 
-    # Запрашиваем карточки пространства
     cards = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
     if not cards or not isinstance(cards, list):
         cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
@@ -872,47 +869,6 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         return best_card
 
     logging.warning(f"⚠️ Подходящая карточка '93...' для маршрута '{route_str}' и даты '{date_str}' не найдена.")
-    return None
-
-        title_lower = title.lower()
-        score = 0
-
-        # Проверка маршрута (города)
-        for city in route_cities:
-            if city in title_lower:
-                score += 3
-
-        # Проверка даты
-        due_date_str = card.get("due_date") or ""
-        if due_date_str and target_day and target_month:
-            try:
-                # Kaiten due_date в формате ISO YYYY-MM-DD
-                card_dt = datetime.strptime(due_date_str[:10], "%Y-%m-%d")
-                if card_dt.day == target_day and card_dt.month == target_month:
-                    score += 5
-            except Exception:
-                pass
-
-        if target_day and str(target_day) in title_lower:
-            score += 1
-
-        if score > 0:
-            # Приоритет карточкам с типом "Данные не внесены" или пустым описанием
-            type_name = str(card.get("type", {}).get("name", "")).lower() if isinstance(card.get("type"), dict) else ""
-            description = (card.get("description") or "").strip()
-
-            priority_bonus = 0
-            if "данные не внесены" in type_name or "данные не внесены" in title_lower:
-                priority_bonus += 10
-            if not description or len(description) < 20:
-                priority_bonus += 5
-
-            candidate_cards.append((score + priority_bonus, card))
-
-    if candidate_cards:
-        candidate_cards.sort(key=lambda x: x[0], reverse=True)
-        return candidate_cards[0][1]
-
     return None
 
 async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str = ""):
