@@ -778,6 +778,8 @@ def extract_cities_from_route(route_str: str) -> list:
     parts = re.split(r'→|-|—|\/|\\', route_str)
     return [p.strip().lower() for p in parts if len(p.strip()) >= 3]
 
+ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
+
 async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
     board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
@@ -796,9 +798,17 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     candidate_cards = []
 
     for card in cards:
+        # 1. Проверяем название колонки
+        col_data = card.get("column")
+        col_title = (col_data.get("title") if isinstance(col_data, dict) else str(col_data or "")).lower().strip()
+
+        # Поиск только среди разрешённых 4 колонок
+        if not any(allowed in col_title for allowed in ALLOWED_KAITEN_COLUMNS):
+            continue
+
         title = (card.get("title") or "").strip()
         
-        # Правило 1: Название начинается строго на "93"
+        # 2. Название начинается строго на "93"
         if not re.search(r'^\s*93\b', title):
             continue
 
