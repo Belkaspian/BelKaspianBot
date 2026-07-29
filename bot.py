@@ -783,6 +783,9 @@ ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут
 async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
     debug_logs = []
     
+    if not KAITEN_API_KEY:
+        return None, "⚠️ Переменная `KAITEN_API_KEY` не задана на Render!"
+
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
     board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
     
@@ -790,11 +793,10 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     board_id = board_config["board_id"]
     space_name = "Узбекистан" if is_uzbekistan else "Азия и Кавказ"
 
-    debug_logs.append(f"📌 **Искомый маршрут:** `{route_str}`")
-    debug_logs.append(f"📅 **Искомая дата:** `{date_str}`")
-    debug_logs.append(f"📂 **Целевое пространство:** {space_name} (Space ID: `{space_id}`)")
+    debug_logs.append(f"📌 **Маршрут:** `{route_str}`")
+    debug_logs.append(f"📅 **Дата:** `{date_str}`")
+    debug_logs.append(f"📂 **Пространство:** {space_name} (Space ID: `{space_id}`)")
 
-    # Запрашиваем карточки
     cards = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
     if not cards or not isinstance(cards, list):
         cards = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
@@ -802,18 +804,18 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         cards = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
     
     if not cards or not isinstance(cards, list):
-        debug_logs.append("❌ **Ошибка API Kaiten:** Не удалось получить список карточек (API вернул пустоту). Проверьте `KAITEN_API_KEY`!")
+        debug_logs.append("❌ **Ошибка API Kaiten:** Не удалось получить список карточек. Проверьте `KAITEN_API_KEY`!")
         return None, "\n".join(debug_logs)
 
-    debug_logs.append(f"📦 Всего карточек получено от API: `{len(cards)}` шт.")
+    debug_logs.append(f"📦 Всего карточек в пространстве: `{len(cards)}` шт.")
 
     route_cities = extract_cities_from_route(route_str)
     day_month_match = re.search(r'(\d{1,2})[\./](\d{1,2})', date_str or "")
     target_day = int(day_month_match.group(1)) if day_month_match else None
     target_month = int(day_month_match.group(2)) if day_month_match else None
 
-    debug_logs.append(f"🏙 Извлеченные города: `{route_cities}`")
-    debug_logs.append(f"🗓 Искомый день/месяц: День=`{target_day}`, Месяц=`{target_month}`")
+    debug_logs.append(f"🏙 Искомые города: `{route_cities}`")
+    debug_logs.append(f"🗓 День/Месяц: `{target_day}` / `{target_month}`")
 
     candidate_cards = []
     cards_starting_with_93 = []
@@ -821,7 +823,6 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     for card in cards:
         title = (card.get("title") or card.get("name") or "").strip()
         
-        # 1. Название карточки должно начинаться на "93"
         if not re.search(r'^\s*93\b', title):
             continue
 
@@ -831,7 +832,6 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
         cards_starting_with_93.append(f"• `{title}`\n  └ Колонка: `{col_title or 'неизвестна'}` | Срок: `{due_date_raw}`")
 
-        # 2. Безопасная проверка колонки (если она передана объектом)
         if isinstance(col_data, dict) and col_title:
             if not any(allowed in col_title for allowed in ALLOWED_KAITEN_COLUMNS):
                 continue
@@ -839,18 +839,15 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         title_lower = title.lower()
         score = 0
 
-        # Проверка маршрута (сопоставление городов)
         matched_cities = 0
         for city in route_cities:
             if city in title_lower:
                 score += 4
                 matched_cities += 1
 
-        # Если ни один город не совпал — пропускаем
         if route_cities and matched_cities == 0:
             continue
 
-        # Проверка даты
         if due_date_raw and target_day and target_month:
             try:
                 m_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', due_date_raw)
@@ -878,21 +875,24 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
             candidate_cards.append((score + priority_bonus, card))
 
     if cards_starting_with_93:
-        debug_logs.append(f"\n📋 **Найденные карточки на 93... ({len(cards_starting_with_93)} шт.):**\n" + "\n".join(cards_starting_with_93[:8]))
+        debug_logs.append(f"\n📋 **Карточки на 93... ({len(cards_starting_with_93)} шт.):**\n" + "\n".join(cards_starting_with_93[:8]))
     else:
-        debug_logs.append("\n⚠️ **Ни одной карточки, начинающейся на '93', не найдено на этой доске!**")
+        debug_logs.append("\n⚠️ **Ни одной карточки на '93' не найдено!**")
 
     if candidate_cards:
         candidate_cards.sort(key=lambda x: x[0], reverse=True)
         best_card = candidate_cards[0][1]
-        debug_logs.append(f"\n✅ **Найдена лучшая совпавшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
+        debug_logs.append(f"\n✅ **Найдена лучшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
         return best_card, "\n".join(debug_logs)
 
-    debug_logs.append("\n⚠️ **Итог:** Ни одна карточка 93... не подошла по названию городов/дате.")
+    debug_logs.append("\n⚠️ **Итог:** Ни одна карточка 93... не подошла по фильтру.")
     return None, "\n".join(debug_logs)
 
 
 async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str = ""):
+    if not KAITEN_API_KEY:
+        return False, "⚠️ Переменная `KAITEN_API_KEY` не задана в настройках на Render!"
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
 
@@ -915,7 +915,7 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
     conn.close()
 
     if not row:
-        return False, "Сделка не найдена в базе данных"
+        return False, f"Сделка #{deal_id} не найдена в базе данных"
 
     saved_card_id, route_str, date_str, agreed_price, truck_plate, trailer_plate, driver_name, driver_phone, country_str, company_str, carrier_name, carrier_phone = row
 
@@ -923,7 +923,12 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
     card_title = ""
 
     if not card_id:
-        card, debug_text = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        if isinstance(res, tuple):
+            card, debug_text = res
+        else:
+            card, debug_text = res, "Не удалось выполнить поиск карточки"
+
         if not card:
             return False, debug_text
         card_id = card["id"]
@@ -2987,21 +2992,44 @@ async def handle_kaiten_push_callback(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    success, result = await push_data_to_kaiten(deal_id, callback.from_user.id, admin_user_name=admin_name)
+    try:
+        success, result = await push_data_to_kaiten(deal_id, callback.from_user.id, admin_user_name=admin_name)
 
-    if success:
-        card_id = result["card_id"]
-        card_url = result["url"]
-        status_text = f"\n\n✅ **Внесено в Kaiten:** [{card_id}]({card_url}) (логист: @{callback.from_user.username or admin_name})"
-        
-        await callback.message.edit_text(
-            callback.message.text + status_text,
-            reply_markup=None,
-            parse_mode="Markdown"
-        )
-        await callback.answer("Данные успешно внесены в Kaiten!", show_alert=True)
-    else:
-        # Восстанавливаем кнопки
+        if success:
+            card_id = result["card_id"]
+            card_url = result["url"]
+            status_text = f"\n\n✅ **Внесено в Kaiten:** [{card_id}]({card_url}) (логист: @{callback.from_user.username or admin_name})"
+            
+            await callback.message.edit_text(
+                callback.message.text + status_text,
+                reply_markup=None,
+                parse_mode="Markdown"
+            )
+            await callback.answer("Данные успешно внесены в Kaiten!", show_alert=True)
+        else:
+            builder = InlineKeyboardBuilder()
+            builder.row(
+                types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+                types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+            )
+            try:
+                await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+            except Exception:
+                pass
+                
+            err_log = result if isinstance(result, str) else "Ошибка работы с Kaiten"
+            try:
+                await callback.message.reply(
+                    f"⚠️ **Результат поиска в Kaiten:**\n\n{err_log}",
+                    parse_mode="Markdown"
+                )
+            except Exception as ex:
+                logging.error(f"Error sending debug log: {ex}")
+
+            await callback.answer("Запрос обработан, детали в сообщении.", show_alert=True)
+
+    except Exception as e:
+        logging.error(f"❌ Unhandled error in kaiten_push: {e}", exc_info=True)
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
@@ -3009,20 +3037,10 @@ async def handle_kaiten_push_callback(callback: types.CallbackQuery):
         )
         try:
             await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+            await callback.message.reply(f"❌ **Исключение при работе с Kaiten:** `{str(e)}`", parse_mode="Markdown")
         except Exception:
             pass
-            
-        # Отправляем подробный лог диагностики в ответным сообщением прямо в чат
-        err_log = result if isinstance(result, str) else "Ошибка работы с Kaiten"
-        try:
-            await callback.message.reply(
-                f"🔍 **Диагностика поиска карточки в Kaiten:**\n\n{err_log}",
-                parse_mode="Markdown"
-            )
-        except Exception as ex:
-            logging.error(f"Error sending debug log: {ex}")
-
-        await callback.answer("Карточка не найдена! Логи отправлены в чат.", show_alert=True)
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 @dp.callback_query(F.data.startswith("kaiten_skip_"))
 async def handle_kaiten_skip_callback(callback: types.CallbackQuery):
