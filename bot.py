@@ -1692,7 +1692,6 @@ async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await message.answer("Подача данных отменена.", reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
-@dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
 async def handle_doc_finish(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_id = message.from_user.id
@@ -2941,13 +2940,18 @@ async def direct_upload_docs_api(request):
                 new_driver_short_name = extract_surname_and_name(p_full_name)
 
             extracted_phone = phone_input or (d_data.get("phones") or "").strip()
-            new_driver_phone = extracted_phone if (extracted_phone and extracted_phone != "Не указан") else (prev_driver_phone or "Не указан")
+            if extracted_phone and extracted_phone not in ["Не указан", ""]:
+                new_driver_phone = normalize_phones(extracted_phone)
+            elif prev_driver_phone:
+                new_driver_phone = normalize_phones(prev_driver_phone)
+            else:
+                new_driver_phone = "Не указан"
         else:
             raw_json = {}
             new_truck_plate = prev_truck_plate or "НЕ РАСПОЗНАН"
             new_trailer_plate = prev_trailer_plate or "НЕ РАСПОЗНАН"
             new_driver_short_name = prev_driver_short_name or "Не распознан"
-            new_driver_phone = phone_input or prev_driver_phone or "Не указан"
+            new_driver_phone = normalize_phones(phone_input) if phone_input else (normalize_phones(prev_driver_phone) if prev_driver_phone else "Не указан")
 
             ai_formatted_data = (
                 f"Тягач: {new_truck_plate}\n"
@@ -2961,7 +2965,6 @@ async def direct_upload_docs_api(request):
         prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
         missing_items = []
 
-        # Безопасная проверка паспорта
         p_num = p_data.get("number")
         p_exp = p_data.get("expiry_date")
         if p_num and p_num not in ["Не распознан", ""]:
@@ -2972,7 +2975,6 @@ async def direct_upload_docs_api(request):
             if not was_previously_submitted or is_passport_missing_prev or new_driver_short_name in ["Не распознан", ""]:
                 missing_items.append("Паспорт водителя")
 
-        # Безопасная проверка прав
         l_num = l_data.get("number")
         l_exp = l_data.get("expiry_date")
         if l_num and l_num not in ["Не распознан", ""]:
