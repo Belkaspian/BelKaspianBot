@@ -937,7 +937,7 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
         if r_deal:
             deal_id = r_deal[0]
 
-   cursor.execute("""
+    cursor.execute("""
         SELECT cd.kaiten_card_id, cd.route, cd.date, cd.price, cd.last_truck_plate,
                cd.last_trailer_plate, cd.last_driver_name, cd.driver_phone,
                l.destination_country, u.company, u.name, u.phone, cd.full_doc_text,
@@ -955,9 +955,42 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
 
     saved_card_id, route_str, date_str, agreed_price, truck_plate, trailer_plate, driver_name, driver_phone, country_str, company_str, carrier_name, carrier_phone, full_doc_text, docs_status = row
 
-    ...
+    card_id = saved_card_id
+    card_title = ""
 
-    # Определяем нужный тип карточки в зависимости от полноты переданных документов
+    if not card_id:
+        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        card = None
+        debug_text = "Не удалось выполнить поиск карточки"
+
+        if isinstance(res, (tuple, list)):
+            if len(res) > 0 and isinstance(res[0], dict):
+                card = res[0]
+            if len(res) > 1 and isinstance(res[1], str):
+                debug_text = res[1]
+        elif isinstance(res, dict):
+            card = res
+
+        if not card or not isinstance(card, dict):
+            return False, debug_text
+
+        card_id = card.get("id")
+        card_title = card.get("title", "")
+
+        if card_id:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (card_id, deal_id))
+            conn.commit()
+            conn.close()
+
+    description_text = full_doc_text.strip() if full_doc_text else (
+        f"ТС (марка, г/н, страна регистрации): гос.ном.: {truck_plate or 'Не указан'}\n"
+        f"Прицеп (марка, г/н, страна регистрации): гос.ном.: {trailer_plate or 'Не указан'}\n"
+        f"ФИО водителя: {driver_name or 'Не указан'}\n"
+        f"Тел (росс): {driver_phone or 'Не указан'}"
+    )
+
     target_type_name = "Данные внесены" if docs_status == "FULL" else "Данные внесены частично"
     type_id = await get_kaiten_type_id(target_type_name)
 
@@ -967,7 +1000,6 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
 
     update_res = await kaiten_api_request("PATCH", f"/cards/{card_id}", json_data=patch_payload)
 
-    # Комментарий к карточке: строго только название компании и ставка на двух строчках
     carrier_title = company_str.strip() if (company_str and company_str.strip() not in ["Не указана", ""]) else (carrier_name or "Перевозчик")
     comment_text = f"{carrier_title}\n{agreed_price or ''}".strip()
 
