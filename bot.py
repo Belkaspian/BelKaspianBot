@@ -1688,6 +1688,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene, route_str=route_str)
 
+    raw_json = raw_json if isinstance(raw_json, dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
     tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
@@ -2529,9 +2530,9 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
-        except Exception:
-            pass
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=None, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Error sending admin confirm notification: {e}")
 
         await state.clear()
         await message.answer(f"{warning_text}Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup(message.from_user))
@@ -2838,6 +2839,7 @@ async def direct_upload_docs_api(request):
 
             ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, phone_input, is_polyethylene=is_polyethylene, route_str=route_str)
             
+            raw_json = raw_json if isinstance(raw_json, dict) else {}
             t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
             tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
             d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
@@ -2879,9 +2881,9 @@ async def direct_upload_docs_api(request):
         prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
         missing_items = []
 
-        # Проверка паспорта
-        p_num = raw_json.get("driver", {}).get("passport", {}).get("number") if raw_json else None
-        p_exp = raw_json.get("driver", {}).get("passport", {}).get("expiry_date") if raw_json else None
+        # Безопасная проверка паспорта
+        p_num = p_data.get("number")
+        p_exp = p_data.get("expiry_date")
         if p_num and p_num not in ["Не распознан", ""]:
             if is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
                 missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
@@ -2890,9 +2892,9 @@ async def direct_upload_docs_api(request):
             if not was_previously_submitted or is_passport_missing_prev or new_driver_short_name in ["Не распознан", ""]:
                 missing_items.append("Паспорт водителя")
 
-        # Проверка прав
-        l_num = raw_json.get("driver", {}).get("license", {}).get("number") if raw_json else None
-        l_exp = raw_json.get("driver", {}).get("license", {}).get("expiry_date") if raw_json else None
+        # Безопасная проверка прав
+        l_num = l_data.get("number")
+        l_exp = l_data.get("expiry_date")
         if l_num and l_num not in ["Не распознан", ""]:
             if is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
                 missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
