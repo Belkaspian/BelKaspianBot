@@ -2113,13 +2113,34 @@
             return `<div class="col-price-box"><span class="amount">${clean}</span></div>`;
         }
 
+        function normalizeSinglePhone(phoneStr) {
+            if (!phoneStr) return '';
+            let digits = phoneStr.replace(/\D/g, '');
+            if (!digits) return phoneStr.trim();
+
+            if (digits.length === 11 && digits.startsWith('80')) {
+                return '+375' + digits.slice(2);
+            }
+            if (digits.length === 11 && digits.startsWith('8')) {
+                return '+7' + digits.slice(1);
+            }
+            if (digits.length === 11 && digits.startsWith('7')) {
+                return '+' + digits;
+            }
+            if (digits.length === 12 && digits.startsWith('375')) {
+                return '+' + digits;
+            }
+            return phoneStr.trim().startsWith('+') ? '+' + digits : phoneStr.trim();
+        }
+
         function formatPhonesHTML(phoneStr) {
             if (!phoneStr || phoneStr.trim() === '' || phoneStr === 'Не указан') {
                 return 'Не указан';
             }
             let parts = phoneStr.split(/[\/\,\;\n]+/).map(p => p.trim()).filter(Boolean);
-            if (parts.length <= 1) return phoneStr;
-            return parts.join('<br>');
+            let normalized = parts.map(p => normalizeSinglePhone(p));
+            if (normalized.length <= 1) return normalized[0] || phoneStr;
+            return normalized.join('<br>');
         }
 
         function changeQty(loadId, delta, maxCars, event) {
