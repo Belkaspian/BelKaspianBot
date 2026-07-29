@@ -1809,15 +1809,25 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         f"{ai_formatted_data}"
     )
 
-    try:
-        # Формируем кнопки для подачи данных в Kaiten
-        kaiten_builder = InlineKeyboardBuilder()
-        if deal_id:
-            kaiten_builder.row(
-                types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
-                types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
-            )
+    # Если deal_id не был передан — находим последнюю активную сделку пользователя
+    if not deal_id:
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            deal_id = row[0]
+        conn.close()
 
+    # Формируем клавиатуру с кнопками для Kaiten
+    kaiten_builder = InlineKeyboardBuilder()
+    if deal_id:
+        kaiten_builder.row(
+            types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+            types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+        )
+
+    try:
         await bot.send_message(
             chat_id=DOCS_CHANNEL_ID, 
             text=admin_msg, 
@@ -2030,15 +2040,25 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     pdf_filename = f"{clean_name} - {clean_truck}.pdf"
     file_caption = f"{date_str} {route_str}"
 
-    try:
-        # Формируем кнопки для подачи данных в Kaiten
-        kaiten_builder = InlineKeyboardBuilder()
-        if deal_id:
-            kaiten_builder.row(
-                types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
-                types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
-            )
+    # Если deal_id не был передан — находим последнюю активную сделку пользователя
+    if not deal_id:
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            deal_id = row[0]
+        conn.close()
 
+    # Формируем клавиатуру с кнопками для Kaiten
+    kaiten_builder = InlineKeyboardBuilder()
+    if deal_id:
+        kaiten_builder.row(
+            types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+            types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+        )
+
+    try:
         await bot.send_message(
             chat_id=DOCS_CHANNEL_ID, 
             text=admin_msg, 
