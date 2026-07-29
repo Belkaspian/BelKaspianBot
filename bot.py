@@ -778,6 +778,12 @@ def extract_cities_from_route(route_str: str) -> list:
     parts = re.split(r'→|-|—|\/|\\', route_str)
     return [p.strip().lower() for p in parts if len(p.strip()) >= 3]
 
+# Точные ID целевых колонок в Kaiten
+KAITEN_TARGET_COLUMNS = {
+    "UZBEKISTAN": [4660475, 4660653, 4660663, 4660665],
+    "ASIA_CAUCASUS": [2729658, 2729682, 2783503, 2729698]
+}
+
 ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
 
 async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
@@ -787,7 +793,10 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         return None, "⚠️ Переменная `KAITEN_API_KEY` не задана на Render!"
 
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
-    board_config = KAITEN_BOARDS.get("UZBEKISTAN") if is_uzbekistan else KAITEN_BOARDS.get("ASIA_CAUCASUS")
+    
+    direction_key = "UZBEKISTAN" if is_uzbekistan else "ASIA_CAUCASUS"
+    board_config = KAITEN_BOARDS[direction_key]
+    target_columns = KAITEN_TARGET_COLUMNS[direction_key]
     
     space_id = board_config["space_id"]
     board_id = board_config["board_id"]
@@ -795,25 +804,34 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
     debug_logs.append(f"📌 **Маршрут:** `{route_str}`")
     debug_logs.append(f"📅 **Дата:** `{date_str}`")
-    debug_logs.append(f"📂 **Пространство:** {space_name} (Space ID: `{space_id}`)")
+    debug_logs.append(f"📋 **Целевая доска:** {space_name} (Board ID: `{board_id}`)")
+    debug_logs.append(f"📑 **Запрос по ID колонок:** `{target_columns}`")
 
-    raw_res = await kaiten_api_request("GET", f"/spaces/{space_id}/cards", params={"archived": "false", "limit": 100})
-    if not raw_res:
-        raw_res = await kaiten_api_request("GET", f"/cards", params={"space_id": space_id, "archived": "false"})
-    if not raw_res:
-        raw_res = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
+    # Запрашиваем карточки напрямую из 4 целевых колонок
+    cards = []
+    for col_id in target_columns:
+        col_cards = await kaiten_api_request("GET", f"/cards", params={"column_id": col_id, "archived": "false", "limit": 100})
+        if not col_cards or not isinstance(col_cards, list):
+            col_cards = await kaiten_api_request("GET", f"/columns/{col_id}/cards", params={"archived": "false", "limit": 100})
+        if col_cards and isinstance(col_cards, list):
+            cards.extend(col_cards)
 
+    # Запасной запрос по доске
+    if not cards:
+        cards = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false", "limit": 100})
+
+    raw_res = cards
     cards = []
     if isinstance(raw_res, list):
         cards = raw_res
     elif isinstance(raw_res, dict):
         cards = raw_res.get("cards") or raw_res.get("data") or raw_res.get("results") or [raw_res]
-    
+
     if not cards:
-        debug_logs.append("❌ **Ошибка API Kaiten:** Не удалось получить список карточек. Проверьте `KAITEN_API_KEY`!")
+        debug_logs.append("❌ **Ошибка API Kaiten:** Не удалось получить список карточек из целевых колонок.")
         return None, "\n".join(debug_logs)
 
-    debug_logs.append(f"📦 Всего карточек получено от API: `{len(cards)}` шт.")
+    debug_logs.append(f"📦 Всего активных карточек получено из целевых колонок: `{len(cards)}` шт.")
 
     route_cities = extract_cities_from_route(route_str)
     day_month_match = re.search(r'(\d{1,2})[\./](\d{1,2})', date_str or "")
@@ -832,6 +850,7 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
         title = (card.get("title") or card.get("name") or "").strip()
         
+        # 1. Название карточки должно начинаться на "93"
         if not re.search(r'^\s*93\b', title):
             continue
 
@@ -839,8 +858,9 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         col_title = (col_data.get("title") if isinstance(col_data, dict) else str(col_data or "")).lower().strip()
         due_date_raw = str(card.get("due_date") or card.get("due_datetime") or card.get("due_date_time") or "Не указан")
 
-        cards_starting_with_93.append(f"• `{title}`\n  └ Колонка: `{col_title or 'неизвестна'}` | Срок: `{due_date_raw}`")
+        cards_starting_with_93.append(f"• `{title}`\n  └ Колонка: `{col_title or 'целевая'}` | Срок: `{due_date_raw}`")
 
+        # 2. Проверка названия колонки (если объект column передан)
         if isinstance(col_data, dict) and col_title:
             if not any(allowed in col_title for allowed in ALLOWED_KAITEN_COLUMNS):
                 continue
@@ -848,6 +868,7 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         title_lower = title.lower()
         score = 0
 
+        # Проверка маршрута (сопоставление городов)
         matched_cities = 0
         for city in route_cities:
             if city in title_lower:
@@ -857,6 +878,7 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         if route_cities and matched_cities == 0:
             continue
 
+        # Проверка даты
         if due_date_raw and target_day and target_month:
             try:
                 m_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', due_date_raw)
@@ -884,14 +906,14 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
             candidate_cards.append((score + priority_bonus, card))
 
     if cards_starting_with_93:
-        debug_logs.append(f"\n📋 **Карточки на 93... ({len(cards_starting_with_93)} шт.):**\n" + "\n".join(cards_starting_with_93[:8]))
+        debug_logs.append(f"\n📋 **Карточки на 93... в целевых колонках ({len(cards_starting_with_93)} шт.):**\n" + "\n".join(cards_starting_with_93[:8]))
     else:
-        debug_logs.append("\n⚠️ **Ни одной карточки на '93' не найдено!**")
+        debug_logs.append("\n⚠️ **Ни одной карточки на '93' не найдено в целевых колонках!**")
 
     if candidate_cards:
         candidate_cards.sort(key=lambda x: x[0], reverse=True)
-        best_tuple = candidate_cards[0]
-        best_card = best_tuple[1] if isinstance(best_tuple, (tuple, list)) and len(best_tuple) > 1 else best_tuple
+        best_item = candidate_cards[0]
+        best_card = best_item[1] if isinstance(best_item, (tuple, list)) and len(best_item) > 1 else best_item
         
         if isinstance(best_card, dict):
             debug_logs.append(f"\n✅ **Найдена лучшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
