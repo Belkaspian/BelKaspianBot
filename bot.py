@@ -217,7 +217,8 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_counters (
             admin_chat_id INTEGER PRIMARY KEY,
-            bid_id INTEGER
+            bid_id INTEGER,
+            action_type TEXT DEFAULT 'COUNTER'
         )
     """)
 
@@ -235,6 +236,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN pending_company TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN pending_name TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN pending_phone TEXT DEFAULT ''",
+        "ALTER TABLE pending_counters ADD COLUMN action_type TEXT DEFAULT 'COUNTER'",
         "ALTER TABLE loads ADD COLUMN cargo_type TEXT",
         "ALTER TABLE loads ADD COLUMN weight TEXT",
         "ALTER TABLE loads ADD COLUMN car_type TEXT",
@@ -756,20 +758,22 @@ class FullCargoSubmission(BaseModel):
     driver: Optional[DriverDetails] = None
     image_roles: Optional[list[ImageClassification]] = None
 
-def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 15) -> bool:
-    if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный"]:
+def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 20) -> bool:
+    if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный", "none", "null"]:
         return False
+
+    clean_str = str(expiry_str).strip()
     
-    match = re.search(r'(\d{1,2})[\./-](\d{1,2})[\./-](\d{2,4})', str(expiry_str))
-    if not match:
-        match_iso = re.search(r'(\d{4})[\./-](\d{1,2})[\./-](\d{1,2})', str(expiry_str))
+    match = re.search(r'(\d{1,2})[\./-](\d{1,2})[\./-](\d{2,4})', clean_str)
+    if match:
+        day, month, year_raw = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        year = year_raw + 2000 if year_raw < 100 else year_raw
+    else:
+        match_iso = re.search(r'(\d{4})[\./-](\d{1,2})[\./-](\d{1,2})', clean_str)
         if match_iso:
             year, month, day = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
         else:
             return False
-    else:
-        day, month, year_raw = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        year = year_raw + 2000 if year_raw < 100 else year_raw
 
     try:
         exp_date = date(year, month, day)
@@ -810,7 +814,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
         "3. Внимательно извлекай данные из всех страниц присланных PDF-файлов и фотографий.\n"
         "4. Марки ТС: В свидетельствах о регистрации ТС проверяй марку (brand) и модель (model).\n"
         "5. Номера телефонов: Если указан телефон — внеси его в поле 'phones'.\n"
-        "6. Даты окончания документов: Обязательно извлекай expiry_date для паспорта и прав.\n"
+        "6. Даты окончания документов: Обязательно извлекай expiry_date (срок действия) для паспорта и водительских прав в формате ДД.ММ.ГГГГ.\n"
         "7. Для каждой страницы укажи 'category' в 'image_roles'."
     )
 
@@ -967,8 +971,7 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
     formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene, route_str=route_str)
     return formatted_text, all_files, raw_json
-    
-async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
+    async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
     buffer = io.BytesIO()
     images = []
 
@@ -1171,7 +1174,7 @@ async def callback_menu_active(callback: types.CallbackQuery):
 
     if not user_subs:
         conn.close()
-        await callback.message.answer("📦 У вас нет подписок на направления. Выберите направления в меню.")
+        await callback.message.answer("• У вас нет подписок на направления. Выберите направления в меню.")
         await callback.answer()
         return
 
@@ -1196,7 +1199,7 @@ async def callback_menu_active(callback: types.CallbackQuery):
     conn.close()
 
     if not raw_rows:
-        await callback.message.answer("📦 Актуальных грузов по вашим направлениям пока нет.")
+        await callback.message.answer("• Актуальных грузов по вашим направлениям пока нет.")
         await callback.answer()
         return
 
@@ -1226,7 +1229,7 @@ async def callback_menu_active(callback: types.CallbackQuery):
         else:
             grouped[key]["cars"] += c_num
 
-    await callback.message.answer("📦 **Список актуальных грузов по вашим направлениям:**", parse_mode="Markdown")
+    await callback.message.answer("**СПИСОК АКТУАЛЬНЫХ ГРУЗОВ ПО ВАШИМ НАПРАВЛЕНИЯМ:**", parse_mode="Markdown")
 
     for item in grouped.values():
         card_text = (
@@ -1275,7 +1278,7 @@ async def callback_menu_my_deals(callback: types.CallbackQuery):
         await callback.answer("У вас пока нет забранных грузов.", show_alert=True)
         return
 
-    await callback.message.answer("📦 **Ваши забранные грузы:**", parse_mode="Markdown")
+    await callback.message.answer("**ВАШИ ЗАБРАННЫЕ ГРУЗЫ:**", parse_mode="Markdown")
     for date_str, route_str, price_str, details_text, total_cars, car_type, cargo_type, weight, admin_comment in rows:
         card_text = (
             f"📍 {date_str} | {route_str}\n"
@@ -1391,18 +1394,18 @@ async def show_profile_menu(event):
     v_stat = row[3] if row else "UNVERIFIED"
 
     stat_map = {
-        'VERIFIED': '✅ ВЕРИФИЦИРОВАН',
-        'PENDING': '⏳ НА РАССМОТРЕНИИ',
-        'UNVERIFIED': '❌ НЕ ВЕРИФИЦИРОВАН',
-        'REJECTED': '❌ ОТКЛОНЕН'
+        'VERIFIED': 'ВЕРИФИЦИРОВАН',
+        'PENDING': 'НА РАССМОТРЕНИИ',
+        'UNVERIFIED': 'НЕ ВЕРИФИЦИРОВАН',
+        'REJECTED': 'ОТКЛОНЕН'
     }
 
     text = (
         f"👤 **Личный кабинет**\n\n"
         f"Статус: **{stat_map.get(v_stat, 'НЕ ВЕРИФИЦИРОВАН')}**\n"
-        f"🏢 Компания: {comp}\n"
-        f"👤 Имя: {name}\n"
-        f"📞 Телефон: {phone}"
+        f"• Компания: {comp}\n"
+        f"• Имя: {name}\n"
+        f"• Телефон: {phone}"
     )
 
     builder = InlineKeyboardBuilder()
@@ -1440,7 +1443,7 @@ async def prof_save_company(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ Название компании обновлено!")
+    await message.answer("• Название компании обновлено!")
     await show_profile_menu(message)
 
 @dp.callback_query(F.data == "prof_edit_name")
@@ -1458,7 +1461,7 @@ async def prof_save_name(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ Имя обновлено!")
+    await message.answer("• Имя обновлено!")
     await show_profile_menu(message)
 
 @dp.callback_query(F.data == "prof_edit_phone")
@@ -1476,7 +1479,7 @@ async def prof_save_phone(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ Телефон обновлен!")
+    await message.answer("• Телефон обновлен!")
     await show_profile_menu(message)
 
 # ==================== ПРЕОБРАЗОВАТЬ ДАННЫЕ (АВТОНОМНО) ====================
@@ -1487,9 +1490,9 @@ async def cmd_convert_data_start(event: types.Message | types.CallbackQuery, sta
     user = event.from_user
     if not is_convert_allowed(user):
         if isinstance(event, types.CallbackQuery):
-            await event.answer("⚠️ Доступ ограничен.", show_alert=True)
+            await event.answer("Доступ ограничен.", show_alert=True)
         else:
-            await event.answer("⚠️ Функция доступна только уполномоченным пользователям.")
+            await event.answer("Функция доступна только уполномоченным пользователям.")
         return
 
     await state.set_state(DocConvertStates.waiting_for_files)
@@ -1515,7 +1518,7 @@ async def cmd_convert_data_start(event: types.Message | types.CallbackQuery, sta
 @dp.message(DocConvertStates.waiting_for_files, F.text == "❌ Отмена")
 async def handle_convert_cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Преобразование отменено.", reply_markup=get_main_reply_markup(message.from_user))
+    await message.answer("Преобразование отменено.", reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocConvertStates.waiting_for_files, F.photo)
 async def handle_convert_photo(message: types.Message, state: FSMContext):
@@ -1539,10 +1542,10 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
     notes = data.get("text_notes", "")
 
     if not photos and not documents and not notes:
-        await message.answer("⚠️ Вы не прислали ни одного фото/файла или заметки.")
+        await message.answer("Вы не прислали ни одного фото/файла или заметки.")
         return
 
-    status_msg = await message.answer("🔄 ИИ распознает документы и сортирует страницы в PDF...")
+    status_msg = await message.answer("ИИ распознает документы и сортирует страницы в PDF...")
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False, route_str="")
 
@@ -1592,10 +1595,10 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
 
         await status_msg.delete()
-        await message.answer("✅ Данные преобразованы и отправлены в канал!", reply_markup=get_main_reply_markup(message.from_user))
+        await message.answer("Данные преобразованы и отправлены в канал!", reply_markup=get_main_reply_markup(message.from_user))
     except Exception as e:
         logging.error(f"Error sending converted docs: {e}")
-        await message.answer("❌ Ошибка при отправке результатов.")
+        await message.answer("Ошибка при отправке результатов.")
 
     await state.clear()
 
@@ -1625,7 +1628,7 @@ async def handle_doc_document(message: types.Message, state: FSMContext):
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
 async def handle_doc_cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Подача данных отменена.", reply_markup=get_main_reply_markup(message.from_user))
+    await message.answer("Подача данных отменена.", reply_markup=get_main_reply_markup(message.from_user))
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "✅ Отправить данные логисту")
 async def handle_doc_finish(message: types.Message, state: FSMContext):
@@ -1642,7 +1645,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     deal_id = data.get("upload_deal_id")
 
     if not photos and not documents and not notes:
-        await message.answer("⚠️ Вы не прислали ни одного фото или файла.")
+        await message.answer("Вы не прислали ни одного фото или файла.")
         return
 
     is_polyethylene = False
@@ -1708,17 +1711,17 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
 
     p_num = p_data.get("number")
     p_exp = p_data.get("expiry_date")
-    if not p_num or p_num == "Не распознан" or new_driver_short_name == "Не распознан":
+    if not p_num or p_num in ["Не распознан", ""] or new_driver_short_name == "Не распознан":
         missing_items.append("Паспорт водителя")
-    elif is_doc_expired_or_expiring_soon(p_exp, 15):
-        missing_items.append("Паспорт водителя (просрочен/истекает)")
+    elif is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
+        missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
 
     l_num = l_data.get("number")
     l_exp = l_data.get("expiry_date")
-    if not l_num or l_num == "Не распознан":
+    if not l_num or l_num in ["Не распознан", ""]:
         missing_items.append("Водительское удостоверение")
-    elif is_doc_expired_or_expiring_soon(l_exp, 15):
-        missing_items.append("Водительское удостоверение (просрочено/истекает)")
+    elif is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
+        missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
 
     if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]:
         missing_items.append("Техпаспорт тягача")
@@ -1792,9 +1795,9 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     await state.clear()
     
     if docs_status == "PARTIAL":
-        feedback_msg = f"⚠️ Данные переданы, но не полностью. Не хватает:\n• " + "\n• ".join(missing_items)
+        feedback_msg = f"• Данные переданы, но не полностью. Не хватает:\n• " + "\n• ".join(missing_items)
     else:
-        feedback_msg = "✅ Все данные успешно переданы логисту!"
+        feedback_msg = "• Все данные успешно переданы логисту!"
 
     await message.answer(feedback_msg, reply_markup=get_main_reply_markup(message.from_user))
 
@@ -1820,6 +1823,133 @@ def detect_country(text: str) -> str:
     elif 'армения' in t or 'ереван' in t:
         return "Армения 🇦🇲"
     return "Все"
+
+# ==================== ОБРАБОТЧИК ОТВЕТОВ АДМИНА ЧЕРЕЗ PENDING_COUNTERS ====================
+
+async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT bid_id, COALESCE(action_type, 'COUNTER') FROM pending_counters WHERE admin_chat_id = ?", (chat_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return False
+
+    target_id, action_type = row[0], row[1]
+    cursor.execute("DELETE FROM pending_counters WHERE admin_chat_id = ?", (chat_id,))
+    conn.commit()
+
+    if action_type == 'COUNTER':
+        counter_rate = format_custom_rate(message_text.strip())
+        cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (target_id,))
+        bid = cursor.fetchone()
+        if bid:
+            load_id, user_id, orig_rate = bid
+            cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
+            l_row = cursor.fetchone()
+            route_str = l_row[0] if l_row else "Груз"
+
+            cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ? WHERE bid_id = ?", (counter_rate, target_id))
+            conn.commit()
+
+            add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} по грузу {route_str}.")
+
+            counter_builder = InlineKeyboardBuilder()
+            counter_builder.row(
+                types.InlineKeyboardButton(text="Принять встречную", callback_data=f"accept_counter_{target_id}"),
+                types.InlineKeyboardButton(text="Отклонить", callback_data=f"decline_counter_{target_id}")
+            )
+            try:
+                await bot.send_message(
+                    chat_id=user_id, 
+                    text=f"Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваша ставка: {orig_rate}).\n\nПринимаете предложение?",
+                    reply_markup=counter_builder.as_markup(),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+            await bot.send_message(chat_id=chat_id, text=f"• Встречная ставка {counter_rate} отправлена перевозчику!")
+
+    elif action_type == 'PARTIAL':
+        m = re.search(r'\d+', message_text.strip())
+        confirm_cars = int(m.group(0)) if m else 1
+
+        cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (target_id,))
+        bid = cursor.fetchone()
+        if bid:
+            load_id, user_id, requested_cars, rate = bid
+            if confirm_cars > requested_cars:
+                confirm_cars = requested_cars
+
+            cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+            load = cursor.fetchone()
+            if load:
+                route_str, date_str, details_text, cars_count_str = load
+                curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+                if curr_cars > confirm_cars:
+                    cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - confirm_cars), load_id))
+                else:
+                    cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+                for _ in range(confirm_cars):
+                    cursor.execute("""
+                        INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                        VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+                cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (target_id,))
+                conn.commit()
+
+                add_notification(user_id, "Частичное подтверждение", f"Логист подтвердил {confirm_cars} авто по ставке {rate} ({route_str}).")
+                try:
+                    await bot.send_message(chat_id=user_id, text=f"• Логист подтвердил **{confirm_cars} авто** по ставке **{rate}** ({route_str}).")
+                except Exception:
+                    pass
+
+                await update_cargo_messages_for_all_users(load_id)
+                await bot.send_message(chat_id=chat_id, text=f"• Подтверждено {confirm_cars} авто по ставке {rate}!")
+
+    elif action_type == 'VERIFY_EDIT':
+        parts = [p.strip() for p in message_text.split('|')]
+        if len(parts) >= 3:
+            comp, name, phone = parts[0], parts[1], parts[2]
+            cursor.execute("""
+                UPDATE users SET 
+                    company = ?, name = ?, phone = ?,
+                    pending_company = ?, pending_name = ?, pending_phone = ?
+                WHERE user_id = ?
+            """, (comp, name, phone, comp, name, phone, target_id))
+            conn.commit()
+
+            add_notification(target_id, "Профиль скорректирован", f"Данные профиля обновлены логистом:\n{comp} | {name} | {phone}")
+
+            carrier_link = format_carrier_info(target_id)
+            builder = InlineKeyboardBuilder()
+            builder.row(
+                types.InlineKeyboardButton(text="Подтвердить", callback_data=f"verify_approve_{target_id}"),
+                types.InlineKeyboardButton(text="Отклонить", callback_data=f"verify_reject_{target_id}")
+            )
+            builder.row(
+                types.InlineKeyboardButton(text="Отредактировать", callback_data=f"verify_edit_{target_id}")
+            )
+
+            msg_text = (
+                f"**ЗАПРОС НА ВЕРИФИКАЦИЮ (ОТРЕДАКТИРОВАНО)**\n\n"
+                f"{carrier_link}\n"
+                f"• Компания: {comp}\n"
+                f"• ФИО: {name}\n"
+                f"• Телефон: {phone}"
+            )
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+            await bot.send_message(chat_id=chat_id, text="• Данные профиля успешно обновлены у пользователя!")
+        else:
+            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка формата! Используйте разделитель `|`: `Компания | ФИО | Телефон`")
+
+    conn.close()
+    return True
 
 # ==================== ПАРСИНГ ИЗ КАНАЛОВ И АДМИН-КАНАЛА ====================
 
@@ -1872,7 +2002,13 @@ async def handle_admin_broadcast(message: types.Message):
 @dp.channel_post(F.chat.id.in_(LISTENED_CHATS))
 async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
-    raw_text = message.text or message.caption
+    raw_text = message.text or message.caption or ""
+
+    if chat_id == ADMIN_CHANNEL_ID and raw_text:
+        is_handled = await process_admin_pending_action(chat_id, raw_text)
+        if is_handled:
+            return
+
     if not raw_text or raw_text.startswith("!") or raw_text.startswith("/"):
         return
         
@@ -1960,12 +2096,12 @@ async def handle_accept_bid(callback: types.CallbackQuery):
 
         add_notification(user_id, "Ставка принята!", f"Ваша ставка {rate} по грузу {route_str} была принята логистом.")
         try:
-            await bot.send_message(chat_id=user_id, text=f"✅ Ваша ставка **{rate}** по грузу **{route_str}** успешно принята логистом!")
+            await bot.send_message(chat_id=user_id, text=f"• Ваша ставка **{rate}** по грузу **{route_str}** успешно принята логистом!")
         except Exception:
             pass
 
         await update_cargo_messages_for_all_users(load_id)
-        await callback.message.edit_text(callback.message.text + "\n\n✅ **СТАВКА ПРИНЯТА**")
+        await callback.message.edit_text(callback.message.text + "\n\n• **СТАВКА ПРИНЯТА**")
     else:
         conn.close()
         await callback.answer("Груз не найден.", show_alert=True)
@@ -1990,140 +2126,38 @@ async def handle_decline_bid(callback: types.CallbackQuery):
 
         add_notification(user_id, "Ставка отклонена", f"Ваша ставка {rate} по грузу {route_str} была отклонена.")
         try:
-            await bot.send_message(chat_id=user_id, text=f"❌ К сожалению, ваша ставка **{rate}** по грузу **{route_str}** была отклонена логистом.")
+            await bot.send_message(chat_id=user_id, text=f"Ваша ставка **{rate}** по грузу **{route_str}** была отклонена логистом.")
         except Exception:
             pass
 
-        await callback.message.edit_text(callback.message.text + "\n\n❌ **СТАВКА ОТКЛОНЕНА**")
+        await callback.message.edit_text(callback.message.text + "\n\n• **СТАВКА ОТКЛОНЕНА**")
     else:
         conn.close()
         await callback.answer("Ставка не найдена.", show_alert=True)
 
 @dp.callback_query(F.data.startswith("partial_bid_"))
-async def handle_partial_bid_start(callback: types.CallbackQuery, state: FSMContext):
+async def handle_partial_bid_start(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("partial_bid_", ""))
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
-    bid = cursor.fetchone()
+    cursor.execute("INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id, action_type) VALUES (?, ?, 'PARTIAL')", (ADMIN_CHANNEL_ID, bid_id))
+    conn.commit()
     conn.close()
 
-    if not bid:
-        await callback.answer("Ставка не найдена.", show_alert=True)
-        return
-
-    requested_cars, rate = bid
-    await state.set_state(AdminPartialStates.waiting_for_cars)
-    await state.update_data(partial_bid_id=bid_id)
-    await callback.message.reply(f"🔀 Введите количество подтверждаемых авто (запрошено: {requested_cars} авто по ставке {rate}):")
+    await callback.message.reply("Укажите количество подтверждаемых авто (например: `1`):")
     await callback.answer()
-
-@dp.message(AdminPartialStates.waiting_for_cars)
-async def handle_partial_bid_finish(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    bid_id = data.get("partial_bid_id")
-    
-    m = re.search(r'\d+', message.text.strip())
-    confirm_cars = int(m.group(0)) if m else 1
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
-    bid = cursor.fetchone()
-
-    if bid:
-        load_id, user_id, requested_cars, rate = bid
-        if confirm_cars > requested_cars:
-            confirm_cars = requested_cars
-
-        cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
-        load = cursor.fetchone()
-
-        if load:
-            route_str, date_str, details_text, cars_count_str = load
-            curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
-
-            if curr_cars > confirm_cars:
-                cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - confirm_cars), load_id))
-            else:
-                cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
-
-            for _ in range(confirm_cars):
-                cursor.execute("""
-                    INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-                    VALUES (?, ?, ?, ?, 1, ?, ?)
-                """, (load_id, user_id, date_str, route_str, rate, details_text))
-
-            cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
-            conn.commit()
-
-            add_notification(user_id, "Частичное подтверждение", f"Логист подтвердил {confirm_cars} авто по ставке {rate} ({route_str}).")
-            try:
-                await bot.send_message(chat_id=user_id, text=f"🔀 Логист частично подтвердил вашу заявку по грузу **{route_str}**: **{confirm_cars} авто** по ставке **{rate}**!")
-            except Exception:
-                pass
-
-            await update_cargo_messages_for_all_users(load_id)
-            await message.answer(f"✅ Подтверждено {confirm_cars} авто по ставке {rate}!")
-        else:
-            await message.answer("Груз не найден.")
-    else:
-        await message.answer("Ставка не найдена.")
-
-    conn.close()
-    await state.clear()
 
 @dp.callback_query(F.data.startswith("counter_bid_"))
-async def handle_counter_bid_start(callback: types.CallbackQuery, state: FSMContext):
+async def handle_counter_bid_start(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("counter_bid_", ""))
-    await state.set_state(AdminCounterStates.waiting_for_counter_rate)
-    await state.update_data(counter_bid_id=bid_id)
-    await callback.message.reply("💡 Введите вашу встречную цену/ставку для перевозчика (например: `2600 USD`):")
-    await callback.answer()
-
-@dp.message(AdminCounterStates.waiting_for_counter_rate)
-async def handle_counter_bid_finish(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    bid_id = data.get("counter_bid_id")
-    counter_rate = format_custom_rate(message.text.strip())
-
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (bid_id,))
-    bid = cursor.fetchone()
-
-    if bid:
-        load_id, user_id, orig_rate = bid
-        cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
-        l_row = cursor.fetchone()
-        route_str = l_row[0] if l_row else "Груз"
-
-        cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ? WHERE bid_id = ?", (counter_rate, bid_id))
-        conn.commit()
-
-        add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} по грузу {route_str}.")
-        
-        counter_builder = InlineKeyboardBuilder()
-        counter_builder.row(
-            types.InlineKeyboardButton(text="✅ Принять встречную", callback_data=f"accept_counter_{bid_id}"),
-            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decline_counter_{bid_id}")
-        )
-        try:
-            await bot.send_message(
-                chat_id=user_id, 
-                text=f"💡 Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваше предложение было: {orig_rate}).\n\nПринимаете предложение?",
-                reply_markup=counter_builder.as_markup(),
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
-        await message.answer(f"✅ Встречная ставка {counter_rate} отправлена перевозчику!")
-    else:
-        await message.answer("Ставка не найдена.")
-
+    cursor.execute("INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id, action_type) VALUES (?, ?, 'COUNTER')", (ADMIN_CHANNEL_ID, bid_id))
+    conn.commit()
     conn.close()
-    await state.clear()
+
+    await callback.message.reply("Укажите встречную ставку для перевозчика (например: `2600 USD`):")
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("accept_counter_"))
 async def handle_accept_counter(callback: types.CallbackQuery):
@@ -2164,17 +2198,17 @@ async def handle_accept_counter(callback: types.CallbackQuery):
         await update_cargo_messages_for_all_users(load_id)
 
         admin_notification = (
-            f"✅ **Перевозчик ПРИНЯЛ встречную ставку!**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"💰 Итоговая ставка: {counter_rate} | 🚛 Авто: {requested_cars}\n\n"
-            f"👤 Перевозчик ID: {user_id}"
+            f"**Перевозчик ПРИНЯЛ встречную ставку!**\n\n"
+            f"• Груз #{load_id} | Маршрут: {route_str}\n"
+            f"• Итоговая ставка: {counter_rate} | Авто: {requested_cars}\n\n"
+            f"• Перевозчик ID: {user_id}"
         )
         try:
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
         except Exception:
             pass
 
-        await callback.message.edit_text(callback.message.text + "\n\n✅ **ВЫ ПРИНЯЛИ ВСТРЕЧНУЮ СТАВКУ**")
+        await callback.message.edit_text(callback.message.text + "\n\n• **ВЫ ПРИНЯЛИ ВСТРЕЧНУЮ СТАВКУ**")
     else:
         await callback.answer("Груз не найден.", show_alert=True)
 
@@ -2198,17 +2232,17 @@ async def handle_decline_counter(callback: types.CallbackQuery):
         conn.commit()
 
         admin_notification = (
-            f"❌ **Перевозчик ОТКЛОНИЛ встречную ставку.**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"💵 Отклоненная ставка: {counter_rate}\n"
-            f"👤 Перевозчик ID: {user_id}"
+            f"**Перевозчик ОТКЛОНИЛ встречную ставку.**\n\n"
+            f"• Груз #{load_id} | Маршрут: {route_str}\n"
+            f"• Отклоненная ставка: {counter_rate}\n"
+            f"• Перевозчик ID: {user_id}"
         )
         try:
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
         except Exception:
             pass
 
-        await callback.message.edit_text(callback.message.text + "\n\n❌ **ВЫ ОТКЛОНИЛИ ВСТРЕЧНУЮ СТАВКУ**")
+        await callback.message.edit_text(callback.message.text + "\n\n• **ВЫ ОТКЛОНИЛИ ВСТРЕЧНУЮ СТАВКУ**")
 
     conn.close()
 
@@ -2221,13 +2255,13 @@ async def handle_verify_approve(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    add_notification(target_uid, "Верификация пройдена!", "🎉 Ваша учетная запись успешно верифицирована. Вам открыт полный доступ к ценам и бронированию.")
+    add_notification(target_uid, "Верификация пройдена!", "Ваша учетная запись успешно верифицирована. Вам открыт полный доступ к ценам и бронированию.")
     try:
-        await bot.send_message(chat_id=target_uid, text="🎉 **Поздравляем!** Ваша верификация успешно подтверждена. Полный доступ к бирже открыт!")
+        await bot.send_message(chat_id=target_uid, text="Ваша верификация успешно подтверждена! Полный доступ к бирже открыт.")
     except Exception:
         pass
 
-    await callback.message.edit_text(callback.message.text + "\n\n✅ **ВЕРИФИКАЦИЯ ПОДТВЕРЖДЕНА**")
+    await callback.message.edit_text(callback.message.text + "\n\n• **ВЕРИФИКАЦИЯ ПОДТВЕРЖДЕНА**")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("verify_reject_"))
@@ -2239,70 +2273,29 @@ async def handle_verify_reject(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    add_notification(target_uid, "Верификация отклонена", "❌ Ваша заявка на верификацию была отклонена администратором.")
+    add_notification(target_uid, "Верификация отклонена", "Ваша заявка на верификацию была отклонена администратором.")
     try:
-        await bot.send_message(chat_id=target_uid, text="❌ К сожалению, ваша заявка на верификацию отклонена. Проверьте данные в Личном кабинете и подайте заявку повторно.")
+        await bot.send_message(chat_id=target_uid, text="Заявка на верификацию отклонена. Проверьте данные в Личном кабинете и подайте заявку повторно.")
     except Exception:
         pass
 
-    await callback.message.edit_text(callback.message.text + "\n\n❌ **ВЕРИФИКАЦИЯ ОТКЛОНЕНА**")
+    await callback.message.edit_text(callback.message.text + "\n\n• **ВЕРИФИКАЦИЯ ОТКЛОНЕНА**")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("verify_edit_"))
-async def handle_verify_edit_start(callback: types.CallbackQuery, state: FSMContext):
+async def handle_verify_edit_start(callback: types.CallbackQuery):
     target_uid = int(callback.data.replace("verify_edit_", ""))
-    await state.set_state(AdminVerifyEditStates.waiting_for_details)
-    await state.update_data(verify_target_uid=target_uid)
-    
-    await callback.message.reply(
-        "✏️ **Редактирование данных пользователя**\n\n"
-        "Отправьте новые данные в формате:\n"
-        "`Название компании | ФИО Контакта | Телефон`\n\n"
-        "Пример:\n`ООО ТрансЛогистик | Иванов Иван | +375291234567`"
-    )
-    await callback.answer()
-
-@dp.message(AdminVerifyEditStates.waiting_for_details)
-async def handle_verify_edit_finish(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    target_uid = data.get("verify_target_uid")
-    
-    parts = [p.strip() for p in message.text.split('|')]
-    if len(parts) < 3:
-        await message.answer("⚠️ Неверный формат! Введите строго через разделитель `|`: `Компания | ФИО | Телефон`")
-        return
-
-    comp, name, phone = parts[0], parts[1], parts[2]
-
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET company = ?, name = ?, phone = ? WHERE user_id = ?", (comp, name, phone, target_uid))
+    cursor.execute("INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id, action_type) VALUES (?, ?, 'VERIFY_EDIT')", (ADMIN_CHANNEL_ID, target_uid))
     conn.commit()
     conn.close()
 
-    add_notification(target_uid, "Профиль отредактирован", f"Администратор скорректировал данные вашего профиля:\n{comp} | {name} | {phone}")
-
-    carrier_link = format_carrier_info(target_uid)
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"verify_approve_{target_uid}"),
-        types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"verify_reject_{target_uid}")
+    await callback.message.reply(
+        "Введите новые данные пользователя в формате:\n"
+        "`Компания | ФИО Контакта | Телефон`"
     )
-    builder.row(
-        types.InlineKeyboardButton(text="✏️ Отредактировать", callback_data=f"verify_edit_{target_uid}")
-    )
-
-    msg_text = (
-        f"🛡️ **ЗАПРОС НА ВЕРИФИКАЦИЮ (ОТРЕДАКТИРОВАНО)**\n\n"
-        f"{carrier_link}\n"
-        f"🏢 Компания: {comp}\n"
-        f"👤 ФИО: {name}\n"
-        f"📞 Телефон: {phone}"
-    )
-
-    await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
-    await message.answer("✅ Данные обновлены! Новое меню отправлено в админ-канал.")
-    await state.clear()
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("profile_approve_"))
 async def handle_profile_approve(callback: types.CallbackQuery):
@@ -2322,8 +2315,8 @@ async def handle_profile_approve(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    add_notification(target_uid, "Изменения подтверждены", "✅ Изменения вашего профиля успешно утверждены логистом.")
-    await callback.message.edit_text(callback.message.text + "\n\n✅ **ИЗМЕНЕНИЯ ПРОФИЛЯ УТВЕРЖДЕНЫ**")
+    add_notification(target_uid, "Изменения подтверждены", "Изменения вашего профиля успешно утверждены логистом.")
+    await callback.message.edit_text(callback.message.text + "\n\n• **ИЗМЕНЕНИЯ ПРОФИЛЯ УТВЕРЖДЕНЫ**")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("profile_reject_"))
@@ -2335,8 +2328,8 @@ async def handle_profile_reject(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    add_notification(target_uid, "Изменения отклонены", "❌ Изменение данных вашего профиля отклонено администратором.")
-    await callback.message.edit_text(callback.message.text + "\n\n❌ **ИЗМЕНЕНИЯ ПРОФИЛЯ ОТКЛОНЕНЫ**")
+    add_notification(target_uid, "Изменения отклонены", "Изменение данных вашего профиля отклонено администратором.")
+    await callback.message.edit_text(callback.message.text + "\n\n• **ИЗМЕНЕНИЯ ПРОФИЛЯ ОТКЛОНЕНЫ**")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_"))
@@ -2465,7 +2458,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     warning_text = ""
     if requested_cars > current_cars:
         requested_cars = current_cars
-        warning_text = f"⚠️ Запрошено больше, чем доступно. Берем {current_cars} авто.\n\n"
+        warning_text = f"Запрошено больше, чем доступно. Берем {current_cars} авто.\n\n"
 
     carrier_text = format_carrier_info(user_id, user_obj.username, user_obj.full_name)
 
@@ -2480,18 +2473,18 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
 
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+            types.InlineKeyboardButton(text="Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="Часть", callback_data=f"partial_bid_{bid_id}")
         )
         admin_builder.row(
-            types.InlineKeyboardButton(text="💡 Своя ставка", callback_data=f"counter_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
+            types.InlineKeyboardButton(text="Своя ставка", callback_data=f"counter_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="Отказать", callback_data=f"decline_bid_{bid_id}")
         )
 
         admin_notification = (
-            f"💰 **Новая ставка от перевозчика через бота!**\n\n"
-            f"🆔 Груз #{cargo_id} | Маршрут: {route_str}\n"
-            f"💵 Ставка: {rate} | 🚛 Авто: {requested_cars}\n\n"
+            f"**НОВАЯ СТАВКА ОТ ПЕРЕВОЗЧИКА ИЗ БОТА**\n\n"
+            f"• Рейс #{cargo_id} | Маршрут: {route_str}\n"
+            f"• Ставка: {rate} | Авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
@@ -2500,7 +2493,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             pass
 
         await state.clear()
-        await message.answer(f"{warning_text}✅ Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup(message.from_user))
+        await message.answer(f"{warning_text}Ваша ставка отправлена администратору на рассмотрение!", reply_markup=get_main_reply_markup(message.from_user))
         return
 
     if current_cars > requested_cars:
@@ -2521,10 +2514,10 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
     await update_cargo_messages_for_all_users(cargo_id)
 
     admin_notification = (
-        f"🎯 **Груз забран перевозчиком через бота!**\n\n"
-        f"🆔 Груз #{cargo_id} | Маршрут: {route_str}\n"
-        f"📅 Дата: {date_str}\n"
-        f"💰 Ставка: {price_str} | 🚛 Забрано авто: {requested_cars}\n\n"
+        f"**ГРУЗ ЗАБРАН ПЕРЕВОЗЧИКОМ ИЗ БОТА**\n\n"
+        f"• Рейс #{cargo_id} | Маршрут: {route_str}\n"
+        f"• Дата: {date_str}\n"
+        f"• Ставка: {price_str} | Забрано авто: {requested_cars}\n\n"
         f"{carrier_text}"
     )
     try:
@@ -2533,7 +2526,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
         pass
         
     await state.clear()
-    await message.answer(f"{warning_text}✅ Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
+    await message.answer(f"{warning_text}Груз закреплен за вами! Просмотреть его можно в разделе «Забранные грузы».", reply_markup=get_main_reply_markup(message.from_user))
     # ==================== WEB APP БЭКЕНД И REST API ====================
 
 async def get_loads_api(request):
@@ -2845,13 +2838,19 @@ async def direct_upload_docs_api(request):
 
         missing_items = []
 
-        p_num = raw_json.get("driver", {}).get("passport", {}).get("number")
-        if not p_num or p_num == "Не распознан" or new_driver_short_name == "Не распознан":
+        p_num = raw_json.get("driver", {}).get("passport", {}).get("number") if raw_json else None
+        p_exp = raw_json.get("driver", {}).get("passport", {}).get("expiry_date") if raw_json else None
+        if not p_num or p_num in ["Не распознан", ""] or new_driver_short_name == "Не распознан":
             missing_items.append("Паспорт водителя")
+        elif is_doc_expired_or_expiring_soon(p_exp, threshold_days=20):
+            missing_items.append("Паспорт водителя просрочен или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
 
-        l_num = raw_json.get("driver", {}).get("license", {}).get("number")
-        if not l_num or l_num == "Не распознан":
+        l_num = raw_json.get("driver", {}).get("license", {}).get("number") if raw_json else None
+        l_exp = raw_json.get("driver", {}).get("license", {}).get("expiry_date") if raw_json else None
+        if not l_num or l_num in ["Не распознан", ""]:
             missing_items.append("Водительское удостоверение")
+        elif is_doc_expired_or_expiring_soon(l_exp, threshold_days=20):
+            missing_items.append("Водительское удостоверение просрочено или истекает (менее 20 дней) — необходимо прикрепить актуальный документ")
 
         if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт тягача")
         if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт прицепа")
@@ -3005,20 +3004,15 @@ async def profile_post_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT verification_status, company, name, phone FROM users WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT verification_status FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
 
         v_status = row[0] if row else 'UNVERIFIED'
 
         if v_status == 'VERIFIED':
             cursor.execute("""
-                UPDATE users SET 
-                    subscriptions = ?,
-                    pending_company = ?,
-                    pending_name = ?,
-                    pending_phone = ?
-                WHERE user_id = ?
-            """, (subscriptions, company, name, phone, user_id))
+                UPDATE users SET subscriptions = ? WHERE user_id = ?
+            """, (subscriptions, user_id))
         else:
             cursor.execute("""
                 INSERT INTO users (user_id, company, name, phone, subscriptions, verification_status, status)
@@ -3060,19 +3054,19 @@ async def request_verification_api(request):
 
         builder = InlineKeyboardBuilder()
         builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"verify_approve_{user_id}"),
-            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"verify_reject_{user_id}")
+            types.InlineKeyboardButton(text="Подтвердить", callback_data=f"verify_approve_{user_id}"),
+            types.InlineKeyboardButton(text="Отклонить", callback_data=f"verify_reject_{user_id}")
         )
         builder.row(
-            types.InlineKeyboardButton(text="✏️ Отредактировать", callback_data=f"verify_edit_{user_id}")
+            types.InlineKeyboardButton(text="Отредактировать", callback_data=f"verify_edit_{user_id}")
         )
 
         msg_text = (
-            f"🛡️ **ЗАПРОС НА ВЕРИФИКАЦИЮ**\n\n"
+            f"**ЗАПРОС НА ВЕРИФИКАЦИЮ**\n\n"
             f"{carrier_link}\n"
-            f"🏢 Компания: {row[0]}\n"
-            f"👤 ФИО: {row[1]}\n"
-            f"📞 Телефон: {row[2]}"
+            f"• Компания: {row[0]}\n"
+            f"• ФИО: {row[1]}\n"
+            f"• Телефон: {row[2]}"
         )
 
         try:
@@ -3088,33 +3082,51 @@ async def submit_profile_changes_api(request):
     try:
         data = await request.json()
         user_id = int(data.get('user_id', 0))
-        if not user_id:
-            return web.json_response({"error": "No user_id"}, status=400)
+        new_company = data.get('company', '').strip()
+        new_name = data.get('name', '').strip()
+        new_phone = data.get('phone', '').strip()
+
+        if not user_id or not new_company or not new_name or not new_phone:
+            return web.json_response({"error": "Заполните все поля профиля"}, status=400)
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT company, name, phone, pending_company, pending_name, pending_phone FROM users WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
-        conn.close()
 
-        if not row or not row[3]:
-            return web.json_response({"error": "Нет сохраненных изменений"}, status=400)
+        if not row:
+            conn.close()
+            return web.json_response({"error": "Пользователь не найден"}, status=400)
+
+        old_company, old_name, old_phone = row[0] or "", row[1] or "", row[2] or ""
+
+        if new_company == old_company and new_name == old_name and new_phone == old_phone:
+            conn.close()
+            return web.json_response({"error": "Данные не изменились"}, status=400)
+
+        cursor.execute("""
+            UPDATE users SET 
+                pending_company = ?,
+                pending_name = ?,
+                pending_phone = ?
+            WHERE user_id = ?
+        """, (new_company, new_name, new_phone, user_id))
+        conn.commit()
+        conn.close()
 
         carrier_link = format_carrier_info(user_id)
 
         builder = InlineKeyboardBuilder()
         builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"profile_approve_{user_id}"),
-            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"profile_reject_{user_id}")
+            types.InlineKeyboardButton(text="Подтвердить", callback_data=f"profile_approve_{user_id}"),
+            types.InlineKeyboardButton(text="Отклонить", callback_data=f"profile_reject_{user_id}")
         )
 
         msg_text = (
-            f"📝 **ЗАПРОС НА ИЗМЕНЕНИЕ ДАННЫХ ПРОФИЛЯ**\n\n"
+            f"**ЗАПРОС НА ИЗМЕНЕНИЕ ДАННЫХ ПРОФИЛЯ**\n\n"
             f"{carrier_link}\n\n"
-            f"🔴 **Было:**\n"
-            f"• Компания: {row[0]}\n• ФИО: {row[1]}\n• Тел: {row[2]}\n\n"
-            f"🟢 **Стало:**\n"
-            f"• Компания: {row[3]}\n• ФИО: {row[4]}\n• Тел: {row[5]}"
+            f"• Было:\n  Компания: {old_company}\n  ФИО: {old_name}\n  Тел: {old_phone}\n\n"
+            f"• Стало:\n  Компания: {new_company}\n  ФИО: {new_name}\n  Тел: {new_phone}"
         )
 
         try:
@@ -3245,9 +3257,9 @@ async def book_load_api(request):
         await update_cargo_messages_for_all_users(load_id)
 
         admin_notification = (
-            f"🎯 **Груз забран из Web App!**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"📅 Дата: {date_str} | 💰 Ставка: {price_str} | 🚛 Забрано: {requested_cars} авто\n\n"
+            f"**ГРУЗ ЗАБРАН ИЗ WEB APP**\n\n"
+            f"• Рейс #{load_id} | Маршрут: {route_str}\n"
+            f"• Дата: {date_str} | Ставка: {price_str} | Забрано: {requested_cars} авто\n\n"
             f"{carrier_text}"
         )
         try:
@@ -3270,18 +3282,18 @@ async def book_load_api(request):
 
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
-            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"accept_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="🔀 Часть", callback_data=f"partial_bid_{bid_id}")
+            types.InlineKeyboardButton(text="Подтвердить", callback_data=f"accept_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="Часть", callback_data=f"partial_bid_{bid_id}")
         )
         admin_builder.row(
-            types.InlineKeyboardButton(text="💡 Своя ставка", callback_data=f"counter_bid_{bid_id}"),
-            types.InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_bid_{bid_id}")
+            types.InlineKeyboardButton(text="Своя ставка", callback_data=f"counter_bid_{bid_id}"),
+            types.InlineKeyboardButton(text="Отказать", callback_data=f"decline_bid_{bid_id}")
         )
 
         admin_notification = (
-            f"💰 **Новая ставка из Web App!**\n\n"
-            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
-            f"💵 Ставка: {proposed_price} | 🚛 Авто: {requested_cars}\n\n"
+            f"**НОВАЯ СТАВКА ИЗ WEB APP**\n\n"
+            f"• Рейс #{load_id} | Маршрут: {route_str}\n"
+            f"• Ставка: {proposed_price} | Авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
