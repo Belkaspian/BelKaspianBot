@@ -787,7 +787,7 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         return None, "⚠️ Переменная `KAITEN_API_KEY` не задана на Render!"
 
     is_uzbekistan = ("узбекистан" in (country_str or "").lower()) or ("узбекистан" in (route_str or "").lower()) or any(c in (route_str or "").lower() for c in ['ташкент', 'самарканд', 'бухара', 'навои', 'джизак', 'фергана'])
-    board_config = KAITEN_BOARDS["UZBEKISTAN"] if is_uzbekistan else KAITEN_BOARDS["ASIA_CAUCASUS"]
+    board_config = KAITEN_BOARDS.get("UZBEKISTAN") if is_uzbekistan else KAITEN_BOARDS.get("ASIA_CAUCASUS")
     
     space_id = board_config["space_id"]
     board_id = board_config["board_id"]
@@ -803,7 +803,6 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
     if not raw_res:
         raw_res = await kaiten_api_request("GET", f"/boards/{board_id}/cards", params={"archived": "false"})
 
-    # Безопасное извлечение списка карточек
     cards = []
     if isinstance(raw_res, list):
         cards = raw_res
@@ -891,8 +890,8 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
     if candidate_cards:
         candidate_cards.sort(key=lambda x: x[0], reverse=True)
-        best_item = candidate_cards[0]
-        best_card = best_item[1] if isinstance(best_item, (tuple, list)) and len(best_item) > 1 else best_item
+        best_tuple = candidate_cards[0]
+        best_card = best_tuple[1] if isinstance(best_tuple, (tuple, list)) and len(best_tuple) > 1 else best_tuple
         
         if isinstance(best_card, dict):
             debug_logs.append(f"\n✅ **Найдена лучшая карточка:** `{best_card.get('title')}` (ID: `{best_card.get('id')}`)")
@@ -940,13 +939,16 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
         card = None
         debug_text = "Не удалось выполнить поиск карточки"
 
-        if isinstance(res, tuple) and len(res) == 2:
-            card, debug_text = res[0], res[1]
+        if isinstance(res, (tuple, list)):
+            if len(res) > 0 and isinstance(res[0], dict):
+                card = res[0]
+            if len(res) > 1 and isinstance(res[1], str):
+                debug_text = res[1]
         elif isinstance(res, dict):
             card = res
 
         if not card or not isinstance(card, dict):
-            return False, debug_text if isinstance(debug_text, str) else "Карточка не найдена"
+            return False, debug_text
 
         card_id = card.get("id")
         card_title = card.get("title", "")
