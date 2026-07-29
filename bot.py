@@ -29,7 +29,7 @@ try:
 except ImportError:
     HAS_GENAI = False
 
-# Безопасный импорт ReportLab для генерации PDF
+# Безопасный импорт ReportLab
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -43,7 +43,7 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    logging.critical("❌ ОШИБКА: Не задана переменная окружения BOT_TOKEN на Render!")
+    logging.critical("❌ ОШИБКА: Не задана переменная окружения BOT_TOKEN!")
 
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
 ADMIN_ID = os.getenv("ADMIN_ID")
@@ -121,7 +121,6 @@ def init_db():
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    # Включаем WAL режим для исключения блокировок базы при параллельных запросах
     cursor.execute("PRAGMA journal_mode=WAL;")
     
     cursor.execute("""
@@ -131,7 +130,11 @@ def init_db():
             name TEXT,
             phone TEXT,
             subscriptions TEXT,
-            status TEXT DEFAULT 'ACTIVE'
+            status TEXT DEFAULT 'ACTIVE',
+            verification_status TEXT DEFAULT 'UNVERIFIED',
+            pending_company TEXT DEFAULT '',
+            pending_name TEXT DEFAULT '',
+            pending_phone TEXT DEFAULT ''
         )
     """)
     
@@ -228,6 +231,10 @@ def init_db():
     migrations = [
         "ALTER TABLE confirmed_deals ADD COLUMN load_id INTEGER",
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
+        "ALTER TABLE users ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED'",
+        "ALTER TABLE users ADD COLUMN pending_company TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN pending_name TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN pending_phone TEXT DEFAULT ''",
         "ALTER TABLE loads ADD COLUMN cargo_type TEXT",
         "ALTER TABLE loads ADD COLUMN weight TEXT",
         "ALTER TABLE loads ADD COLUMN car_type TEXT",
@@ -291,6 +298,12 @@ class AdminEditStates(StatesGroup):
 
 class AdminCounterStates(StatesGroup):
     waiting_for_counter_rate = State()
+
+class AdminPartialStates(StatesGroup):
+    waiting_for_cars = State()
+
+class AdminVerifyEditStates(StatesGroup):
+    waiting_for_details = State()
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
@@ -434,7 +447,6 @@ def parse_cargo_date(date_str: str) -> date | None:
     except ValueError:
         return None
 
-# Точный парсинг сырого текста грузов
 def parse_cargo_raw(raw_text: str):
     clean_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
 
@@ -592,7 +604,6 @@ def parse_multiple_cargos(raw_text: str):
         
     return result_texts
 
-# Кликабельная ссылка на профиль Telegram для моментального чата
 def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -> str:
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -606,7 +617,6 @@ def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -
 
     display_name = db_name or full_name or "Перевозчик"
 
-    # Формируем кликабельный тег профиля Telegram
     if username:
         clean_username = username.lstrip('@')
         user_link = f"[@{clean_username}](tg://user?id={user_id})"
@@ -711,7 +721,8 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         conn.close()
     except Exception:
         pass
-        # ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
+
+# ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
 
 class VehicleDetails(BaseModel):
     brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
@@ -778,8 +789,7 @@ def get_category_priority(cat_str: str) -> int:
     if 'trailer' in s or 'прицеп' in s or 'стс_прицеп' in s: return 40
     return 90
 
-# Вспомогательный вызов ИИ с передачей частей прямо из памяти
-async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False):
+async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False, route_str=""):
     fallback_text = (
         "Тягач: Не распознан\n"
         "Прицеп: Не распознан\n"
@@ -866,55 +876,72 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
                 if show_model and m and m.lower() not in b.lower(): return f"{b} {m}"
                 return b
 
-            # Использование ФИО СТРОГО из Паспорта
             p_full_name = (p.get("full_name") or d.get("full_name") or "").strip()
             if p.get("number") in ["Не распознан", None, ""] or not p_full_name:
                 driver_full_name = "Не распознан"
             else:
                 driver_full_name = p_full_name
 
-            if is_polyethylene:
-                truck_brand = build_brand_str(t, show_model=False)
-                trailer_brand = build_brand_str(tr, show_model=False)
+            truck_brand_only = (t.get('brand') or 'Не распознан').strip()
+            truck_full_brand = build_brand_str(t, show_model=True)
+            truck_plate = (t.get('plate') or 'Не распознан').strip()
+            truck_vin = (t.get('vin') or 'Не распознан').strip()
 
-                t_plate = t.get('plate') or 'Не распознан'
-                tr_plate = tr.get('plate') or 'Не распознан'
+            trailer_brand_only = (tr.get('brand') or 'Не распознан').strip()
+            trailer_full_brand = build_brand_str(tr, show_model=True)
+            trailer_plate = (tr.get('plate') or 'Не распознан').strip()
+            trailer_vin = (tr.get('vin') or 'Не распознан').strip()
 
-                p_num = p.get('number') or 'Не распознан'
-                p_date = p.get('issue_date') or 'Не распознана'
-                p_auth = p.get('authority') or 'Не распознан'
+            p_num = p.get('number') or 'Не распознан'
+            p_date = p.get('issue_date') or 'Не распознана'
+            p_auth = p.get('authority') or 'Не распознан'
 
-                l_num = l.get('number') or 'Не распознан'
-                l_date = l.get('issue_date') or 'Не распознана'
-                l_country = l.get('country') or 'Не распознана'
+            l_num = l.get('number') or 'Не распознан'
+            l_date = l.get('issue_date') or 'Не распознана'
+            l_country = l.get('country') or 'Не распознана'
 
-                b_date = d.get('birth_date') or 'Не распознана'
-                b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
+            b_date = d.get('birth_date') or 'Не распознана'
+            b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
 
-                # Специальный формат для полиэтилена
+            route_check_str = (route_str or text_notes or "").lower()
+
+            if is_polyethylene or "полиэтилен" in route_check_str or "polyethylene" in route_check_str:
                 formatted_output = (
-                    f"ТС (марка, г/н, страна регистрации): {truck_brand}, гос.ном.: {t_plate}, {t.get('country') or 'Не распознана'}\n"
-                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand}, гос.ном.: {tr_plate}, {tr.get('country') or 'Не распознана'}\n"
+                    f"ТС (марка, г/н, страна регистрации): {truck_brand_only}, гос.ном.: {truck_plate}, {t.get('country') or 'Не распознана'}\n"
+                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand_only}, гос.ном.: {trailer_plate}, {tr.get('country') or 'Не распознана'}\n"
                     f"ФИО водителя: {driver_full_name}\n"
                     f"Тел (росс): {phones_str}\n"
                     f"Водительское удостоверение (№, когда и кем выдано): № {l_num} от {l_date}г., {l_country}\n"
                     f"Паспорт (серия, №, когда и кем выдан): {p_num} выдан {p_date}г. {p_auth}\n"
                     f"Дата рождения: {b_date_str}"
                 )
-            else:
-                truck_str = f"{build_brand_str(t, show_model=True)}, {t.get('plate') or 'Не распознан'}, VIN: {t.get('vin') or 'Не распознан'}, {t.get('country') or 'Не распознана'}"
-                trailer_str = f"{build_brand_str(tr, show_model=True)}, {tr.get('plate') or 'Не распознан'}, VIN: {tr.get('vin') or 'Не распознан'}, {tr.get('country') or 'Не распознана'}"
-                driver_str = f"{driver_full_name}, дата рождения: {d.get('birth_date') or 'Не распознана'}"
-                passport_str = f"№ {p.get('number') or 'Не распознан'}, выдан {p.get('issue_date') or 'Не распознана'}, {p.get('authority') or 'Не распознан'}"
-                license_str = f"№ {l.get('number') or 'Не распознан'}, выдано {l.get('issue_date') or 'Не распознана'}, {l.get('country') or 'Не распознана'}"
-
+            elif "боржоми" in route_check_str or "borjomi" in route_check_str:
                 formatted_output = (
-                    f"Тягач: {truck_str}\n"
-                    f"Прицеп: {trailer_str}\n"
-                    f"Водитель: {driver_str}\n"
-                    f"Номера телефонов: {phones_str}\n"
-                    f"Паспорт: {passport_str}\n"
-                    f"Водительское: {license_str}"
+                    f"Машина: {truck_brand_only}, гос. номер: {truck_plate}/{trailer_plate}\n"
+                    f"Водитель: {driver_full_name}\n"
+                    f"Паспорт: {p_num} выдан {p_date}г. {p_auth}\n"
+                    f"Телефон: {phones_str}\n"
+                    f"Права: {l_num} от {l_date}г., {l_country}"
+                )
+            elif "тольятти" in route_check_str or "tolyatti" in route_check_str:
+                formatted_output = (
+                    f"Марка и модель: {truck_full_brand}\n"
+                    f"Номер ТС: {truck_plate}/{trailer_plate}\n"
+                    f"VIN: {truck_vin}\n"
+                    f"Водитель: {driver_full_name}\n"
+                    f"Паспорт: {p_num} выдан {p_date}г. {p_auth}\n"
+                    f"Вод .удостоверение: {l_num} от {l_date}г.\n"
+                    f"Телефон: {phones_str}"
+                )
+            else:
+                formatted_output = (
+                    f"Авто: {truck_brand_only}/{trailer_brand_only}, гос.ном: {truck_plate}/{trailer_plate}\n"
+                    f"Водитель: {driver_full_name}\n"
+                    f"Паспорт: {p_num} выдан {p_date}г. {p_auth}\n"
+                    f"Водительское: {l_num} от {l_date}г.\n"
+                    f"Номер телефона: {phones_str}\n\n\n"
+                    f"Тягач: {truck_full_brand}, VIN: {truck_vin}\n"
+                    f"Прицеп: {trailer_full_brand}, VIN: {trailer_vin}"
                 )
 
             return formatted_output, raw_json
@@ -923,7 +950,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
 
     return fallback_text, {}
 
-async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False):
+async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False, route_str=""):
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
     contents = ["Внимательно изучи документы. ФИО извлекай СТРОГО с ПАСПОРТА. Телефон: " + (text_notes or "Нет")]
 
@@ -938,11 +965,9 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
         except Exception as e:
             logging.error(f"Download file error for AI: {e}")
 
-    formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene)
+    formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene, route_str=route_str)
     return formatted_text, all_files, raw_json
-
-# Генерация единого объединенного PDF из байтов в памяти без создания сообщений в чате
-async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
+    async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
     buffer = io.BytesIO()
     images = []
 
@@ -952,7 +977,6 @@ async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, u
             try:
                 from pypdf import PdfReader
                 reader = PdfReader(io.BytesIO(content))
-                # Если передан 1 PDF — возвращаем его сопоставленным
                 out_buf = io.BytesIO()
                 buffer.write(content)
                 return buffer.getvalue()
@@ -1071,7 +1095,8 @@ async def auto_clean_expired_cargos():
             logging.error(f"Error in auto_clean_expired_cargos: {e}")
             
         await asyncio.sleep(30)
-        # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
+
+# ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -1085,8 +1110,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     if not user:
         cursor.execute("""
-            INSERT INTO users (user_id, company, name, phone, subscriptions, status)
-            VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE')
+            INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status)
+            VALUES (?, 'Не указана', ?, 'Не указан', '', 'ACTIVE', 'UNVERIFIED')
         """, (user_id, message.from_user.full_name))
         conn.commit()
     elif user[0] == 'BLOCKED':
@@ -1112,7 +1137,6 @@ async def send_welcome_message(message: types.Message):
         reply_markup=get_chat_menu_inline_markup(message.from_user)
     )
 
-    # Принудительно восстанавливаем нижнюю кнопку главного меню в чате
     await message.answer(
         "Используйте кнопку ниже для доступа к меню:",
         reply_markup=get_main_reply_markup(message.from_user)
@@ -1136,29 +1160,96 @@ async def callback_menu_profile(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_active")
 async def callback_menu_active(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, date, route, price, cars_count, details, admin_comment FROM loads WHERE status = 'ACTIVE' ORDER BY load_id DESC LIMIT 20")
-    rows = cursor.fetchall()
-    conn.close()
 
-    if not rows:
-        await callback.message.answer("📦 Актуальных грузов пока нет.")
+    cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+    user_subs = [s.strip() for s in (u_row[0].split(",") if u_row and u_row[0] else []) if s.strip()]
+
+    if not user_subs:
+        conn.close()
+        await callback.message.answer("📦 У вас нет подписок на направления. Выберите направления в меню.")
         await callback.answer()
         return
 
-    await callback.message.answer("📦 **Список актуальных грузов:**", parse_mode="Markdown")
-    for load_id, date_str, route_str, price_str, cars_str, details_str, admin_comment in rows:
-        card = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_str, admin_comment=admin_comment)
-        builder = InlineKeyboardBuilder()
-        web_app_url = f"{RENDER_URL}/webapp"
-        builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
-        
+    sub_conditions = []
+    params = []
+    for sub in user_subs:
+        clean_sub = sub.split()[0].strip()
+        sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
+        params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
+
+    sql_filter = " AND (" + " OR ".join(sub_conditions) + ")"
+
+    query = f"""
+        SELECT date, route, price, COALESCE(details, ''), cars_count,
+               COALESCE(car_type, ''), COALESCE(cargo_type, ''), COALESCE(weight, ''), COALESCE(admin_comment, '')
+        FROM loads
+        WHERE status = 'ACTIVE' {sql_filter}
+        ORDER BY load_id DESC LIMIT 40
+    """
+    cursor.execute(query, params)
+    raw_rows = cursor.fetchall()
+    conn.close()
+
+    if not raw_rows:
+        await callback.message.answer("📦 Актуальных грузов по вашим направлениям пока нет.")
+        await callback.answer()
+        return
+
+    grouped = {}
+    for r_date, r_route, r_price, r_details, r_cars, r_cartype, r_cargotype, r_weight, r_comment in raw_rows:
+        key = (
+            (r_date or '').strip().lower(),
+            (r_route or '').strip().lower(),
+            (r_price or '').strip().lower(),
+            (r_details or '').strip().lower()
+        )
+        m = re.search(r'\d+', str(r_cars))
+        c_num = int(m.group(0)) if m else 1
+
+        if key not in grouped:
+            grouped[key] = {
+                "date": r_date,
+                "route": r_route,
+                "price": r_price,
+                "details": r_details,
+                "cars": c_num,
+                "car_type": r_cartype,
+                "cargo_type": r_cargotype,
+                "weight": r_weight,
+                "admin_comment": r_comment
+            }
+        else:
+            grouped[key]["cars"] += c_num
+
+    await callback.message.answer("📦 **Список актуальных грузов по вашим направлениям:**", parse_mode="Markdown")
+
+    for item in grouped.values():
+        card_text = (
+            f"📍 {item['date']} | {item['route']}\n"
+            f"💰 {item['price']} | 🚚 {item['cars']} авто"
+        )
+        cargo_info_parts = [p for p in [item['car_type'], item['cargo_type'], item['weight']] if p]
+        if cargo_info_parts:
+            card_text += f"\n🚛 {', '.join(cargo_info_parts)}"
+        if item['details']:
+            card_text += f"\n📦 {item['details']}"
+        if item['admin_comment']:
+            card_text += f"\n💬 Комментарий: {item['admin_comment']}"
+
         try:
-            await callback.message.answer(card, reply_markup=builder.as_markup())
+            await callback.message.answer(card_text)
             await asyncio.sleep(0.05)
         except Exception:
             pass
+
+    builder = InlineKeyboardBuilder()
+    web_app_url = f"{RENDER_URL}/webapp"
+    builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
+    await callback.message.answer("Для бронирования и работы с приложением:", reply_markup=builder.as_markup())
 
     await callback.answer()
 
@@ -1167,27 +1258,42 @@ async def callback_menu_my_deals(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT date, route, cars, price, details FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC", (user_id,))
-    confirmed_loads = cursor.fetchall()
+    cursor.execute("""
+        SELECT cd.date, cd.route, cd.price, COALESCE(cd.details, ''), SUM(cd.cars),
+               COALESCE(l.car_type, ''), COALESCE(l.cargo_type, ''), COALESCE(l.weight, ''), COALESCE(l.admin_comment, '')
+        FROM confirmed_deals cd
+        LEFT JOIN loads l ON cd.load_id = l.load_id
+        WHERE cd.user_id = ?
+        GROUP BY LOWER(TRIM(cd.date)), LOWER(TRIM(cd.route)), LOWER(TRIM(cd.price)), LOWER(TRIM(COALESCE(cd.details, '')))
+        ORDER BY MAX(cd.id) DESC
+    """, (user_id,))
+    rows = cursor.fetchall()
     conn.close()
-    
-    if not confirmed_loads:
+
+    if not rows:
         await callback.answer("У вас пока нет забранных грузов.", show_alert=True)
         return
-        
+
     await callback.message.answer("📦 **Ваши забранные грузы:**", parse_mode="Markdown")
-    for date_str, route_str, cars_count, price_str, details_text in confirmed_loads:
+    for date_str, route_str, price_str, details_text, total_cars, car_type, cargo_type, weight, admin_comment in rows:
         card_text = (
             f"📍 {date_str} | {route_str}\n"
-            f"💰 {price_str} | 🚚 {cars_count} авто"
+            f"💰 {price_str} | 🚚 {total_cars} авто"
         )
+        cargo_info_parts = [p for p in [car_type, cargo_type, weight] if p]
+        if cargo_info_parts:
+            card_text += f"\n🚛 {', '.join(cargo_info_parts)}"
         if details_text:
             card_text += f"\n📦 {details_text}"
+        if admin_comment:
+            card_text += f"\n💬 Комментарий: {admin_comment}"
+
         try:
             await callback.message.answer(card_text)
             await asyncio.sleep(0.05)
         except Exception:
             pass
+            
     await callback.answer()
 
 async def show_directions_menu(event):
@@ -1198,11 +1304,13 @@ async def show_directions_menu(event):
     row = cursor.fetchone()
     conn.close()
     
-    user_subs = row[0].split(",") if row and row[0] else []
+    user_subs = [s.strip() for s in (row[0].split(",") if row and row[0] else []) if s.strip()]
     
     builder = InlineKeyboardBuilder()
     for direction in CHANNELS.keys():
-        mark = "✅ " if direction in user_subs else "   "
+        clean_dir = direction.split()[0].strip().lower()
+        is_active = any(clean_dir in s.lower() for s in user_subs)
+        mark = "✅ " if is_active else "   "
         builder.row(types.InlineKeyboardButton(
             text=f"{mark}{direction}",
             callback_data=f"toggle_dir_{direction}"
@@ -1230,9 +1338,17 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     
-    current_subs = row[0].split(",") if row and row[0] else []
-    if direction in current_subs:
-        current_subs.remove(direction)
+    current_subs = [s.strip() for s in (row[0].split(",") if row and row[0] else []) if s.strip()]
+    clean_target = direction.split()[0].strip().lower()
+
+    existing_match = None
+    for s in current_subs:
+        if clean_target in s.lower():
+            existing_match = s
+            break
+
+    if existing_match:
+        current_subs.remove(existing_match)
     else:
         current_subs.append(direction)
         
@@ -1243,7 +1359,9 @@ async def callback_toggle_direction(callback: types.CallbackQuery):
     
     builder = InlineKeyboardBuilder()
     for d in CHANNELS.keys():
-        mark = "✅ " if d in current_subs else "   "
+        clean_d = d.split()[0].strip().lower()
+        is_active = any(clean_d in s.lower() for s in current_subs)
+        mark = "✅ " if is_active else "   "
         builder.row(types.InlineKeyboardButton(
             text=f"{mark}{d}",
             callback_data=f"toggle_dir_{d}"
@@ -1262,16 +1380,25 @@ async def show_profile_menu(event):
     user_id = event.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT company, name, phone, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
     comp = row[0] if row and row[0] else "Не указана"
     name = row[1] if row and row[1] else "Не указано"
     phone = row[2] if row and row[2] else "Не указан"
+    v_stat = row[3] if row else "UNVERIFIED"
+
+    stat_map = {
+        'VERIFIED': '✅ ВЕРИФИЦИРОВАН',
+        'PENDING': '⏳ НА РАССМОТРЕНИИ',
+        'UNVERIFIED': '❌ НЕ ВЕРИФИЦИРОВАН',
+        'REJECTED': '❌ ОТКЛОНЕН'
+    }
 
     text = (
         f"👤 **Личный кабинет**\n\n"
+        f"Статус: **{stat_map.get(v_stat, 'НЕ ВЕРИФИЦИРОВАН')}**\n"
         f"🏢 Компания: {comp}\n"
         f"👤 Имя: {name}\n"
         f"📞 Телефон: {phone}"
@@ -1371,7 +1498,7 @@ async def cmd_convert_data_start(event: types.Message | types.CallbackQuery, sta
         "🔄 **Преобразование данных (автономно)**\n\n"
         "Присылайте фото документов, PDF-файлы или текстовые заметки.\n"
         "Когда все файлы будут загружены, нажмите **«✅ Завершить и отправить»**.\n"
-        "ИИ распознает данные, отсканирует и отсортирует страницы (Паспорт ➔ Права ➔ Тягач ➔ Прицеп), сгенерирует 1 готовый PDF и отправит в канал логистов."
+        "ИИ распознает данные, отсканирует и отсортирует страницы, сгенерирует 1 готовый PDF и отправит в канал логистов."
     )
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="✅ Завершить и отправить"))
@@ -1416,14 +1543,13 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
 
     status_msg = await message.answer("🔄 ИИ распознает документы и сортирует страницы в PDF...")
 
-    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False)
+    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False, route_str="")
 
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
     tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
 
-    # ФИО водителя извлекаем strictly из паспорта
     p_full_name = (p_data.get("full_name") or "").strip()
     if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
         driver_name = "ВОДИТЕЛЬ"
@@ -1547,7 +1673,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             prev_driver_phone = row[7] or ""
         conn.close()
 
-    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene)
+    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene, route_str=route_str)
 
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
     tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
@@ -1577,7 +1703,6 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_driver_phone = "Не указан"
 
-    # Строгая проверка всех 5 обязательных компонентов
     missing_items = []
 
     p_num = p_data.get("number")
@@ -1679,7 +1804,6 @@ async def handle_doc_text_notes(message: types.Message, state: FSMContext):
     new_notes = (old_notes + "\n" + message.text).strip()
     await state.update_data(text_notes=new_notes)
 
-# Вспомогательная функция определения страны направления
 def detect_country(text: str) -> str:
     t = text.lower()
     if 'казахстан' in t or any(c in t for c in ['алматы', 'астана', 'шымкент', 'караганда', 'актау', 'атырау']):
@@ -1874,6 +1998,80 @@ async def handle_decline_bid(callback: types.CallbackQuery):
         conn.close()
         await callback.answer("Ставка не найдена.", show_alert=True)
 
+@dp.callback_query(F.data.startswith("partial_bid_"))
+async def handle_partial_bid_start(callback: types.CallbackQuery, state: FSMContext):
+    bid_id = int(callback.data.replace("partial_bid_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+    conn.close()
+
+    if not bid:
+        await callback.answer("Ставка не найдена.", show_alert=True)
+        return
+
+    requested_cars, rate = bid
+    await state.set_state(AdminPartialStates.waiting_for_cars)
+    await state.update_data(partial_bid_id=bid_id)
+    await callback.message.reply(f"🔀 Введите количество подтверждаемых авто (запрошено: {requested_cars} авто по ставке {rate}):")
+    await callback.answer()
+
+@dp.message(AdminPartialStates.waiting_for_cars)
+async def handle_partial_bid_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    bid_id = data.get("partial_bid_id")
+    
+    m = re.search(r'\d+', message.text.strip())
+    confirm_cars = int(m.group(0)) if m else 1
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if bid:
+        load_id, user_id, requested_cars, rate = bid
+        if confirm_cars > requested_cars:
+            confirm_cars = requested_cars
+
+        cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+        load = cursor.fetchone()
+
+        if load:
+            route_str, date_str, details_text, cars_count_str = load
+            curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+            if curr_cars > confirm_cars:
+                cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - confirm_cars), load_id))
+            else:
+                cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+            for _ in range(confirm_cars):
+                cursor.execute("""
+                    INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+            cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+            conn.commit()
+
+            add_notification(user_id, "Частичное подтверждение", f"Логист подтвердил {confirm_cars} авто по ставке {rate} ({route_str}).")
+            try:
+                await bot.send_message(chat_id=user_id, text=f"🔀 Логист частично подтвердил вашу заявку по грузу **{route_str}**: **{confirm_cars} авто** по ставке **{rate}**!")
+            except Exception:
+                pass
+
+            await update_cargo_messages_for_all_users(load_id)
+            await message.answer(f"✅ Подтверждено {confirm_cars} авто по ставке {rate}!")
+        else:
+            await message.answer("Груз не найден.")
+    else:
+        await message.answer("Ставка не найдена.")
+
+    conn.close()
+    await state.clear()
+
 @dp.callback_query(F.data.startswith("counter_bid_"))
 async def handle_counter_bid_start(callback: types.CallbackQuery, state: FSMContext):
     bid_id = int(callback.data.replace("counter_bid_", ""))
@@ -1901,37 +2099,263 @@ async def handle_counter_bid_finish(message: types.Message, state: FSMContext):
 
         cursor.execute("UPDATE bids SET status = 'COUNTER', counter_rate = ? WHERE bid_id = ?", (counter_rate, bid_id))
         conn.commit()
-        conn.close()
 
         add_notification(user_id, "Встречное предложение", f"Логист предложил вам ставку {counter_rate} по грузу {route_str}.")
+        
+        counter_builder = InlineKeyboardBuilder()
+        counter_builder.row(
+            types.InlineKeyboardButton(text="✅ Принять встречную", callback_data=f"accept_counter_{bid_id}"),
+            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decline_counter_{bid_id}")
+        )
         try:
-            await bot.send_message(chat_id=user_id, text=f"💡 Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваше предложение было: {orig_rate}).")
+            await bot.send_message(
+                chat_id=user_id, 
+                text=f"💡 Логист предложил встречную ставку **{counter_rate}** по грузу **{route_str}** (ваше предложение было: {orig_rate}).\n\nПринимаете предложение?",
+                reply_markup=counter_builder.as_markup(),
+                parse_mode="Markdown"
+            )
         except Exception:
             pass
 
         await message.answer(f"✅ Встречная ставка {counter_rate} отправлена перевозчику!")
     else:
-        conn.close()
         await message.answer("Ставка не найдена.")
 
+    conn.close()
     await state.clear()
+
+@dp.callback_query(F.data.startswith("accept_counter_"))
+async def handle_accept_counter(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("accept_counter_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, cars, counter_rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if not bid:
+        conn.close()
+        await callback.answer("Предложение не найдено.", show_alert=True)
+        return
+
+    load_id, user_id, requested_cars, counter_rate = bid
+    cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+
+    if load:
+        route_str, date_str, details_text, cars_count_str = load
+        curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+        if curr_cars > requested_cars:
+            cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - requested_cars), load_id))
+        else:
+            cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+        for _ in range(requested_cars):
+            cursor.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (load_id, user_id, date_str, route_str, counter_rate, details_text))
+
+        cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+
+        add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
+        await update_cargo_messages_for_all_users(load_id)
+
+        admin_notification = (
+            f"✅ **Перевозчик ПРИНЯЛ встречную ставку!**\n\n"
+            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
+            f"💰 Итоговая ставка: {counter_rate} | 🚛 Авто: {requested_cars}\n\n"
+            f"👤 Перевозчик ID: {user_id}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        except Exception:
+            pass
+
+        await callback.message.edit_text(callback.message.text + "\n\n✅ **ВЫ ПРИНЯЛИ ВСТРЕЧНУЮ СТАВКУ**")
+    else:
+        await callback.answer("Груз не найден.", show_alert=True)
+
+    conn.close()
+
+@dp.callback_query(F.data.startswith("decline_counter_"))
+async def handle_decline_counter(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("decline_counter_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, counter_rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if bid:
+        load_id, user_id, counter_rate = bid
+        cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
+        l_row = cursor.fetchone()
+        route_str = l_row[0] if l_row else "Груз"
+
+        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+
+        admin_notification = (
+            f"❌ **Перевозчик ОТКЛОНИЛ встречную ставку.**\n\n"
+            f"🆔 Груз #{load_id} | Маршрут: {route_str}\n"
+            f"💵 Отклоненная ставка: {counter_rate}\n"
+            f"👤 Перевозчик ID: {user_id}"
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+        except Exception:
+            pass
+
+        await callback.message.edit_text(callback.message.text + "\n\n❌ **ВЫ ОТКЛОНИЛИ ВСТРЕЧНУЮ СТАВКУ**")
+
+    conn.close()
+
+@dp.callback_query(F.data.startswith("verify_approve_"))
+async def handle_verify_approve(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("verify_approve_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET verification_status = 'VERIFIED' WHERE user_id = ?", (target_uid,))
+    conn.commit()
+    conn.close()
+
+    add_notification(target_uid, "Верификация пройдена!", "🎉 Ваша учетная запись успешно верифицирована. Вам открыт полный доступ к ценам и бронированию.")
+    try:
+        await bot.send_message(chat_id=target_uid, text="🎉 **Поздравляем!** Ваша верификация успешно подтверждена. Полный доступ к бирже открыт!")
+    except Exception:
+        pass
+
+    await callback.message.edit_text(callback.message.text + "\n\n✅ **ВЕРИФИКАЦИЯ ПОДТВЕРЖДЕНА**")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("verify_reject_"))
+async def handle_verify_reject(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("verify_reject_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET verification_status = 'REJECTED' WHERE user_id = ?", (target_uid,))
+    conn.commit()
+    conn.close()
+
+    add_notification(target_uid, "Верификация отклонена", "❌ Ваша заявка на верификацию была отклонена администратором.")
+    try:
+        await bot.send_message(chat_id=target_uid, text="❌ К сожалению, ваша заявка на верификацию отклонена. Проверьте данные в Личном кабинете и подайте заявку повторно.")
+    except Exception:
+        pass
+
+    await callback.message.edit_text(callback.message.text + "\n\n❌ **ВЕРИФИКАЦИЯ ОТКЛОНЕНА**")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("verify_edit_"))
+async def handle_verify_edit_start(callback: types.CallbackQuery, state: FSMContext):
+    target_uid = int(callback.data.replace("verify_edit_", ""))
+    await state.set_state(AdminVerifyEditStates.waiting_for_details)
+    await state.update_data(verify_target_uid=target_uid)
+    
+    await callback.message.reply(
+        "✏️ **Редактирование данных пользователя**\n\n"
+        "Отправьте новые данные в формате:\n"
+        "`Название компании | ФИО Контакта | Телефон`\n\n"
+        "Пример:\n`ООО ТрансЛогистик | Иванов Иван | +375291234567`"
+    )
+    await callback.answer()
+
+@dp.message(AdminVerifyEditStates.waiting_for_details)
+async def handle_verify_edit_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    target_uid = data.get("verify_target_uid")
+    
+    parts = [p.strip() for p in message.text.split('|')]
+    if len(parts) < 3:
+        await message.answer("⚠️ Неверный формат! Введите строго через разделитель `|`: `Компания | ФИО | Телефон`")
+        return
+
+    comp, name, phone = parts[0], parts[1], parts[2]
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET company = ?, name = ?, phone = ? WHERE user_id = ?", (comp, name, phone, target_uid))
+    conn.commit()
+    conn.close()
+
+    add_notification(target_uid, "Профиль отредактирован", f"Администратор скорректировал данные вашего профиля:\n{comp} | {name} | {phone}")
+
+    carrier_link = format_carrier_info(target_uid)
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"verify_approve_{target_uid}"),
+        types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"verify_reject_{target_uid}")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="✏️ Отредактировать", callback_data=f"verify_edit_{target_uid}")
+    )
+
+    msg_text = (
+        f"🛡️ **ЗАПРОС НА ВЕРИФИКАЦИЮ (ОТРЕДАКТИРОВАНО)**\n\n"
+        f"{carrier_link}\n"
+        f"🏢 Компания: {comp}\n"
+        f"👤 ФИО: {name}\n"
+        f"📞 Телефон: {phone}"
+    )
+
+    await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await message.answer("✅ Данные обновлены! Новое меню отправлено в админ-канал.")
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("profile_approve_"))
+async def handle_profile_approve(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("profile_approve_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET 
+            company = pending_company,
+            name = pending_name,
+            phone = pending_phone,
+            pending_company = '',
+            pending_name = '',
+            pending_phone = ''
+        WHERE user_id = ?
+    """, (target_uid,))
+    conn.commit()
+    conn.close()
+
+    add_notification(target_uid, "Изменения подтверждены", "✅ Изменения вашего профиля успешно утверждены логистом.")
+    await callback.message.edit_text(callback.message.text + "\n\n✅ **ИЗМЕНЕНИЯ ПРОФИЛЯ УТВЕРЖДЕНЫ**")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("profile_reject_"))
+async def handle_profile_reject(callback: types.CallbackQuery):
+    target_uid = int(callback.data.replace("profile_reject_", ""))
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET pending_company = '', pending_name = '', pending_phone = '' WHERE user_id = ?", (target_uid,))
+    conn.commit()
+    conn.close()
+
+    add_notification(target_uid, "Изменения отклонены", "❌ Изменение данных вашего профиля отклонено администратором.")
+    await callback.message.edit_text(callback.message.text + "\n\n❌ **ИЗМЕНЕНИЯ ПРОФИЛЯ ОТКЛОНЕНЫ**")
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_"))
 async def callback_confirm_cargo(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
-    u_status = cursor.fetchone()
-    if u_status and u_status[0] == 'BLOCKED':
+    cursor.execute("SELECT status, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+    
+    if u_row and u_row[0] == 'BLOCKED':
         conn.close()
         await callback.answer("Ваш аккаунт заблокирован администратором.", show_alert=True)
         return
-    conn.close()
+    if not u_row or u_row[1] != 'VERIFIED':
+        conn.close()
+        await callback.answer("Для подтверждения грузов пройдите верификацию в Личном кабинете!", show_alert=True)
+        return
 
     cargo_id = int(callback.data.replace("confirm_", ""))
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
     cursor.execute("SELECT cars_count FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     conn.close()
@@ -1946,12 +2370,18 @@ async def callback_custom_bid(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
-    u_status = cursor.fetchone()
-    if u_status and u_status[0] == 'BLOCKED':
+    cursor.execute("SELECT status, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+
+    if u_row and u_row[0] == 'BLOCKED':
         conn.close()
         await callback.answer("Ваш аккаунт заблокирован администратором.", show_alert=True)
         return
+    if not u_row or u_row[1] != 'VERIFIED':
+        conn.close()
+        await callback.answer("Для подачи ставок пройдите верификацию в Личном кабинете!", show_alert=True)
+        return
+
     conn.close()
 
     cargo_id = int(callback.data.replace("bid_", ""))
@@ -2113,17 +2543,19 @@ async def get_loads_api(request):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
+    cursor.execute("SELECT subscriptions, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+    
     user_subs = []
-    if user_id:
-        cursor.execute("SELECT subscriptions FROM users WHERE user_id = ?", (user_id,))
-        u_row = cursor.fetchone()
-        if u_row and u_row[0]:
+    is_verified = False
+    if u_row:
+        if u_row[0]:
             user_subs = [s.strip() for s in u_row[0].split(',') if s.strip()]
+        is_verified = (u_row[1] == 'VERIFIED')
 
-    # Если пользователь зашел, но отписан от всех направлений — Биржа пустая
     if user_id and not user_subs and not (country and country != 'ALL'):
         conn.close()
-        return web.json_response({"loads": []})
+        return web.json_response({"loads": [], "is_verified": is_verified})
 
     query = """
         SELECT load_id, route, date, cars_count, price, text, 
@@ -2144,7 +2576,7 @@ async def get_loads_api(request):
         if user_subs:
             sub_conditions = []
             for sub in user_subs:
-                clean_sub = sub.split(' ')[0]
+                clean_sub = sub.split()[0].strip()
                 sub_conditions.append("(destination_country LIKE ? OR route LIKE ?)")
                 params.extend([f"%{clean_sub}%", f"%{clean_sub}%"])
             query += " AND (" + " OR ".join(sub_conditions) + ")"
@@ -2165,16 +2597,16 @@ async def get_loads_api(request):
             "route": r[1] if r[1] else "Не указан",
             "date": r[2] if r[2] else "Срочно",
             "cars": r[3] if r[3] else "1",
-            "price": r[4] if r[4] else "Торги",
-            "raw_text": r[5],
-            "cargo_type": r[6],
-            "weight": r[7],
-            "car_type": r[8],
-            "admin_comment": r[9],
+            "price": r[4] if is_verified else "🔒 Скрыто",
+            "raw_text": r[5] if is_verified else "",
+            "cargo_type": r[6] if is_verified else "🔒 Скрыто",
+            "weight": r[7] if is_verified else "🔒 Скрыто",
+            "car_type": r[8] if is_verified else "🔒 Скрыто",
+            "admin_comment": r[9] if is_verified else "",
             "country": r[10],
             "is_today": is_today
         })
-    return web.json_response({"loads": loads})
+    return web.json_response({"loads": loads, "is_verified": is_verified})
 
 async def my_loads_api(request):
     raw_uid = request.query.get('user_id')
@@ -2213,15 +2645,16 @@ async def my_loads_api(request):
         confirmed_rows = cursor.fetchall()
         
         cursor.execute("""
-            SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, b.rate as price,
-                   COALESCE(l.details, ''), 'PENDING' as status,
+            SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, 
+                   COALESCE(b.counter_rate, b.rate) as price,
+                   COALESCE(l.details, ''), b.status,
                    COALESCE(l.car_type, 'Тент/реф'),
                    COALESCE(l.cargo_type, 'ТНП'),
                    COALESCE(l.weight, 'до 22т'),
                    0 as docs_submitted
             FROM bids b
             JOIN loads l ON b.load_id = l.load_id
-            WHERE b.user_id = ? AND b.status = 'PENDING'
+            WHERE b.user_id = ? AND b.status IN ('PENDING', 'COUNTER')
             ORDER BY b.bid_id DESC
         """, (user_id,))
         pending_rows = cursor.fetchall()
@@ -2248,8 +2681,7 @@ async def my_loads_api(request):
             "date": date_str or "Срочно",
             "route": route_str or "Маршрут",
             "price": price_str or "Торги",
-            "status": "PENDING",
-            "status_text": "⏳ (на согласовании)",
+            "status": status_str,
             "details": details_str or "",
             "car_type": car_type or "Тент/реф",
             "cargo_type": cargo_type or "ТНП",
@@ -2302,7 +2734,6 @@ async def my_loads_api(request):
             
     return web.json_response({"deals": deals})
 
-# Прямая загрузка из Web App: обрабатывает файлы в памяти без дублирования в личный чат
 async def direct_upload_docs_api(request):
     try:
         reader = await request.multipart()
@@ -2336,7 +2767,6 @@ async def direct_upload_docs_api(request):
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
 
-        # Ставим статус PROCESSING для анимации "⏳ считывание"
         cursor.execute("UPDATE confirmed_deals SET docs_status = 'PROCESSING' WHERE id = ? AND user_id = ?", (deal_id, user_id))
         conn.commit()
 
@@ -2361,7 +2791,6 @@ async def direct_upload_docs_api(request):
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
 
-        # Кликабельная ссылка на профиль
         user_info = format_carrier_info(user_id)
 
         if raw_files:
@@ -2370,7 +2799,7 @@ async def direct_upload_docs_api(request):
                 mime = detect_mime_type(content, fname)
                 contents.append(genai_types.Part.from_bytes(data=content, mime_type=mime))
 
-            ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, phone_input, is_polyethylene=is_polyethylene)
+            ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, phone_input, is_polyethylene=is_polyethylene, route_str=route_str)
             
             t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
             tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
@@ -2413,7 +2842,6 @@ async def direct_upload_docs_api(request):
                 f"Водительское: Документы не загружены"
             )
 
-        # Строгая проверка всех 5 документов
         missing_items = []
 
         p_num = raw_json.get("driver", {}).get("passport", {}).get("number")
@@ -2440,7 +2868,6 @@ async def direct_upload_docs_api(request):
         conn.commit()
         conn.close()
 
-        # Отправляем 1 текст + 1 PDF в канал (в личные сообщения ничего не высылаем)
         header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
         admin_msg = (
             f"**{header_title}**\n\n"
@@ -2539,13 +2966,27 @@ async def profile_get_api(request):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT company, name, phone, subscriptions FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("""
+        SELECT company, name, phone, subscriptions, 
+               COALESCE(verification_status, 'UNVERIFIED'),
+               COALESCE(pending_company, ''), COALESCE(pending_name, ''), COALESCE(pending_phone, '')
+        FROM users WHERE user_id = ?
+    """, (user_id,))
     row = cursor.fetchone()
     conn.close()
 
     if row:
         return web.json_response({
-            "profile": {"company": row[0] or "", "name": row[1] or "", "phone": row[2] or "", "subscriptions": row[3] or ""}
+            "profile": {
+                "company": row[0] or "",
+                "name": row[1] or "",
+                "phone": row[2] or "",
+                "subscriptions": row[3] or "",
+                "verification_status": row[4] or "UNVERIFIED",
+                "pending_company": row[5] or "",
+                "pending_name": row[6] or "",
+                "pending_phone": row[7] or ""
+            }
         })
     return web.json_response({"profile": None})
 
@@ -2556,24 +2997,130 @@ async def profile_post_api(request):
         if not user_id:
             return web.json_response({"error": "No user_id"}, status=400)
 
-        company = data.get('company', '')
-        name = data.get('name', '')
-        phone = data.get('phone', '')
+        company = data.get('company', '').strip()
+        name = data.get('name', '').strip()
+        phone = data.get('phone', '').strip()
         subscriptions = data.get('subscriptions', '')
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users (user_id, company, name, phone, subscriptions, status)
-            VALUES (?, ?, ?, ?, ?, 'ACTIVE')
-            ON CONFLICT(user_id) DO UPDATE SET
-                company = excluded.company,
-                name = excluded.name,
-                phone = excluded.phone,
-                subscriptions = excluded.subscriptions
-        """, (user_id, company, name, phone, subscriptions))
+        cursor.execute("SELECT verification_status, company, name, phone FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+
+        v_status = row[0] if row else 'UNVERIFIED'
+
+        if v_status == 'VERIFIED':
+            cursor.execute("""
+                UPDATE users SET 
+                    subscriptions = ?,
+                    pending_company = ?,
+                    pending_name = ?,
+                    pending_phone = ?
+                WHERE user_id = ?
+            """, (subscriptions, company, name, phone, user_id))
+        else:
+            cursor.execute("""
+                INSERT INTO users (user_id, company, name, phone, subscriptions, verification_status, status)
+                VALUES (?, ?, ?, ?, ?, 'UNVERIFIED', 'ACTIVE')
+                ON CONFLICT(user_id) DO UPDATE SET
+                    company = excluded.company,
+                    name = excluded.name,
+                    phone = excluded.phone,
+                    subscriptions = excluded.subscriptions
+            """, (user_id, company, name, phone, subscriptions))
+
         conn.commit()
         conn.close()
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def request_verification_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get('user_id', 0))
+        if not user_id:
+            return web.json_response({"error": "No user_id"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT company, name, phone, verification_status FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+
+        if not row or not row[0] or not row[1] or not row[2]:
+            conn.close()
+            return web.json_response({"error": "Заполните все данные профиля (Компания, ФИО, Телефон)"}, status=400)
+
+        cursor.execute("UPDATE users SET verification_status = 'PENDING' WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+
+        carrier_link = format_carrier_info(user_id)
+
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"verify_approve_{user_id}"),
+            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"verify_reject_{user_id}")
+        )
+        builder.row(
+            types.InlineKeyboardButton(text="✏️ Отредактировать", callback_data=f"verify_edit_{user_id}")
+        )
+
+        msg_text = (
+            f"🛡️ **ЗАПРОС НА ВЕРИФИКАЦИЮ**\n\n"
+            f"{carrier_link}\n"
+            f"🏢 Компания: {row[0]}\n"
+            f"👤 ФИО: {row[1]}\n"
+            f"📞 Телефон: {row[2]}"
+        )
+
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        except Exception:
+            pass
+
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def submit_profile_changes_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get('user_id', 0))
+        if not user_id:
+            return web.json_response({"error": "No user_id"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT company, name, phone, pending_company, pending_name, pending_phone FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or not row[3]:
+            return web.json_response({"error": "Нет сохраненных изменений"}, status=400)
+
+        carrier_link = format_carrier_info(user_id)
+
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"profile_approve_{user_id}"),
+            types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"profile_reject_{user_id}")
+        )
+
+        msg_text = (
+            f"📝 **ЗАПРОС НА ИЗМЕНЕНИЕ ДАННЫХ ПРОФИЛЯ**\n\n"
+            f"{carrier_link}\n\n"
+            f"🔴 **Было:**\n"
+            f"• Компания: {row[0]}\n• ФИО: {row[1]}\n• Тел: {row[2]}\n\n"
+            f"🟢 **Стало:**\n"
+            f"• Компания: {row[3]}\n• ФИО: {row[4]}\n• Тел: {row[5]}"
+        )
+
+        try:
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        except Exception:
+            pass
+
         return web.json_response({"status": "success"})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
@@ -2647,15 +3194,21 @@ async def book_load_api(request):
     if not user_id:
         return web.json_response({"error": "Пользователь не определён."}, status=400)
 
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    v_row = cursor.fetchone()
+    if not v_row or v_row[0] != 'VERIFIED':
+        conn.close()
+        return web.json_response({"error": "Для подтверждения грузов и подачи ставок пройдите верификацию в Личном кабинете!"}, status=403)
+
     first_name = data.get('first_name', '')
     username = data.get('username', '')
     action = data.get('action') 
     proposed_price = format_custom_rate(data.get('proposed_price', ''))
     carrier_comment = data.get('comment', '')
     requested_cars = int(data.get('cars', 1))
-
-    conn = sqlite3.connect("cargo_bot.db")
-    cursor = conn.cursor()
 
     cursor.execute("SELECT status, route, date, price, cars_count, details, admin_comment FROM loads WHERE load_id = ?", (load_id,))
     load = cursor.fetchone()
@@ -2977,6 +3530,8 @@ async def web_server():
     app.router.add_post("/api/notifications/read", notifications_read_api)
     app.router.add_get("/api/profile", profile_get_api)
     app.router.add_post("/api/profile", profile_post_api)
+    app.router.add_post("/api/request_verification", request_verification_api)
+    app.router.add_post("/api/submit_profile_changes", submit_profile_changes_api)
     app.router.add_post("/api/book/{id}", book_load_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
     app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
