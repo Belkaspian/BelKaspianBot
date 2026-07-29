@@ -78,7 +78,7 @@ CHANNELS = {
     "Казахстан 🇰🇿": -1004309918435,
     "Узбекистан 🇺🇿": -1003470705929,
     "Кыргызстан 🇰🇬": -1004470387295,
-    "Азербайджан 🇦🇿": -1004483200216,
+    "Азербайджан 🇦зербайджан": -1004483200216,
     "Грузия 🇬🇪": -1004340496095,
     "Армения 🇦🇲": -1004335138909
 }
@@ -1920,9 +1920,9 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
             cursor.execute("""
                 UPDATE users SET 
                     company = ?, name = ?, phone = ?,
-                    pending_company = ?, pending_name = ?, pending_phone = ?
+                    pending_company = '', pending_name = '', pending_phone = ''
                 WHERE user_id = ?
-            """, (comp, name, phone, comp, name, phone, target_id))
+            """, (comp, name, phone, target_id))
             conn.commit()
 
             add_notification(target_id, "Профиль скорректирован", f"Данные профиля обновлены логистом:\n{comp} | {name} | {phone}")
@@ -2041,6 +2041,7 @@ async def handle_channel_post(message: types.Message):
         cursor.execute("SELECT date, route FROM loads WHERE load_id = ?", (cargo_id,))
         c_row = cursor.fetchone()
         c_date = c_row[0] if c_row else "ближайшую дату"
+        c_route = c_row[1] if c_row else "маршруту"
         
         for u_id, subs, u_status in all_users:
             if u_status == 'BLOCKED':
@@ -2051,7 +2052,7 @@ async def handle_channel_post(message: types.Message):
                 add_notification(
                     u_id, 
                     "Новый груз", 
-                    f"Появился груз на {c_date} по направлению {direction}"
+                    f"Появился груз на {c_date} по маршруту {c_route}"
                 )
                 await asyncio.sleep(0.05)
                 
@@ -2252,7 +2253,7 @@ async def handle_verify_approve(callback: types.CallbackQuery):
     target_uid = int(callback.data.replace("verify_approve_", ""))
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET verification_status = 'VERIFIED' WHERE user_id = ?", (target_uid,))
+    cursor.execute("UPDATE users SET verification_status = 'VERIFIED', pending_company = '', pending_name = '', pending_phone = '' WHERE user_id = ?", (target_uid,))
     conn.commit()
     conn.close()
 
@@ -3298,7 +3299,7 @@ async def book_load_api(request):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
         except Exception:
             pass
 
@@ -3306,6 +3307,67 @@ async def book_load_api(request):
 
     conn.close()
     return web.json_response({"error": "Неизвестное действие"}, status=400)
+
+async def accept_counter_api(request):
+    try:
+        data = await request.json()
+        bid_id = int(data.get('bid_id', 0))
+        user_id = int(data.get('user_id', 0))
+        if not bid_id or not user_id:
+            return web.json_response({"error": "Неверные данные"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT load_id, user_id, cars, counter_rate FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
+        bid = cursor.fetchone()
+
+        if not bid:
+            conn.close()
+            return web.json_response({"error": "Заявка не найдена"}, status=404)
+
+        load_id, user_id, requested_cars, counter_rate = bid
+        cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+        load = cursor.fetchone()
+
+        if load:
+            route_str, date_str, details_text, cars_count_str = load
+            curr_cars = int(re.search(r'\d+', str(cars_count_str)).group(0)) if re.search(r'\d+', str(cars_count_str)) else 1
+
+            if curr_cars > requested_cars:
+                cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(curr_cars - requested_cars), load_id))
+            else:
+                cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+            for _ in range(requested_cars):
+                cursor.execute("""
+                    INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                """, (load_id, user_id, date_str, route_str, counter_rate, details_text))
+
+            cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+            conn.commit()
+            conn.close()
+
+            add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
+            await update_cargo_messages_for_all_users(load_id)
+
+            admin_notification = (
+                f"**Перевозчик ПРИНЯЛ встречную ставку из Web App!**\n\n"
+                f"• Груз #{load_id} | Маршрут: {route_str}\n"
+                f"• Итоговая ставка: {counter_rate} | Авто: {requested_cars}\n\n"
+                f"• Перевозчик ID: {user_id}"
+            )
+            try:
+                await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+            except Exception:
+                pass
+
+            return web.json_response({"status": "success"})
+        else:
+            conn.close()
+            return web.json_response({"error": "Груз не найден"}, status=404)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
 
 async def admin_verify_pass_api(request):
     try:
@@ -3547,6 +3609,7 @@ async def web_server():
     app.router.add_post("/api/request_verification", request_verification_api)
     app.router.add_post("/api/submit_profile_changes", submit_profile_changes_api)
     app.router.add_post("/api/book/{id}", book_load_api)
+    app.router.add_post("/api/accept_counter", accept_counter_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
     app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
 
