@@ -2427,10 +2427,10 @@
                     </div>
                     
                     <div class="info-grid">
+                        <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
                         <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
                         <div class="info-item"><span>Телефон</span><b>${formatPhonesHTML(d.driver_phone)}</b></div>
-                        <div class="info-item"><span>Тягач</span><b>${d.truck_plate || 'Не указан'}</b></div>
-                        <div class="info-item"><span>Прицеп</span><b>${d.trailer_plate || 'Не указан'}</b></div>
+                        <div class="info-item"><span>Тягач / Прицеп</span><b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b></div>
                     </div>
 
                     ${(mySubTab === 'active' || mySubTab === 'transit') ? `
