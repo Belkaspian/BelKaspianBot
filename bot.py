@@ -1954,17 +1954,28 @@ async def handle_convert_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photos = data.get("photos", [])
     photos.append(message.photo[-1].file_id)
-    await state.update_data(photos=photos)
+    
+    notes = data.get("text_notes", "")
+    if message.caption:
+        notes = (notes + "\n" + message.caption).strip()
+
+    await state.update_data(photos=photos, text_notes=notes)
 
 @dp.message(DocConvertStates.waiting_for_files, F.document)
 async def handle_convert_doc(message: types.Message, state: FSMContext):
     data = await state.get_data()
     documents = data.get("documents", [])
     documents.append(message.document.file_id)
-    await state.update_data(documents=documents)
+
+    notes = data.get("text_notes", "")
+    if message.caption:
+        notes = (notes + "\n" + message.caption).strip()
+
+    await state.update_data(documents=documents, text_notes=notes)
 
 @dp.message(DocConvertStates.waiting_for_files, F.text == "✅ Завершить и отправить")
 async def handle_convert_finish(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
     data = await state.get_data()
     photos = data.get("photos", [])
     documents = data.get("documents", [])
@@ -1974,39 +1985,40 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         await message.answer("Вы не прислали ни одного фото/файла или заметки.")
         return
 
-    status_msg = await message.answer("ИИ распознает документы и сортирует страницы в PDF...")
+    status_msg = await message.answer("⏳ ИИ распознает документы и формирует файлы...")
 
-    ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False, route_str="")
+    try:
+        ai_formatted_data, all_file_ids, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=False, route_str="")
 
-    d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
-    t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
-    tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
-    p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
+        raw_json = raw_json if isinstance(raw_json, dict) else {}
+        d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
+        t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
+        tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+        p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
 
-    p_full_name = (p_data.get("full_name") or "").strip()
-    if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
-        driver_name = "ВОДИТЕЛЬ"
-    else:
-        driver_name = p_full_name.upper()
+        p_full_name = (p_data.get("full_name") or "").strip()
+        if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+            driver_name = "ВОДИТЕЛЬ"
+        else:
+            driver_name = p_full_name.upper()
 
-    truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
-    trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
+        truck_plate = (t_data.get("plate") or "Тягач").strip().upper()
+        trailer_plate = (tr_data.get("plate") or "Прицеп").strip().upper()
 
-    clean_name = re.sub(r'[^\w\s-]', '', driver_name)
-    clean_truck = re.sub(r'[^\w]', '', truck_plate)
-    clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
+        clean_name = re.sub(r'[^\w\s-]', '', driver_name)
+        clean_truck = re.sub(r'[^\w]', '', truck_plate)
+        clean_trailer = re.sub(r'[^\w]', '', trailer_plate)
 
-    pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
-    user_info = format_carrier_info(message.from_user.id, message.from_user.username, message.from_user.full_name)
+        pdf_filename = f"{clean_name} - {clean_truck}_{clean_trailer}.pdf"
+        user_info = format_carrier_info(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    admin_msg = (
-        f"📄 **ПРЕОБРАЗОВАННЫЕ ДАННЫЕ ДОКУМЕНТОВ**\n\n"
-        f"{user_info}\n\n"
-        f"{ai_formatted_data}"
-    )
+        admin_msg = (
+            f"📄 **ПРЕОБРАЗОВАННЫЕ ДАННЫЕ ДОКУМЕНТОВ**\n\n"
+            f"{user_info}\n\n"
+            f"{ai_formatted_data}"
+        )
 
-    # Если deal_id не был передан — находим последнюю активную сделку пользователя
-    if not deal_id:
+        deal_id = None
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM confirmed_deals WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,))
@@ -2015,21 +2027,21 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
             deal_id = row[0]
         conn.close()
 
-    # Формируем клавиатуру с кнопками для Kaiten
-    kaiten_builder = InlineKeyboardBuilder()
-    if deal_id:
-        kaiten_builder.row(
-            types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
-            types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
-        )
+        reply_kb = build_kaiten_admin_keyboard(deal_id) if deal_id else None
 
-    try:
-        await bot.send_message(
-            chat_id=DOCS_CHANNEL_ID, 
-            text=admin_msg, 
-            reply_markup=kaiten_builder.as_markup() if deal_id else None,
-            parse_mode="Markdown"
-        )
+        try:
+            await bot.send_message(
+                chat_id=DOCS_CHANNEL_ID, 
+                text=admin_msg, 
+                reply_markup=reply_kb,
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await bot.send_message(
+                chat_id=DOCS_CHANNEL_ID, 
+                text=admin_msg.replace('*', ''), 
+                reply_markup=reply_kb
+            )
 
         if documents:
             sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
@@ -2040,17 +2052,26 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
                 for doc_id in documents:
                     await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption="Документ")
         elif photos:
-            pdf_buf = await create_pdf_report_with_images("Автономная проверка", "Сегодня", "-", user_info, ai_formatted_data, sorted_files)
-            pdf_bytes = pdf_buf.getvalue()
+            pdf_buf = await create_pdf_report_with_images("Автономное преобразование", "Сегодня", "-", user_info, ai_formatted_data, photos)
+            pdf_bytes = pdf_buf.getvalue() if pdf_buf else b""
             if pdf_bytes:
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
 
-        await status_msg.delete()
-        await message.answer("Данные преобразованы и отправлены в канал!", reply_markup=get_main_reply_markup(message.from_user))
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        await message.answer("✅ Данные успешно преобразованы и отправлены!", reply_markup=get_main_reply_markup(message.from_user))
+
     except Exception as e:
-        logging.error(f"Error sending converted docs: {e}")
-        await message.answer("Ошибка при отправке результатов.")
+        logging.error(f"Error in handle_convert_finish: {e}", exc_info=True)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await message.answer(f"❌ Произошла ошибка при обработке: {e}", reply_markup=get_main_reply_markup(message.from_user))
 
     await state.clear()
 
