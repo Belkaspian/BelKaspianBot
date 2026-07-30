@@ -1123,6 +1123,33 @@
             animation: toastSlideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards;
         }
 
+        /* Пастельные тона для статусов документов на оплату */
+        .t-row.pay-status-error {
+            background-color: #fef2f2 !important;
+            border-left-color: #fca5a5 !important;
+        }
+        .t-row.pay-status-accounting {
+            background-color: #fffbeb !important;
+            border-left-color: #fde68a !important;
+        }
+        .t-row.pay-status-accepted {
+            background-color: #f0fdf4 !important;
+            border-left-color: #86efac !important;
+        }
+        
+        [data-theme="dark"] .t-row.pay-status-error {
+            background-color: rgba(239, 68, 68, 0.12) !important;
+            border-left-color: rgba(239, 68, 68, 0.4) !important;
+        }
+        [data-theme="dark"] .t-row.pay-status-accounting {
+            background-color: rgba(245, 158, 11, 0.12) !important;
+            border-left-color: rgba(245, 158, 11, 0.4) !important;
+        }
+        [data-theme="dark"] .t-row.pay-status-accepted {
+            background-color: rgba(16, 185, 129, 0.12) !important;
+            border-left-color: rgba(16, 185, 129, 0.4) !important;
+        }
+
         @keyframes toastSlideDown {
             from { opacity: 0; transform: translateY(-16px) scale(0.95); }
             to { opacity: 1; transform: translateY(0) scale(1); }
@@ -2320,9 +2347,18 @@
 
         function renderDealRow(d, isPending) {
             let cardStatusClass = '';
-            if (isPending) cardStatusClass = 'card-status-partial';
-            else if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
-            else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
+
+            // Во вкладке Выгружены определяем пастельный цвет по статусу документов на оплату
+            if (mySubTab === 'archive') {
+                if (d.pay_docs_status === 'AI_ERROR') cardStatusClass = 'pay-status-error';
+                else if (d.pay_docs_status === 'IN_ACCOUNTING') cardStatusClass = 'pay-status-accounting';
+                else if (d.pay_docs_status === 'ACCEPTED' || d.pay_docs_status === 'PAID') cardStatusClass = 'pay-status-accepted';
+                else cardStatusClass = ''; // Обычный нейтральный цвет
+            } else {
+                if (isPending) cardStatusClass = 'card-status-partial';
+                else if (d.docs_status === 'PARTIAL') cardStatusClass = 'card-status-partial';
+                else if (d.docs_status === 'FULL') cardStatusClass = 'card-status-full';
+            }
 
             let routeParts = (d.route || '').split(/→|-|—/);
             let routeHTML = routeParts.length >= 2 
@@ -2385,24 +2421,49 @@
             const folderIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
             const chatIcon = `<svg class="icon" viewBox="0 0 24 24" style="width:14px; height:14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
+            // Формируем блок статуса и кнопок оплаты во вкладке Выгружены:
+            let payDocsSectionHTML = '';
+            if (mySubTab === 'archive') {
+                let pStatBadge = '<span class="badge">Не поданы</span>';
+                if (d.pay_docs_status === 'IN_ACCOUNTING') pStatBadge = '<span class="badge badge-today" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Проверка в бухгалтерии (2 дня)</span>';
+                else if (d.pay_docs_status === 'ACCEPTED') pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Документы приняты</span>';
+                else if (d.pay_docs_status === 'PAID') pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Оплачено</span>';
+                else if (d.pay_docs_status === 'AI_ERROR') pStatBadge = '<span class="badge" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Ошибка в документах</span>';
+
+                payDocsSectionHTML = `
+                    <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span style="font-weight:700; font-size:11px; text-transform:uppercase; color:var(--text-muted);">Документы на оплату:</span>
+                            ${pStatBadge}
+                        </div>
+                        ${d.pay_docs_error ? `<div class="missing-docs-box" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5; margin-bottom:8px;"><b>Замечание:</b><br>${d.pay_docs_error}</div>` : ''}
+                        
+                        <div class="info-grid">
+                            <div class="info-item"><span>Плановая дата оплаты</span><b>${d.planned_payment_date || '—'}</b></div>
+                            <div class="info-item"><span>Статус оплаты</span><b>${d.is_paid ? 'Оплачено (' + d.paid_amount + ')' : 'Ожидает оплаты'}</b></div>
+                        </div>
+
+                        ${(!d.is_paid) ? `
+                            <div class="action-buttons-group" style="margin-top:8px;">
+                                <button class="btn btn-primary btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
+                                    Подать документы на оплату
+                                </button>
+                                <button class="btn btn-secondary btn-chat-action" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
+                                    <div class="btn-stacked-text">
+                                        <span class="main-txt">Подать</span>
+                                        <span class="sub-txt">через чат</span>
+                                    </div>
+                                </button>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+
             let detailsHTML = '';
 
             if (isPending) {
-                detailsHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <div>
-                            ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                        </div>
-                    </div>
-                    ${statusBoxHTML}
-                    
-                    <div class="info-grid" style="margin-top: 10px;">
-                        <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
-                        <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                        <div class="info-item"><span>Вес / Объем</span><b>${d.weight || '22т'}</b></div>
-                        <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
-                    </div>
-                `;
+                // ...
             } else {
                 detailsHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -2447,6 +2508,8 @@
                             </button>
                         </div>
                     ` : ''}
+
+                    ${payDocsSectionHTML}
 
                     ${mySubTab === 'transit' ? `
                         <div class="form-group" style="margin-top: 10px;">
