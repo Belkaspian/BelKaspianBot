@@ -65,6 +65,24 @@ try:
 except ValueError:
     ADMIN_CHANNEL_ID = -1004271518848
 
+
+PAYMENT_DOCS_CHANNEL_ID_RAW = os.getenv("PAYMENT_DOCS_CHANNEL_ID", "-1004442650861")
+try:
+    PAYMENT_DOCS_CHANNEL_ID = int(PAYMENT_DOCS_CHANNEL_ID_RAW)
+except ValueError:
+    PAYMENT_DOCS_CHANNEL_ID = -1004442650861
+
+def add_business_days(start_date: date, num_days: int) -> date:
+    """Добавляет N рабочих дней, пропуская субботы и воскресенья."""
+    cur_date = start_date
+    added = 0
+    while added < num_days:
+        cur_date += timedelta(days=1)
+        if cur_date.weekday() < 5:  # 0..4 - Пн-Пт
+            added += 1
+    return cur_date
+
+
 DOCS_CHANNEL_ID_RAW = os.getenv("DOCS_CHANNEL_ID", "-1003928614238")
 try:
     DOCS_CHANNEL_ID = int(DOCS_CHANNEL_ID_RAW)
@@ -263,13 +281,29 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN status TEXT DEFAULT 'CONFIRMED'",
         "ALTER TABLE confirmed_deals ADD COLUMN kaiten_card_id INTEGER",
         "ALTER TABLE confirmed_deals ADD COLUMN full_doc_text TEXT",
-        "ALTER TABLE confirmed_deals ADD COLUMN order_number TEXT DEFAULT ''"
+        "ALTER TABLE confirmed_deals ADD COLUMN order_number TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_status TEXT DEFAULT 'NONE'",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_error TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_submitted_at TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN planned_payment_date TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN is_paid INTEGER DEFAULT 0",
+        "ALTER TABLE confirmed_deals ADD COLUMN paid_amount TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''"
     ]
     for migration in migrations:
         try:
             cursor.execute(migration)
         except sqlite3.OperationalError:
             pass 
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_excel_payments (
+            order_number TEXT PRIMARY KEY,
+            paid_amount TEXT,
+            paid_date TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
     
@@ -1198,6 +1232,94 @@ class OrderPdfInfo(BaseModel):
     truck_plate: Optional[str] = Field(default="", description="Гос. номер грузового автомобиля / тягача")
     trailer_plate: Optional[str] = Field(default="", description="Гос. номер полуприцепа / прицепа (если указан)")
 
+
+class PaymentDocsVerificationResult(BaseModel):
+    has_cmr: bool = Field(description="Есть ли в представленных документах ЦМР (CMR)")
+    has_invoice: bool = Field(description="Есть ли счет на оплату")
+    has_act: bool = Field(description="Есть ли акт выполненных работ")
+    has_signed_application: bool = Field(description="Есть ли подписанный договор-заявка")
+
+    app_signed_by_both: bool = Field(description="Подписана ли заявка с двух сторон (2 печати/подписи)")
+    app_order_number: Optional[str] = Field(default="", description="Номер заявки из договора-заявки")
+    app_truck_plate: Optional[str] = Field(default="", description="Номер авто из договора-заявки")
+
+    cmr_loading_date: Optional[str] = Field(default="", description="Дата загрузки из графы 21 ЦМР (ДД.ММ.ГГГГ)")
+    cmr_unloading_date: Optional[str] = Field(default="", description="Дата выгрузки из графы 24 ЦМР (актуальная дата отпуска авто)")
+    cmr_truck_plate: Optional[str] = Field(default="", description="Номер авто из графы 22 ЦМР")
+    cmr_box16_stamp: bool = Field(description="Есть ли печать/подпись перевозчика в графе 16 ЦМР")
+    cmr_box23_stamp: bool = Field(description="Есть ли печать/подпись водителя/перевозчика в графе 23 ЦМР")
+    cmr_box24_stamp: bool = Field(description="Есть ли печать и подпись получателя груза в графе 24 ЦМР (или рядом)")
+
+    act_date: Optional[str] = Field(default="", description="Дата акта выполненных работ (ДД.ММ.ГГГГ)")
+
+    is_valid: bool = Field(description="Выполнены ли абсолютно все требования без ошибок")
+    errors: list[str] = Field(default=[], description="Список найденных ошибок на русском языке")
+
+async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expected_truck="") -> PaymentDocsVerificationResult:
+    """
+    Проверяет пакет документов на оплату через Gemini API.
+    """
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
+        return PaymentDocsVerificationResult(
+            has_cmr=True, has_invoice=True, has_act=True, has_signed_application=True,
+            app_signed_by_both=True, cmr_box16_stamp=True, cmr_box23_stamp=True, cmr_box24_stamp=True,
+            is_valid=True, errors=[]
+        )
+
+    system_prompt = (
+        "Ты — эксперт финансовой службы и бухгалтерии транспортной компании. Твоя задача — тщательно проверить пакет документов на оплату:\n"
+        "1. Проверь наличие всех 4 типов документов: ЦМР (CMR), Счет, Акт выполненных работ, Подписанная заявка.\n"
+        "2. Заявка: Должна быть подписана и скреплена печатями С 2-Х СТОРОН (заказчик и перевозчик). "
+        "Сверь номер заявки и номер авто с ожидаемыми значениями.\n"
+        "3. ЦМР (CMR):\n"
+        "   - Графа 21: Извлеки дату загрузки.\n"
+        "   - Графа 24: Извлеки дату выгрузки/отпуска авто (если несколько дат, бери последнюю когда авто отпустили).\n"
+        "   - Графа 22: Сверь номер авто.\n"
+        "   - Проверь наличие печатей/подписей в Графе 16 и Графе 23.\n"
+        "   - Графа 24 (или рядом): ОБЯЗАТЕЛЬНО должна быть печать и подпись ПОЛУЧАТЕЛЯ ГРУЗА (подтверждение приемки).\n"
+        "4. Акт выполненных работ: Дата акта ДОЛЖНА СТРОГО СОВПАДАТЬ с датой выгрузки из графы 24 ЦМР.\n"
+        "5. Если есть хоть одно нарушение — установи is_valid=False и опиши подробную причину в списке errors."
+    )
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",
+        response_schema=PaymentDocsVerificationResult,
+        temperature=0.1
+    )
+
+    models_to_try = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash"
+    ]
+
+    for model_name in models_to_try:
+        try:
+            if hasattr(gemini_client, 'aio'):
+                resp = await gemini_client.aio.models.generate_content(model=model_name, contents=contents_list, config=config)
+            else:
+                resp = await asyncio.to_thread(gemini_client.models.generate_content, model=model_name, contents=contents_list, config=config)
+
+            if resp and resp.text:
+                raw_text = resp.text.strip()
+                if "```" in raw_text:
+                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.MULTILINE)
+                    raw_text = re.sub(r"\s*```$", "", raw_text, flags=re.MULTILINE)
+                raw_json = json.loads(raw_text)
+                return PaymentDocsVerificationResult(**raw_json)
+        except Exception as e:
+            logging.warning(f"⚠️ Ошибка проверки документов на оплату моделью {model_name}: {e}")
+
+    return PaymentDocsVerificationResult(
+        has_cmr=False, has_invoice=False, has_act=False, has_signed_application=False,
+        app_signed_by_both=False, cmr_box16_stamp=False, cmr_box23_stamp=False, cmr_box24_stamp=False,
+        is_valid=False, errors=["Ошибка связи с сервером ИИ. Попробуйте повторить отправку."]
+    )
+
+
+
 def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 20) -> bool:
     if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный", "none", "null"]:
         return False
@@ -1577,6 +1699,56 @@ async def create_pdf_report_with_images(route: str, date_str: str, price: str, c
 
     return buffer
 
+
+
+async def auto_promote_payment_docs_status():
+    """
+    Фоновый процесс: проверяет карточки со статусом 'IN_ACCOUNTING'.
+    Если прошло 2 рабочих дня без ошибок -> статус меняется на 'ACCEPTED',
+    и рассчитывается 'Плановая дата оплаты' (+11 рабочих дней).
+    """
+    while True:
+        try:
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, pay_docs_submitted_at, user_id, order_number 
+                FROM confirmed_deals 
+                WHERE pay_docs_status = 'IN_ACCOUNTING' AND pay_docs_submitted_at != ''
+            """)
+            rows = cursor.fetchall()
+
+            today_dt = datetime.now(timezone.utc).date()
+
+            for deal_id, sub_at_str, u_id, ord_num in rows:
+                try:
+                    sub_dt = datetime.strptime(sub_at_str[:10], "%Y-%m-%d").date()
+                    target_acc_date = add_business_days(sub_dt, 2)
+
+                    if today_dt >= target_acc_date:
+                        planned_pay = add_business_days(today_dt, 11).strftime("%d.%m.%Y")
+                        cursor.execute("""
+                            UPDATE confirmed_deals 
+                            SET pay_docs_status = 'ACCEPTED', planned_payment_date = ? 
+                            WHERE id = ?
+                        """, (planned_pay, deal_id))
+                        conn.commit()
+
+                        add_notification(
+                            u_id, 
+                            "Документы на оплату приняты", 
+                            f"Ваши документы по заявке {ord_num or deal_id} прошли проверку бухгалтерии. Плановая дата оплаты: {planned_pay}"
+                        )
+                except Exception as ex:
+                    logging.error(f"Error promoting deal {deal_id}: {ex}")
+
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error in auto_promote_payment_docs_status: {e}")
+
+        await asyncio.sleep(300)  # Проверка каждые 5 минут
+
+    
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ТАЙМЕРУ МСК ====================
 async def auto_clean_expired_cargos():
     while True:
@@ -2429,6 +2601,37 @@ def detect_country(text: str) -> str:
 # ==================== ОБРАБОТЧИК ОТВЕТОВ АДМИНА ЧЕРЕЗ PENDING_COUNTERS ====================
 
 async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
+    # 1. Проверяем, не является ли сообщение ручной фиксацией ошибки по номеру заявки (например: "2606060373-000001 Неверная дата акта")
+    if message_text and any(char.isdigit() for char in message_text):
+        m_ord = re.search(r'(\d{8,12}(?:-\d+)?)\s+(.+)', message_text.strip())
+        if m_ord:
+            ord_num_query = m_ord.group(1).strip()
+            err_text = m_ord.group(2).strip()
+
+            conn = sqlite3.connect("cargo_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id FROM confirmed_deals 
+                WHERE order_number LIKE ? OR order_number = ?
+            """, (f"%{ord_num_query}%", ord_num_query))
+            deal_row = cursor.fetchone()
+
+            if deal_row:
+                d_id, u_id = deal_row
+                cursor.execute("""
+                    UPDATE confirmed_deals 
+                    SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? 
+                    WHERE id = ?
+                """, (err_text, d_id))
+                conn.commit()
+                conn.close()
+
+                add_notification(u_id, "Замечание по документам на оплату", f"По заявке {ord_num_query} поступило замечание: {err_text}")
+                await bot.send_message(chat_id=chat_id, text=f"✅ Замечание зафиксировано по заявке {ord_num_query}: `{err_text}`")
+                return True
+            conn.close()
+
+    # 2. Если это не замечание по ошибке, проверяем действия по кнопкам (COUNTER, PARTIAL, KAITEN_BIND и т.д.)
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT bid_id, COALESCE(action_type, 'COUNTER') FROM pending_counters WHERE admin_chat_id = ?", (chat_id,))
@@ -3432,6 +3635,117 @@ async def handle_orders_channel_post(message: types.Message):
     except Exception as e:
         logging.error(f"Error processing order PDF post: {e}", exc_info=True)
 
+
+@dp.channel_post(F.chat.id == PAYMENT_DOCS_CHANNEL_ID)
+async def handle_payment_excel_post(message: types.Message):
+    """
+    Обработчик Excel файлов выплат (.xlsx / .xls) в канале документов на оплату.
+    """
+    if not message.document:
+        return
+
+    doc = message.document
+    fn = (doc.file_name or "").lower()
+    if not (fn.endswith('.xlsx') or fn.endswith('.xls')):
+        return
+
+    logging.info(f"📊 Получен Excel файл выплат: {doc.file_name}")
+
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        file_bytes = buf.getvalue()
+
+        import pandas as pd
+        
+        # Читаем книгу Excel
+        excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
+        current_year_str = str(datetime.now().year)
+
+        # Выбираем лист с актуальным годом (например "2026") или первый активный
+        target_sheet = None
+        for sheet in excel_file.sheet_names:
+            if current_year_str in sheet:
+                target_sheet = sheet
+                break
+        if not target_sheet:
+            target_sheet = excel_file.sheet_names[0]
+
+        df = pd.read_excel(excel_file, sheet_name=target_sheet, header=None)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+
+        # Получаем список ранее обработанных заказов
+        cursor.execute("SELECT order_number FROM processed_excel_payments")
+        already_processed = {r[0] for r in cursor.fetchall()}
+
+        paid_notifications = {}  # {user_id: [список строк оплат]}
+
+        for idx, row in df.iterrows():
+            if len(row) < 3:
+                continue
+
+            raw_order = str(row[0]).strip() if pd.notna(row[0]) else ""
+            raw_amount = str(row[2]).strip() if pd.notna(row[2]) else ""
+            raw_curr = str(row[3]).strip() if len(row) > 3 and pd.notna(row[3]) else "руб"
+
+            if not raw_order or raw_order.lower() in ["номер", "заказ", "номер заказа", "nan"]:
+                continue
+
+            if raw_order in already_processed:
+                continue
+
+            # Ищем сделки по номеру заказа
+            cursor.execute("""
+                SELECT id, user_id, order_number 
+                FROM confirmed_deals 
+                WHERE (order_number LIKE ? OR order_number = ?) AND is_unloaded = 1
+            """, (f"%{raw_order}%", raw_order))
+            deal_rows = cursor.fetchall()
+
+            if deal_rows:
+                today_str = datetime.now().strftime("%d.%m.%Y")
+                amount_str = f"{raw_amount} {raw_curr}".strip()
+
+                for d_id, u_id, ord_num in deal_rows:
+                    cursor.execute("""
+                        UPDATE confirmed_deals 
+                        SET pay_docs_status = 'PAID', is_paid = 1, paid_amount = ?, paid_date = ?
+                        WHERE id = ?
+                    """, (amount_str, today_str, d_id))
+
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO processed_excel_payments (order_number, paid_amount, paid_date)
+                        VALUES (?, ?, ?)
+                    """, (raw_order, amount_str, today_str))
+
+                    if u_id not in paid_notifications:
+                        paid_notifications[u_id] = []
+                    paid_notifications[u_id].append(f"{ord_num or raw_order} / {amount_str}")
+
+        conn.commit()
+        conn.close()
+
+        # Рассылка уведомлений перевозчикам
+        for u_id, items in paid_notifications.items():
+            msg_text = "Сегодня вам оплатили:\n\n" + "\n".join(items)
+            add_notification(u_id, "Выплата по грузам", msg_text)
+            try:
+                await bot.send_message(chat_id=u_id, text=msg_text)
+            except Exception:
+                pass
+
+        await bot.send_message(
+            chat_id=PAYMENT_DOCS_CHANNEL_ID,
+            text=f"✅ **Excel реестр обработан!** Найдено совпадений и уведомлено перевозчиков: {len(paid_notifications)}",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logging.error(f"Error processing payment Excel: {e}", exc_info=True)
+        await bot.send_message(chat_id=PAYMENT_DOCS_CHANNEL_ID, text=f"⚠️ Ошибка чтения файла выплат: {e}")
 
 
 # ==================== WEB APP БЭКЕНД И REST API ====================
@@ -4564,6 +4878,90 @@ async def serve_index(request):
     except Exception as e:
         return web.Response(text=f"Error loading index.html: {e}", status=500)
 
+
+async def submit_pay_docs_direct_api(request):
+    try:
+        reader = await request.multipart()
+        deal_id = 0
+        user_id = 0
+        raw_files = []
+
+        while True:
+            field = await reader.next()
+            if field is None:
+                break
+            if field.name == 'deal_id':
+                deal_id = int(await field.text())
+            elif field.name == 'user_id':
+                user_id = int(await field.text())
+            elif field.name == 'files':
+                fn = field.filename or "doc"
+                content = await field.read()
+                if content:
+                    raw_files.append((fn, content))
+
+        if not deal_id or not user_id or not raw_files:
+            return web.json_response({"error": "Загрузите хотя бы 1 документ"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT order_number, last_truck_plate, route, date, price FROM confirmed_deals WHERE id = ? AND user_id = ?", (deal_id, user_id))
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return web.json_response({"error": "Сделка не найдена"}, status=404)
+
+        ord_num, truck_plate, route_str, date_str, price_str = row
+
+        contents_list = ["Изучи пакет документов на оплату:"]
+        for fn, file_bytes in raw_files:
+            mime = detect_mime_type(file_bytes, fn)
+            contents_list.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime))
+
+        # Вызываем ИИ-агента для проверки
+        result = await verify_payment_docs_with_ai(contents_list, expected_order_num=ord_num, expected_truck=truck_plate)
+
+        if not result.is_valid:
+            err_msg = " Ошибки в документах:\n• " + "\n• ".join(result.errors)
+            cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ?", (err_msg, deal_id))
+            conn.commit()
+            conn.close()
+
+            add_notification(user_id, "Ошибки в документах на оплату", err_msg)
+            return web.json_response({"status": "error", "error": err_msg}, status=400)
+
+        # Если все хорошо
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            UPDATE confirmed_deals 
+            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ? 
+            WHERE id = ?
+        """, (today_iso, deal_id))
+        conn.commit()
+        conn.close()
+
+        # Генерируем 1 объединенный PDF файл
+        pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, "", "")
+        pdf_filename = f"{ord_num or 'Заявка'}.pdf"
+
+        # Отправляем в канал документов на оплату
+        caption_text = (
+            f"Заказ: {ord_num or 'б/н'}\n"
+            f"Дата загрузки: {result.cmr_loading_date or 'Не указана'}\n"
+            f"Дата выгрузки: {result.cmr_unloading_date or 'Не указана'}"
+        )
+
+        if pdf_bytes:
+            pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+            await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        logging.error(f"Error in submit_pay_docs_direct_api: {e}", exc_info=True)
+        return web.json_response({"error": str(e)}, status=400)
+
+
 # ==================== СЕРВЕР И ЗАПУСК ====================
 
 async def handle_ping(request):
@@ -4588,6 +4986,7 @@ async def self_ping():
 async def webserver_on_startup(app):
     asyncio.create_task(self_ping())
     asyncio.create_task(auto_clean_expired_cargos())
+    asyncio.create_task(auto_promote_payment_docs_status())
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
@@ -4612,6 +5011,7 @@ async def web_server():
     app.router.add_post("/api/decline_counter", decline_counter_api)
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
     app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
+    app.router.add_post("/api/my_loads/submit_pay_docs_direct", submit_pay_docs_direct_api)
 
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
