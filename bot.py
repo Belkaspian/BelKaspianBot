@@ -2605,7 +2605,7 @@ LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
 if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
 
-@dp.channel_post(F.text.func(lambda text: text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
+@dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
         return
