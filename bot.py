@@ -2573,13 +2573,22 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
             await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка формата! Используйте разделитель `|` или `/`: `Компания | ФИО | Телефон`")
 
     elif action_type == 'KAITEN_BIND':
-        m_id = re.search(r'\d+', message_text.strip())
-        if not m_id:
-            conn.close()
-            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка! Не удалось распознать номер ID карточки в отправленном сообщении.")
-            return True
+        # Точное извлечение ID карточки из ссылки вида .../card/1341041 или чистого ID
+        card_url_match = re.search(r'card/(\d+)', message_text)
+        if card_url_match:
+            custom_card_id = int(card_url_match.group(1))
+        else:
+            digits_match = re.search(r'\b\d{5,8}\b', message_text)
+            if digits_match:
+                custom_card_id = int(digits_match.group(0))
+            else:
+                any_digits = re.search(r'\d+', message_text)
+                custom_card_id = int(any_digits.group(0)) if any_digits else None
 
-        custom_card_id = int(m_id.group(0))
+        if not custom_card_id:
+            conn.close()
+            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка! Не удалось распознать ID карточки Kaiten в сообщении.")
+            return True
 
         cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (custom_card_id, target_id))
         conn.commit()
@@ -2589,9 +2598,9 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
 
         if success and isinstance(result, dict):
             card_url = result.get("url")
-            msg_out = f"✅ **Привязано и внесено в карточку Kaiten:** [{custom_card_id}]({card_url})"
+            msg_out = f"✅ **Данные успешно внесены в карточку Kaiten:** [{custom_card_id}]({card_url})"
         else:
-            msg_out = f"⚠️ Карточка `{custom_card_id}` привязана к сделке #{target_id}, но при передаче возникло предупреждение: {result}"
+            msg_out = f"⚠️ Карточка `{custom_card_id}` привязана к сделке #{target_id}, но возникли замечания при заполнении: {result}"
 
         await bot.send_message(chat_id=chat_id, text=msg_out, parse_mode="Markdown")
         return True
@@ -2655,7 +2664,7 @@ async def handle_channel_post(message: types.Message):
     chat_id = message.chat.id
     raw_text = message.text or message.caption or ""
 
-    if chat_id == ADMIN_CHANNEL_ID and raw_text:
+    if chat_id in [ADMIN_CHANNEL_ID, DOCS_CHANNEL_ID] and raw_text:
         is_handled = await process_admin_pending_action(chat_id, raw_text)
         if is_handled:
             return
@@ -3260,21 +3269,22 @@ async def handle_kaiten_push_callback(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("kaiten_custom_"))
 async def handle_kaiten_custom_callback(callback: types.CallbackQuery):
     deal_id = int(callback.data.replace("kaiten_custom_", ""))
+    current_chat_id = callback.message.chat.id
 
-    # Запоминаем в таблице pending_counters, что от админа ожидается ID карточки
+    # Запоминаем в таблице pending_counters ожидание ID карточки для текущего чата
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id, action_type) VALUES (?, ?, 'KAITEN_BIND')", 
-        (ADMIN_CHANNEL_ID, deal_id)
+        (current_chat_id, deal_id)
     )
     conn.commit()
     conn.close()
 
     await callback.message.reply(
         f"📌 **Ручная привязка карточки Kaiten (Сделка #{deal_id})**\n\n"
-        "Введите ID карточки или вставьте ссылку на неё в Kaiten:\n"
-        "*(Например: `1341041` или `https://belkaspian.kaiten.ru/card/1341041`)*",
+        "Отправьте сообщением ID карточки или полную ссылку на неё:\n"
+        "*(Например: `1341041` или `https://belkaspian.kaiten.ru/space/326566/board/764621/card/1341041`)*",
         parse_mode="Markdown"
     )
     await callback.answer()
