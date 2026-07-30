@@ -1220,6 +1220,16 @@
         </div>
     </div>
 
+    <!-- Подвкладки раздела Выгружены -->
+    <div class="sub-nav" id="archive-sub-nav" style="display: none; margin-top: -6px; margin-bottom: 12px;">
+        <div class="sub-nav-btn active" id="archive-subnav-all" onclick="switchArchiveSubTab('all')">
+            Все выгруженные
+        </div>
+        <div class="sub-nav-btn" id="archive-subnav-awaiting" onclick="switchArchiveSubTab('awaiting')">
+            Ожидают оплату
+        </div>
+    </div>
+
     <!-- Блок Сортировки и Поиска -->
     <div class="sort-search-bar" id="sort-search-container">
         <div class="sort-container" id="sort-container">
@@ -1481,7 +1491,16 @@
         const tbody = document.getElementById('loads-body');
         let currentTab = 'catalog';
         let mySubTab = 'active';
+        let archiveSubTab = 'all';
+        let uploadModalMode = 'initial'; // 'initial' или 'pay'
         let activeOfferLoadId = null;
+
+        function switchArchiveSubTab(sub) {
+            archiveSubTab = sub;
+            document.getElementById('archive-subnav-all').classList.toggle('active', sub === 'all');
+            document.getElementById('archive-subnav-awaiting').classList.toggle('active', sub === 'awaiting');
+            loadData(false);
+        }
         let activeOfferCars = 1;
         let currentDataHash = '';
         let saveProfileTimer = null;
@@ -1925,6 +1944,7 @@
             document.getElementById('subnav-active').classList.toggle('active', sub === 'active');
             document.getElementById('subnav-transit').classList.toggle('active', sub === 'transit');
             document.getElementById('subnav-archive').classList.toggle('active', sub === 'archive');
+            document.getElementById('archive-sub-nav').style.display = (sub === 'archive') ? 'flex' : 'none';
             loadData(false);
         }
 
@@ -1975,12 +1995,42 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
-        function openDirectUploadModal(dealId) {
+        function openDirectUploadModal(dealId, mode = 'initial') {
+            uploadModalMode = mode;
             document.getElementById('uploadModalDealId').value = dealId;
             document.getElementById('uploadModalPhone').value = '';
             directSelectedFiles = [];
             renderDirectFilePreview();
+
+            const modalTitle = document.querySelector('#directUploadModal .modal-title');
+            if (modalTitle) {
+                modalTitle.textContent = (mode === 'pay') ? 'Подача документов на оплату' : 'Подача документов по грузу';
+            }
             document.getElementById('directUploadModal').classList.add('active');
+        }
+
+        async function triggerSubmitPayDocsPrompt(dealId, event) {
+            if (event) event.stopPropagation();
+            let userId = getUserId();
+            if (!userId) return showToast('Ошибка пользователя', 'error');
+
+            try {
+                let res = await fetch('/api/submit_pay_docs_prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, deal_id: dealId })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Инструкция отправлена в чат', 'success');
+                    const platform = (tg.platform || '').toLowerCase();
+                    if (platform === 'android' || platform === 'ios') {
+                        try { tg.close(); } catch(e) {}
+                    }
+                } else {
+                    showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) { showToast('Ошибка подключения', 'error'); }
         }
 
         function handleDirectFileSelect(event) {
@@ -2033,17 +2083,19 @@
             directSelectedFiles = [];
             renderDirectFilePreview();
 
+            const endpointUrl = (uploadModalMode === 'pay') ? '/api/my_loads/submit_pay_docs_direct' : '/api/my_loads/direct_upload';
             try {
-                let res = await fetch('/api/my_loads/direct_upload', { method: 'POST', body: formData });
+                let res = await fetch(endpointUrl, { method: 'POST', body: formData });
                 if (res.ok) {
+                    showToast('Документы отправлены на проверку', 'success');
                     loadData(false);
                 } else {
-                    showToast('Ошибка при отправке данных', 'error');
+                    let errData = await res.json();
+                    showToast(errData.error || 'Ошибка при отправке данных', 'error');
                 }
             } catch(e) {
                 showToast('Ошибка сети при отправке', 'error');
             }
-        }
 
         async function checkNotifications() {
             let userId = getUserId();
@@ -2365,9 +2417,19 @@
                 ? `<span>${routeParts[0].trim()}</span><span class="dest">${routeParts[1].trim()}</span>`
                 : `<span>${d.route}</span>`;
 
-            let truckColHTML = isPending 
-                ? `<div class="col-truck"><span style="color:var(--warning); font-size:10px; font-weight:700;">Согласование</span></div>`
-                : buildTruckColHTML(d);
+            let truckColHTML = '';
+            if (mySubTab === 'archive') {
+                truckColHTML = `
+                    <div class="col-truck">
+                        <span style="font-size:8.5px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">План. оплата</span>
+                        <span style="font-weight:700; color:var(--primary); font-size:10.5px;">${d.planned_payment_date || '—'}</span>
+                    </div>
+                `;
+            } else if (isPending) {
+                truckColHTML = `<div class="col-truck"><span style="color:var(--warning); font-size:10px; font-weight:700;">Согласование</span></div>`;
+            } else {
+                truckColHTML = buildTruckColHTML(d);
+            }
 
             let isToday = checkIsToday(d.date, d.is_today);
             let todayBadgeHTML = isToday ? `<span class="today-indicator">СЕГОДНЯ</span>` : '';
@@ -2445,10 +2507,10 @@
 
                         ${(!d.is_paid) ? `
                             <div class="action-buttons-group" style="margin-top:8px;">
-                                <button class="btn btn-primary btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}')">
+                                <button class="btn btn-primary btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}', 'pay')">
                                     Подать документы на оплату
                                 </button>
-                                <button class="btn btn-secondary btn-chat-action" onclick="triggerSubmitDocsPrompt('${d.deal_id || d.id}', event)">
+                                <button class="btn btn-secondary btn-chat-action" onclick="triggerSubmitPayDocsPrompt('${d.deal_id || d.id}', event)">
                                     <div class="btn-stacked-text">
                                         <span class="main-txt">Подать</span>
                                         <span class="sub-txt">через чат</span>
@@ -2646,7 +2708,14 @@
                     let deals = data.deals || [];
 
                     let filteredDeals = deals.filter(d => {
-                        if (mySubTab === 'archive') return d.is_unloaded || d.status === 'UNLOADED';
+                        if (mySubTab === 'archive') {
+                            let isUnloaded = d.is_unloaded || d.status === 'UNLOADED';
+                            if (!isUnloaded) return false;
+                            if (archiveSubTab === 'awaiting') {
+                                return d.pay_docs_status === 'IN_ACCOUNTING' || d.pay_docs_status === 'ACCEPTED' || d.pay_docs_status === 'PAID';
+                            }
+                            return true;
+                        }
                         if (mySubTab === 'transit') return d.is_transit && !d.is_unloaded;
                         return !d.is_transit && !d.is_unloaded;
                     });
