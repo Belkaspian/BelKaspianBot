@@ -311,6 +311,60 @@ class AdminVerifyEditStates(StatesGroup):
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
+
+
+
+def merge_formatted_doc_text(old_text: str, new_text: str) -> str:
+    if not old_text or not old_text.strip():
+        return new_text.strip()
+    if not new_text or not new_text.strip():
+        return old_text.strip()
+
+    def parse_lines(txt):
+        lines = [l.strip() for l in txt.strip().split('\n') if l.strip()]
+        res = {}
+        for line in lines:
+            if ':' in line:
+                k, v = line.split(':', 1)
+                res[k.strip()] = v.strip()
+        return res
+
+    old_map = parse_lines(old_text)
+    new_map = parse_lines(new_text)
+
+    merged = {}
+    all_keys = list(old_map.keys())
+    for k in new_map.keys():
+        if k not in all_keys:
+            all_keys.append(k)
+
+    for key in all_keys:
+        old_val = old_map.get(key, "")
+        new_val = new_map.get(key, "")
+
+        # Если в новых данных "Не распознан/Не указан", а в старых были данные — сохраняем старые
+        is_new_invalid = not new_val or any(inv in new_val.lower() for inv in ["не распознан", "не указан", "не распознано", "не распознана"])
+        if is_new_invalid and old_val and not any(inv in old_val.lower() for inv in ["не распознан", "не указан", "не распознано", "не распознана"]):
+            merged[key] = old_val
+        else:
+            merged[key] = new_val if new_val else old_val
+
+    return "\n".join([f"{k}: {v}" for k, v in merged.items()])
+
+
+
+def build_kaiten_admin_keyboard(deal_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="📥 Подать данные в Kaiten", callback_data=f"kaiten_push_{deal_id}"),
+        types.InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"kaiten_skip_{deal_id}")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="📌 В определённую карточку", callback_data=f"kaiten_custom_{deal_id}")
+    )
+    return builder.as_markup()
+
+
 def extract_surname_and_name(full_name: str) -> str:
     if not full_name or full_name.lower().strip() in ["не распознан", "не указан"]:
         return "Не распознан"
@@ -853,6 +907,13 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
         
         # 1. Название карточки должно начинаться на "93"
         if not re.search(r'^\s*93\b', title):
+            continue
+
+         # 2. ФИЛЬТР: При первичном поиске берем ТОЛЬКО карточки типа "Данные не внесены"
+        card_type_obj = card.get("type")
+        type_name = (card_type_obj.get("name") if isinstance(card_type_obj, dict) else str(card_type_obj or "")).lower().strip()
+        
+        if "данные не внесены" not in type_name:
             continue
 
         col_data = card.get("column")
@@ -2007,14 +2068,26 @@ async def handle_doc_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photos = data.get("photos", [])
     photos.append(message.photo[-1].file_id)
-    await state.update_data(photos=photos)
+    
+    # Считываем номера/текст из подписи к фото
+    notes = data.get("text_notes", "")
+    if message.caption:
+        notes = (notes + "\n" + message.caption).strip()
+        
+    await state.update_data(photos=photos, text_notes=notes)
 
 @dp.message(DocUploadStates.waiting_for_docs, F.document)
 async def handle_doc_document(message: types.Message, state: FSMContext):
     data = await state.get_data()
     documents = data.get("documents", [])
     documents.append(message.document.file_id)
-    await state.update_data(documents=documents)
+
+    # Считываем номера/текст из подписи к документу
+    notes = data.get("text_notes", "")
+    if message.caption:
+        notes = (notes + "\n" + message.caption).strip()
+
+    await state.update_data(documents=documents, text_notes=notes)
 
 @dp.message(DocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
 async def handle_doc_cancel(message: types.Message, state: FSMContext):
@@ -2396,6 +2469,30 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
             await bot.send_message(chat_id=chat_id, text="• Данные профиля успешно обновлены у пользователя!")
         else:
             await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка формата! Используйте разделитель `|` или `/`: `Компания | ФИО | Телефон`")
+
+    elif action_type == 'KAITEN_BIND':
+        m_id = re.search(r'\d+', message_text.strip())
+        if not m_id:
+            conn.close()
+            await bot.send_message(chat_id=chat_id, text="⚠️ Ошибка! Не удалось распознать номер ID карточки в отправленном сообщении.")
+            return True
+
+        custom_card_id = int(m_id.group(0))
+
+        cursor.execute("UPDATE confirmed_deals SET kaiten_card_id = ? WHERE id = ?", (custom_card_id, target_id))
+        conn.commit()
+        conn.close()
+
+        success, result = await push_data_to_kaiten(target_id, 0, admin_user_name="Логист")
+
+        if success and isinstance(result, dict):
+            card_url = result.get("url")
+            msg_out = f"✅ **Привязано и внесено в карточку Kaiten:** [{custom_card_id}]({card_url})"
+        else:
+            msg_out = f"⚠️ Карточка `{custom_card_id}` привязана к сделке #{target_id}, но при передаче возникло предупреждение: {result}"
+
+        await bot.send_message(chat_id=chat_id, text=msg_out, parse_mode="Markdown")
+        return True
 
     conn.close()
     return True
@@ -3058,16 +3155,43 @@ async def handle_kaiten_push_callback(callback: types.CallbackQuery):
             pass
         await callback.answer(f"Ошибка: {e}", show_alert=True)
 
+@dp.callback_query(F.data.startswith("kaiten_custom_"))
+async def handle_kaiten_custom_callback(callback: types.CallbackQuery):
+    deal_id = int(callback.data.replace("kaiten_custom_", ""))
+
+    # Запоминаем в таблице pending_counters, что от админа ожидается ID карточки
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO pending_counters (admin_chat_id, bid_id, action_type) VALUES (?, ?, 'KAITEN_BIND')", 
+        (ADMIN_CHANNEL_ID, deal_id)
+    )
+    conn.commit()
+    conn.close()
+
+    await callback.message.reply(
+        f"📌 **Ручная привязка карточки Kaiten (Сделка #{deal_id})**\n\n"
+        "Введите ID карточки или вставьте ссылку на неё в Kaiten:\n"
+        "*(Например: `1341041` или `https://belkaspian.kaiten.ru/card/1341041`)*",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
 @dp.callback_query(F.data.startswith("kaiten_skip_"))
 async def handle_kaiten_skip_callback(callback: types.CallbackQuery):
     admin_name = callback.from_user.username or callback.from_user.full_name or "Логист"
     skip_text = f"\n\n⏭ **Пропущено логистом** (@{admin_name})"
 
-    await callback.message.edit_text(
-        callback.message.text + skip_text,
-        reply_markup=None,
-        parse_mode="Markdown"
-    )
+    try:
+        if callback.message.caption is not None:
+            new_caption = (callback.message.caption or "") + skip_text
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="Markdown")
+        elif callback.message.text is not None:
+            new_text = (callback.message.text or "") + skip_text
+            await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error skipping kaiten: {e}")
+
     await callback.answer("Заявка пропущена")
 
 # ==================== WEB APP БЭКЕНД И REST API ====================
