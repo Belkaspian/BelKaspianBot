@@ -71,6 +71,12 @@ try:
 except ValueError:
     DOCS_CHANNEL_ID = -1003928614238
 
+ORDERS_CHANNEL_ID_RAW = os.getenv("ORDERS_CHANNEL_ID", "-1004337686386")
+try:
+    ORDERS_CHANNEL_ID = int(ORDERS_CHANNEL_ID_RAW)
+except ValueError:
+    ORDERS_CHANNEL_ID = -1004337686386
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -256,7 +262,8 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN is_unloaded INTEGER DEFAULT 0",
         "ALTER TABLE confirmed_deals ADD COLUMN status TEXT DEFAULT 'CONFIRMED'",
         "ALTER TABLE confirmed_deals ADD COLUMN kaiten_card_id INTEGER",
-        "ALTER TABLE confirmed_deals ADD COLUMN full_doc_text TEXT"
+        "ALTER TABLE confirmed_deals ADD COLUMN full_doc_text TEXT",
+        "ALTER TABLE confirmed_deals ADD COLUMN order_number TEXT DEFAULT ''"
     ]
     for migration in migrations:
         try:
@@ -1186,6 +1193,11 @@ class FullCargoSubmission(BaseModel):
     driver: Optional[DriverDetails] = None
     image_roles: Optional[list[ImageClassification]] = None
 
+class OrderPdfInfo(BaseModel):
+    order_number: Optional[str] = Field(default="", description="Номер договора-заявки или номер заявки")
+    truck_plate: Optional[str] = Field(default="", description="Гос. номер грузового автомобиля / тягача")
+    trailer_plate: Optional[str] = Field(default="", description="Гос. номер полуприцепа / прицепа (если указан)")
+
 def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 20) -> bool:
     if not expiry_str or str(expiry_str).lower().strip() in ["не распознана", "не указана", "бессрочно", "бессрочный", "none", "null"]:
         return False
@@ -1400,6 +1412,75 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene, route_str=route_str)
     return formatted_text, all_files, raw_json
     
+
+async def process_order_pdf_with_ai(file_bytes: bytes) -> tuple[str, str, str]:
+    """
+    Анализирует 1-ю страницу PDF-заявки через Gemini API.
+    Возвращает (order_number, truck_plate, trailer_plate).
+    """
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
+        return "", "", ""
+
+    system_prompt = (
+        "Ты — эксперт логистической компании. Твоя задача — внимательно изучить первую страницу договора-заявки "
+        "и извлечь строго 3 поля:\n"
+        "1. order_number: Номер договора-заявки / номер заказа.\n"
+        "2. truck_plate: Гос. номер грузового авто / тягача.\n"
+        "3. trailer_plate: Гос. номер прицепа / полуприцепа (если есть)."
+    )
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",
+        response_schema=OrderPdfInfo,
+        temperature=0.1
+    )
+
+    contents = [
+        "Извлеки номер заявки, гос. номер тягача и номер прицепа с первой страницы документа:",
+        genai_types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
+    ]
+
+    models_to_try = [
+        # 1. Первичная экономная модель с гигантским лимитом
+        "gemini-3.5-flash-lite",
+        # 2. Флагманы для максимальной точности
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash",
+        "gemini-2.5-flash",
+        # 3. Резервные модели
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-3.1-pro",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+    ]
+
+    for model_name in models_to_try:
+        try:
+            if hasattr(gemini_client, 'aio'):
+                response = await gemini_client.aio.models.generate_content(model=model_name, contents=contents, config=config)
+            else:
+                response = await asyncio.to_thread(gemini_client.models.generate_content, model=model_name, contents=contents, config=config)
+                
+            if response and response.text:
+                raw_text = response.text.strip()
+                if "```" in raw_text:
+                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.MULTILINE)
+                    raw_text = re.sub(r"\s*```$", "", raw_text, flags=re.MULTILINE)
+                
+                raw_json = json.loads(raw_text)
+                order_num = (raw_json.get("order_number") or "").strip()
+                truck = (raw_json.get("truck_plate") or "").strip()
+                trailer = (raw_json.get("trailer_plate") or "").strip()
+                return order_num, truck, trailer
+        except Exception as e:
+            logging.warning(f"⚠️ Ошибка обработки заявки моделью {model_name}: {e}")
+
+    return "", "", ""
+
+
 async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
     buffer = io.BytesIO()
     images = []
@@ -3215,6 +3296,125 @@ async def handle_kaiten_skip_callback(callback: types.CallbackQuery):
 
     await callback.answer("Заявка пропущена")
 
+
+
+@dp.channel_post(F.chat.id == ORDERS_CHANNEL_ID)
+async def handle_orders_channel_post(message: types.Message):
+    """
+    Обработчик файлов заявок из канала заявок.
+    Поддерживает отправку одного или нескольких файлов за раз.
+    """
+    if not message.document:
+        return
+
+    doc = message.document
+    if not doc.file_name or not doc.file_name.lower().endswith('.pdf'):
+        return
+
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        file_bytes = buf.getvalue()
+
+        # Распознаем данные из PDF с помощью ИИ
+        order_number, extracted_truck, extracted_trailer = await process_order_pdf_with_ai(file_bytes)
+
+        if not extracted_truck:
+            await bot.send_message(
+                chat_id=ORDERS_CHANNEL_ID,
+                text=f"⚠️ **Файл `{doc.file_name}`**: Не удалось распознать номер авто на 1-й странице.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Очищаем номера авто от пробелов и спецсимволов для точного поиска
+        clean_extracted_truck = re.sub(r'[\s\W_]', '', extracted_truck).upper()
+        clean_extracted_trailer = re.sub(r'[\s\W_]', '', extracted_trailer).upper()
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+
+        # Ищем карточки в статусах "в работе" или "едут" (is_unloaded = 0)
+        cursor.execute("""
+            SELECT cd.id, cd.user_id, cd.date, cd.route, cd.price, 
+                   cd.last_truck_plate, cd.last_trailer_plate, cd.last_driver_name
+            FROM confirmed_deals cd
+            WHERE cd.is_unloaded = 0
+            ORDER BY cd.id DESC
+        """)
+        active_deals = cursor.fetchall()
+
+        matched_deal = None
+        for d_id, u_id, d_date, d_route, d_price, db_truck, db_trailer, db_driver in active_deals:
+            clean_db_truck = re.sub(r'[\s\W_]', '', db_truck or '').upper()
+            clean_db_trailer = re.sub(r'[\s\W_]', '', db_trailer or '').upper()
+
+            # Сопоставление по номеру тягача или прицепа
+            if clean_extracted_truck and clean_db_truck and (clean_extracted_truck in clean_db_truck or clean_db_truck in clean_extracted_truck):
+                matched_deal = (d_id, u_id, d_date, d_route, d_price, db_truck, db_trailer, db_driver)
+                break
+            elif clean_extracted_trailer and clean_db_trailer and (clean_extracted_trailer in clean_db_trailer or clean_db_trailer in clean_extracted_trailer):
+                matched_deal = (d_id, u_id, d_date, d_route, d_price, db_truck, db_trailer, db_driver)
+                break
+
+        if not matched_deal:
+            conn.close()
+            await bot.send_message(
+                chat_id=ORDERS_CHANNEL_ID,
+                text=f"❌ **Заявка №{order_number or 'б/н'}** (`{doc.file_name}`):\n"
+                     f"Не найдена активная карточка по номеру авто: `{extracted_truck}`.",
+                parse_mode="Markdown"
+            )
+            return
+
+        deal_id, carrier_uid, date_str, route_str, price_str, truck_plate, trailer_plate, driver_name = matched_deal
+
+        # Обновляем "Номер заявки" в БД
+        cursor.execute("UPDATE confirmed_deals SET order_number = ? WHERE id = ?", (order_number, deal_id))
+        conn.commit()
+        conn.close()
+
+        # Формируем подпись для сообщения перевозчику
+        final_truck = truck_plate or extracted_truck or "Авто"
+        final_trailer = trailer_plate or extracted_trailer or ""
+        plates_str = f"{final_truck}/{final_trailer}" if final_trailer else final_truck
+        final_driver = driver_name if driver_name and driver_name.lower() != "не распознан" else "Водитель"
+
+        carrier_caption = (
+            f"{date_str} {route_str}, {price_str}\n"
+            f"{plates_str} - {final_driver}"
+        )
+
+        # Отправляем PDF с заявкой перевозчику
+        try:
+            pdf_file = types.BufferedInputFile(file_bytes, filename=doc.file_name)
+            await bot.send_document(
+                chat_id=carrier_uid,
+                document=pdf_file,
+                caption=carrier_caption
+            )
+            
+            # Отчет логистам в канал заявок
+            await bot.send_message(
+                chat_id=ORDERS_CHANNEL_ID,
+                text=f"✅ **Заявка №{order_number or 'б/н'} успешно отправлена!**\n\n"
+                     f"📍 {carrier_caption}\n"
+                     f"👤 Перевозчик ID: `{carrier_uid}`",
+                parse_mode="Markdown"
+            )
+        except Exception as send_err:
+            logging.error(f"Error sending order PDF to carrier {carrier_uid}: {send_err}")
+            await bot.send_message(
+                chat_id=ORDERS_CHANNEL_ID,
+                text=f"⚠️ **Заявка №{order_number} привязана в системе**, но не удалось отправить файл в чат перевозчику (ID: {carrier_uid})."
+            )
+
+    except Exception as e:
+        logging.error(f"Error processing order PDF post: {e}", exc_info=True)
+
+
+
 # ==================== WEB APP БЭКЕНД И REST API ====================
 
 async def get_loads_api(request):
@@ -3318,7 +3518,8 @@ async def my_loads_api(request):
                    COALESCE(cd.last_driver_name, ''),
                    COALESCE(cd.driver_phone, ''),
                    COALESCE(cd.unload_date, ''),
-                   COALESCE(cd.is_unloaded, 0)
+                   COALESCE(cd.is_unloaded, 0),
+                   COALESCE(cd.order_number, '')
             FROM confirmed_deals cd
             LEFT JOIN loads l ON cd.load_id = l.load_id
             WHERE cd.user_id = ?
@@ -3382,7 +3583,7 @@ async def my_loads_api(request):
         })
 
     for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl = r
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num = r
 
         c_date = parse_cargo_date(date_str)
         is_today = bool(c_date and c_date == msk_today)
@@ -3411,7 +3612,8 @@ async def my_loads_api(request):
             "trailer_plate": trl_plate or "",
             "driver_name": drv_name or "",
             "driver_phone": drv_phone or "",
-            "unload_date": unl_date or ""
+            "unload_date": unl_date or "",
+            "order_number": ord_num or ""
         })
             
     return web.json_response({"deals": deals})
