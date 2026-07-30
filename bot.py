@@ -338,6 +338,9 @@ class DocUploadStates(StatesGroup):
 class DocConvertStates(StatesGroup):
     waiting_for_files = State()
 
+class PayDocUploadStates(StatesGroup):
+    waiting_for_docs = State()
+
 class AdminEditStates(StatesGroup):
     waiting_for_new_cargo_text = State()
 
@@ -4879,6 +4882,183 @@ async def serve_index(request):
         return web.Response(text=f"Error loading index.html: {e}", status=500)
 
 
+async def submit_pay_docs_prompt_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get('user_id', 0))
+        deal_id_raw = data.get('deal_id')
+        digits = re.findall(r'\d+', str(deal_id_raw))
+        clean_deal_id = int(digits[0]) if digits else 0
+
+        if not user_id or not clean_deal_id:
+            return web.json_response({"error": "Ошибка данных"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT date, route, price, order_number, last_truck_plate FROM confirmed_deals WHERE id = ? AND user_id = ?", (clean_deal_id, user_id))
+        deal = cursor.fetchone()
+        conn.close()
+
+        if not deal:
+            return web.json_response({"error": "Сделка не найдена"}, status=404)
+
+        date_str, route_str, price_str, ord_num, truck_plate = deal
+
+        state_ctx = dp.fsm.get_context(bot, user_id, user_id)
+        await state_ctx.set_state(PayDocUploadStates.waiting_for_docs)
+        await state_ctx.update_data(
+            pay_deal_id=clean_deal_id,
+            pay_route=route_str,
+            pay_order_num=ord_num,
+            pay_truck=truck_plate,
+            photos=[],
+            documents=[]
+        )
+
+        prompt_text = (
+            f"📄 **Подача документов на оплату**\n\n"
+            f"📍 {route_str} ({date_str})\n"
+            f"📋 Заявка №: `{ord_num or 'б/н'}`\n\n"
+            f"Отправьте в этот чат файлы пакета документов:\n"
+            f"1. ЦМР (CMR)\n2. Счет на оплату\n3. Акт выполненных работ\n4. Подписанная заявка\n\n"
+            f"Когда отправка завершена, нажмите кнопку **«✅ Проверить документы на оплату»**."
+        )
+
+        builder = ReplyKeyboardBuilder()
+        builder.add(types.KeyboardButton(text="✅ Проверить документы на оплату"))
+        builder.add(types.KeyboardButton(text="❌ Отмена"))
+        builder.adjust(1, 1)
+
+        await bot.send_message(chat_id=user_id, text=prompt_text, reply_markup=builder.as_markup(resize_keyboard=True), parse_mode="Markdown")
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+@dp.message(PayDocUploadStates.waiting_for_docs, F.text == "❌ Отмена")
+async def handle_pay_docs_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Подача документов на оплату отменена.", reply_markup=get_main_reply_markup(message.from_user))
+
+@dp.message(PayDocUploadStates.waiting_for_docs, F.photo)
+async def handle_pay_doc_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photos.append(message.photo[-1].file_id)
+    await state.update_data(photos=photos)
+
+@dp.message(PayDocUploadStates.waiting_for_docs, F.document)
+async def handle_pay_doc_document(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    documents = data.get("documents", [])
+    documents.append(message.document.file_id)
+    await state.update_data(documents=documents)
+
+@dp.message(PayDocUploadStates.waiting_for_docs, F.text == "✅ Проверить документы на оплату")
+async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    documents = data.get("documents", [])
+    deal_id = data.get("pay_deal_id")
+    ord_num = data.get("pay_order_num", "")
+    truck_plate = data.get("pay_truck", "")
+
+    if not photos and not documents:
+        await message.answer("Вы не прислали ни одного документа.")
+        return
+
+    status_msg = await message.answer("⏳ ИИ проверяет пакет документов на оплату...")
+
+    all_files = photos + documents
+    contents_list = ["Изучи пакет документов на оплату:"]
+
+    for fid in all_files:
+        try:
+            file_info = await bot.get_file(fid)
+            buf = io.BytesIO()
+            await bot.download_file(file_info.file_path, destination=buf)
+            raw_bytes = buf.getvalue()
+            mime = detect_mime_type(raw_bytes, file_info.file_path or "")
+            contents_list.append(genai_types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+        except Exception as e:
+            logging.error(f"Error downloading file for pay docs AI: {e}")
+
+    result = await verify_payment_docs_with_ai(contents_list, expected_order_num=ord_num, expected_truck=truck_plate)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+
+    if not result.is_valid:
+        err_msg = "Ошибки в документах на оплату:\n• " + "\n• ".join(result.errors)
+        cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ?", (err_msg, deal_id))
+        conn.commit()
+        conn.close()
+
+        await state.clear()
+        try: await status_msg.delete()
+        except Exception: pass
+
+        await message.answer(f"❌ {err_msg}\n\nПожалуйста, исправьте указанные ошибки и отправьте документы повторно.", reply_markup=get_main_reply_markup(message.from_user))
+        return
+
+    today_dt = datetime.now(timezone.utc).date()
+    planned_pay_dt = add_business_days(today_dt, 11)
+    planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE confirmed_deals 
+        SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ? 
+        WHERE id = ?
+    """, (today_iso, planned_pay_str, deal_id))
+    conn.commit()
+
+    cursor.execute("SELECT route, date, price FROM confirmed_deals WHERE id = ?", (deal_id,))
+    deal_info = cursor.fetchone()
+    conn.close()
+
+    route_str = deal_info[0] if deal_info else ""
+    date_str = deal_info[1] if deal_info else ""
+    price_str = deal_info[2] if deal_info else ""
+
+    caption_text = (
+        f"Заказ: {ord_num or 'б/н'}\n"
+        f"Дата загрузки: {result.cmr_loading_date or 'Не указана'}\n"
+        f"Дата выгрузки: {result.cmr_unloading_date or 'Не указана'}"
+    )
+
+    try:
+        raw_file_tuples = []
+        for fid in all_files:
+            try:
+                f_info = await bot.get_file(fid)
+                buf_f = io.BytesIO()
+                await bot.download_file(f_info.file_path, destination=buf_f)
+                raw_file_tuples.append((f_info.file_path or "doc", buf_f.getvalue()))
+            except Exception: pass
+
+        pdf_bytes = await generate_single_pdf_bytes(raw_file_tuples, route_str, date_str, price_str, "", "")
+        pdf_filename = f"{ord_num or 'Заявка'}.pdf"
+
+        if pdf_bytes:
+            pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+            await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+    except Exception as e:
+        logging.error(f"Error sending compiled PDF to payment channel: {e}")
+
+    await state.clear()
+    try: await status_msg.delete()
+    except Exception: pass
+
+    await message.answer(
+        f"✅ Документы на оплату успешно приняты ИИ и переданы в бухгалтерию!\n\n"
+        f"🗓 Плановая дата оплаты: **{planned_pay_str}**",
+        reply_markup=get_main_reply_markup(message.from_user),
+        parse_mode="Markdown"
+    )
+
+
+
 async def submit_pay_docs_direct_api(request):
     try:
         reader = await request.multipart()
@@ -4931,13 +5111,17 @@ async def submit_pay_docs_direct_api(request):
             add_notification(user_id, "Ошибки в документах на оплату", err_msg)
             return web.json_response({"status": "error", "error": err_msg}, status=400)
 
-        # Если все хорошо
+        # Если все хорошо: рассчитываем плановую дату оплаты (+11 рабочих дней от сегодня)
+        today_dt = datetime.now(timezone.utc).date()
+        planned_pay_dt = add_business_days(today_dt, 11)
+        planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
         today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
         cursor.execute("""
             UPDATE confirmed_deals 
-            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ? 
+            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ? 
             WHERE id = ?
-        """, (today_iso, deal_id))
+        """, (today_iso, planned_pay_str, deal_id))
         conn.commit()
         conn.close()
 
@@ -5012,6 +5196,7 @@ async def web_server():
     app.router.add_post("/api/submit_docs_prompt", submit_docs_prompt_api)
     app.router.add_post("/api/my_loads/direct_upload", direct_upload_docs_api)
     app.router.add_post("/api/my_loads/submit_pay_docs_direct", submit_pay_docs_direct_api)
+    app.router.add_post("/api/submit_pay_docs_prompt", submit_pay_docs_prompt_api)
 
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
