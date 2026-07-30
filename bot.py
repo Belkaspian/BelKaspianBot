@@ -3304,12 +3304,18 @@ async def handle_orders_channel_post(message: types.Message):
     Обработчик файлов заявок из канала заявок.
     Поддерживает отправку одного или нескольких файлов за раз.
     """
+    logging.info(f"📩 Получен пост в канале заявок ({ORDERS_CHANNEL_ID}). Наличие документа: {bool(message.document)}")
+
     if not message.document:
+        logging.info("⚠️ Пост в канале заявок не содержит файл-документ.")
         return
 
     doc = message.document
     if not doc.file_name or not doc.file_name.lower().endswith('.pdf'):
+        logging.info(f"⚠️ Файл `{doc.file_name}` пропущен: расширение не .pdf")
         return
+
+    logging.info(f"📄 Начинаем обработку PDF-заявки: {doc.file_name}")
 
     try:
         file_info = await bot.get_file(doc.file_id)
@@ -3317,8 +3323,11 @@ async def handle_orders_channel_post(message: types.Message):
         await bot.download_file(file_info.file_path, destination=buf)
         file_bytes = buf.getvalue()
 
+        logging.info(f"⏳ Отправляем файл `{doc.file_name}` на распознавание в Gemini AI...")
+
         # Распознаем данные из PDF с помощью ИИ
         order_number, extracted_truck, extracted_trailer = await process_order_pdf_with_ai(file_bytes)
+        logging.info(f"🔍 Результат ИИ: Заявка №'{order_number}', Тягач: '{extracted_truck}', Прицеп: '{extracted_trailer}'")
 
         if not extracted_truck:
             await bot.send_message(
