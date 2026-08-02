@@ -445,6 +445,22 @@ def normalize_single_phone(phone_str: str) -> str:
 
     return phone_str.strip()
 
+def translate_country(country_str: str) -> str:
+    if not country_str or country_str.strip().lower() in ["не распознана", "не указана", "none"]:
+        return "Не распознана"
+    c = country_str.strip().lower()
+    mapping = {
+        'uzbekistan': 'Узбекистан', 'uzb': 'Узбекистан', 'узбекистан': 'Узбекистан',
+        'kazakhstan': 'Казахстан', 'kzt': 'Казахстан', 'казахстан': 'Казахстан',
+        'russia': 'Россия', 'russian federation': 'Россия', 'россия': 'Россия',
+        'belarus': 'Беларусь', 'by': 'Беларусь', 'беларусь': 'Беларусь',
+        'kyrgyzstan': 'Кыргызстан', 'kgz': 'Кыргызстан', 'кыргызстан': 'Кыргызстан',
+        'georgia': 'Грузия', 'грузия': 'Грузия',
+        'azerbaijan': 'Азербайджан', 'азербайджан': 'Азербайджан',
+        'armenia': 'Армения', 'армения': 'Армения'
+    }
+    return mapping.get(c, country_str.strip())
+
 def normalize_phones(phone_str: str) -> str:
     if not phone_str or phone_str.strip().lower() in ["не указан", "не распознан", "—", "-"]:
         return "Не указан"
@@ -458,7 +474,12 @@ def normalize_phones(phone_str: str) -> str:
             if norm and norm not in normalized:
                 normalized.append(norm)
 
-    return " / ".join(normalized) if normalized else phone_str.strip()
+    # Приоритет российским (+7) и белорусским (+375) номерам
+    ru_by_phones = [p for p in normalized if p.startswith('+7') or p.startswith('+375')]
+    other_phones = [p for p in normalized if not (p.startswith('+7') or p.startswith('+375'))]
+    sorted_phones = ru_by_phones + other_phones
+
+    return " / ".join(sorted_phones) if sorted_phones else phone_str.strip()
 
 def get_main_reply_markup(user: Optional[types.User] = None):
     builder = ReplyKeyboardBuilder()
@@ -1396,15 +1417,18 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     "   - Никаких автозамен гласных или согласных (NABIJON -> NABIJON, GANIEVICH -> GANIEVICH).\n"
     "   - Если Паспорт отсутствует или нечитаем — укажи 'Не распознан'.\n"
     "   - При наличии кириллицы и латиницы отдавай приоритет кириллице.\n"
-    "2. СРОКИ ДЕЙСТВИЯ ('expiry_date'):\n"
+    "2. НАЗВАНИЯ СТРАН ('country'):\n"
+    "   - Указывай наименования ВСЕХ стран (страны регистрации ТС/прицепа, страны выдачи ВУ и паспорта) СТРОГО НА РУССКОМ ЯЗЫКЕ (например: 'Узбекистан', 'Казахстан', 'Россия', 'Беларусь', 'Кыргызстан').\n"
+    "   - Категорически запрещено писать названия стран на английском ('Uzbekistan', 'Russia' и т.д.).\n"
+    "3. СРОКИ ДЕЙСТВИЯ ('expiry_date'):\n"
     "   - Считывай даты окончания действия для Паспорта и ВУ визуально из соответствующих полей бланка (не путай с датой выдачи).\n"
     "   - Формат: СТРОГО 'ДД.ММ.ГГГГ'. Для бессрочных — 'INDEFINITE'. При сомнении — null.\n"
-    "3. ТРАНСПОРТНЫЕ СРЕДСТВА ('vehicles'):\n"
+    "4. ТРАНСПОРТНЫЕ СРЕДСТВА ('vehicles'):\n"
     "   - Извлекай визуально из бланков СТС / ПТС (VEHICLE_REGISTRATION).\n"
     "   - Марку ('brand') и Модель ('model') разделяй. Гос. номер ('plate_number') и VIN-номер (17 символов) считывай знак в знак.\n"
-    "4. ТЕЛЕФОНЫ ('phones'):\n"
+    "5. ТЕЛЕФОНЫ ('phones'):\n"
     "   - Находи ВСЕ номера телефонов. Очищай от пробелов, скобок и дефисов.\n"
-    "   - Если начинается с 89... меняй на +79...; если 80... (Беларусь) — на +375...; прочие — с '+'.\n"
+    "   - Порядок номеров: РОССИЙСКИЕ / БЕЛОРУССКИЕ (+7..., +375...) указывай ПЕРВЫМИ, затем все прочие международные.\n"
     "5. МЕТКИ РИСКА ('verification_flags'):\n"
     "   - 'needs_human_review': true, если паспорт отсутствует, бланк размыт/обрезан, VIN не равен 17 символам или есть малейшие сомнения.\n\n"
     "### ФОРМАТ ВЫХОДНЫХ ДАННЫХ\n"
@@ -1512,7 +1536,10 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
 
             l_num = l.get('number') or 'Не распознан'
             l_date = l.get('issue_date') or 'Не распознана'
-            l_country = l.get('country') or 'Не распознана'
+            l_country = translate_country(l.get('country') or 'Не распознана')
+
+            truck_country = translate_country(t.get('country') or 'Не распознана')
+            trailer_country = translate_country(tr.get('country') or 'Не распознана')
 
             b_date = d.get('birth_date') or 'Не распознана'
             b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
@@ -1521,11 +1548,11 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
 
             if is_polyethylene or "полиэтилен" in route_check_str or "polyethylene" in route_check_str:
                 formatted_output = (
-                    f"ТС (марка, г/н, страна регистрации): {truck_brand_only}, гос.ном.: {truck_plate}, {t.get('country') or 'Не распознана'}\n"
-                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand_only}, гос.ном.: {trailer_plate}, {tr.get('country') or 'Не распознана'}\n"
+                    f"ТС (марка, г/н, страна регистрации): {truck_brand_only}, гос.ном.: {truck_plate}, {truck_country}\n"
+                    f"Прицеп (марка, г/н, страна регистрации): {trailer_brand_only}, гос.ном.: {trailer_plate}, {trailer_country}\n"
                     f"ФИО водителя: {driver_full_name}\n"
                     f"Тел (росс): {phones_str}\n"
-                    f"Водительское удостоверение (№, когда и кем выдано): № {l_num} от {l_date}г., {l_country}\n"
+                    f"Водительское удостоверение (№, когда и кем выдано): {l_num} от {l_date}г., {l_country}\n"
                     f"Паспорт (серия, №, когда и кем выдан): {p_num} выдан {p_date}г. {p_auth}\n"
                     f"Дата рождения: {b_date_str}"
                 )
