@@ -1392,14 +1392,17 @@ def normalize_plate_number(plate_str: str) -> str:
 
 def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
     """
-    Разделяет совмещенные документы на одном фото (1, 2, 3 карточки рядом)
-    на отдельные самостоятельные выровненные изображения.
+    Разделяет совмещенные документы с авто-поворотом боковых снимков 
+    и отсечением мусорных контуров темных сидений/фона.
     """
     cropped_images = []
     try:
         pil_img = Image.open(io.BytesIO(image_bytes))
         pil_img = ImageOps.exif_transpose(pil_img).convert('RGB')
 
+        # Если карточки сняты боком (высота больше ширины при боковом СТС), разворачиваем
+        w_orig, h_orig = pil_img.size
+        
         if not HAS_OPENCV:
             return [pil_img]
 
@@ -1417,7 +1420,7 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
         gray = cv2.cvtColor(img_cv_small, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # Двойной порог для обнаружения независимых карточек в файлах/файликах
+        # Двойной адаптивный порог для поиска четких контуров пластиковых карточек
         thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
         edges = cv2.Canny(blurred, 30, 150)
         combined = cv2.bitwise_or(thresh, edges)
@@ -1432,18 +1435,22 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Каждый документ занимает от 3.5% до 90% кадра
-            if 0.035 * img_area < area < 0.95 * img_area:
+            if 0.035 * img_area < area < 0.92 * img_area:
                 x, y, bw, bh = cv2.boundingRect(cnt)
+                
+                # Фильтр яркости: вырезанный блок должен быть светлым документом, а не темным сиденьем
+                roi_gray = gray[y:y+bh, x:x+bw]
+                mean_brightness = cv2.mean(roi_gray)[0] if roi_gray.size > 0 else 0
+                if mean_brightness < 60: # Отбрасываем слишком темные мусорные контуры кожи
+                    continue
+
                 aspect_ratio = float(bw) / bh if bh > 0 else 0
-                # Игнорируем узкие длинные полосы, берем прямоугольные бланки
-                if 0.4 <= aspect_ratio <= 2.5:
+                if 0.35 <= aspect_ratio <= 2.8:
                     peri = cv2.arcLength(cnt, True)
                     approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
                     rect_pts = approx if len(approx) == 4 else np.array([[[x, y]], [[x+bw, y]], [[x+bw, y+bh]], [[x, y+bh]]])
                     found_rects.append((area, rect_pts, (x, y, bw, bh)))
 
-        # Исключаем перекрывающиеся/вложенные рамки
         found_rects.sort(key=lambda item: item[0], reverse=True)
         final_rects = []
         for area, pts, box in found_rects:
@@ -1457,8 +1464,8 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
             if not is_inside:
                 final_rects.append((area, pts, box))
 
-        # Сортируем документы визуально по положению на странице: сверху-вниз, слева-направо
-        final_rects.sort(key=lambda item: (item[2][1] // 120, item[2][0]))
+        # Сортировка вырезанных карточек сверху-вниз, слева-направо
+        final_rects.sort(key=lambda item: (item[2][1] // 100, item[2][0]))
 
         if final_rects:
             for area, best_rect, box in final_rects:
@@ -1483,7 +1490,7 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
                 heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
                 maxHeight = max(int(heightA), int(heightB))
 
-                if maxWidth < 80 or maxHeight < 80:
+                if maxWidth < 100 or maxHeight < 100:
                     continue
 
                 dst = np.array([
@@ -1495,7 +1502,13 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
 
                 M = cv2.getPerspectiveTransform(rect, dst)
                 warped = cv2.warpPerspective(orig_cv, M, (maxWidth, maxHeight))
-                cropped_images.append(Image.fromarray(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)))
+                warped_pil = Image.fromarray(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
+                
+                # Если карточка вырезалась боком (высота больше ширины), разворачиваем горизонтально
+                if warped_pil.height > warped_pil.width * 1.2:
+                    warped_pil = warped_pil.rotate(270, expand=True)
+
+                cropped_images.append(warped_pil)
 
         if not cropped_images:
             return [pil_img]
@@ -1564,15 +1577,15 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     "2. Фиксируй визуальные символы без использования внешних словарей, автодополнения или языковых догадок.\n\n"
     "#### ПОТОК 2: ВИЗУАЛЬНО-ГЕОМЕТРИЧЕСКИЙ АНАЛИЗ (Layout & Context)\n"
     "1. Оцени визуальную структуру бланка: сетку граф, заголовки, нумерацию полей (поля 1, 2, 4a, 4b на ВУ, графы СТС, поля Паспорта).\n"
-    "2. Определи ТОЧНУЮ КАТЕГОРИЮ каждой страницы для image_roles по следующей классификации:\n"
-    "   - PASSPORT_FRONT (Паспорт главная / ID карта лицевая)\n"
+    "2. Определи ТОЧНУЮ КАТЕГОРИЮ каждой вырезанной карточки для image_roles по следующей классификации:\n"
+    "   - PASSPORT_FRONT (Паспорт главная страница с фото и личными данными)\n"
     "   - PASSPORT_BACK (Паспорт 2-я страница / прописка / ID карта оборотная)\n"
-    "   - DRIVERS_LICENSE_FRONT (Водительское лицевая сторона с фото)\n"
-    "   - DRIVERS_LICENSE_BACK (Водительское оборотная сторона с сеткой категорий)\n"
-    "   - TRUCK_REGISTRATION_FRONT (СТС/Техпаспорт ТЯГАЧА лицевая с гос.номером)\n"
-    "   - TRUCK_REGISTRATION_BACK (СТС/Техпаспорт ТЯГАЧА оборотная с техническими данными)\n"
-    "   - TRAILER_REGISTRATION_FRONT (СТС/Техпаспорт ПРИЦЕПА лицевая с гос.номером)\n"
-    "   - TRAILER_REGISTRATION_BACK (СТС/Техпаспорт ПРИЦЕПА оборотная)\n"
+    "   - DRIVERS_LICENSE_FRONT (Водительское удостоверение лицевая сторона с фото)\n"
+    "   - DRIVERS_LICENSE_BACK (Водительское удостоверение оборотная сторона с сеткой категорий A, B, C, CE, D)\n"
+    "   - TRUCK_REGISTRATION_FRONT (СТС/Техпаспорт ТЯГАЧА/ГРУЗОВИКА лицевая сторона с гос.номером и маркой Daimler/Volvo/MAN/Scania)\n"
+    "   - TRUCK_REGISTRATION_BACK (СТС/Техпаспорт ТЯГАЧА оборотная сторона с разрешенной массой)\n"
+    "   - TRAILER_REGISTRATION_FRONT (СТС/Техпаспорт ПРИЦЕПА/ПОЛУПРИЦЕПА лицевая сторона с гос.номером и маркой Schmitz/Krone/Kogel)\n"
+    "   - TRAILER_REGISTRATION_BACK (СТС/Техпаспорт ПРИЦЕПА оборотная сторона)\n"
     "   - OTHER (Все остальные документы: лицензионные карточки, разрешения и т.д.)\n"
     "3. Привяжи визуально прочитанный текст к целевым графам бланка (например: графы 'Surname/Familiyasi', 'Given names/Ismi', 'Гос. номер', 'VIN', 'Действителен до').\n\n"
     "#### ПОТОК 3: СВЕРКА И КОНТРОЛЬ СТРОГОСТИ\n"
