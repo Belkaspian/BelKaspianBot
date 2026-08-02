@@ -1474,12 +1474,32 @@ def crop_document_image(image_bytes: bytes) -> Image.Image:
 
 def get_category_priority(cat_str: str) -> int:
     s = str(cat_str).lower().strip()
-    if 'passport_front' in s or 'паспорт_лиц' in s: return 10
-    if 'passport' in s or 'паспорт' in s: return 15
-    if 'license_front' in s or 'права_лиц' in s: return 20
-    if 'license' in s or 'права' in s or 'водительск' in s: return 25
+    
+    # 1. Паспорт (лицевая / разворот)
+    if 'passport_front' in s or 'паспорт_лиц' in s or 'passport_main' in s: return 10
+    # 2. Паспорт 2-я сторона (прописка / ID-карта оборот)
+    if 'passport_back' in s or 'паспорт_оборо' in s or 'id_back' in s: return 12
+    if 'passport' in s or 'паспорт' in s: return 10
+
+    # 3. Водительское (лицевая)
+    if 'license_front' in s or 'права_лиц' in s or 'drivers_license_front' in s: return 20
+    # 4. Водительское 2-я сторона (оборот с категориями)
+    if 'license_back' in s or 'права_оборо' in s or 'drivers_license_back' in s: return 22
+    if 'license' in s or 'права' in s or 'водительск' in s: return 20
+
+    # 5. Техпаспорт (СТС) Тягача — лицевая
+    if ('truck' in s or 'тягач' in s) and ('front' in s or 'лиц' in s or '1' in s): return 30
+    # 6. Техпаспорт (СТС) Тягача — 2-я сторона (оборот)
+    if ('truck' in s or 'тягач' in s) and ('back' in s or 'оборо' in s or '2' in s): return 32
     if 'truck' in s or 'тягач' in s or 'стс_тягач' in s: return 30
+
+    # 7. Техпаспорт (СТС) Прицепа — лицевая
+    if ('trailer' in s or 'прицеп' in s) and ('front' in s or 'лиц' in s or '1' in s): return 40
+    # 8. Техпаспорт (СТС) Прицепа — 2-я сторона (оборот)
+    if ('trailer' in s or 'прицеп' in s) and ('back' in s or 'оборо' in s or '2' in s): return 42
     if 'trailer' in s or 'прицеп' in s or 'стс_прицеп' in s: return 40
+
+    # 9+. Все остальное (лицензионные карточки, разрешения, сервисные книжки)
     return 90
 
 async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False, route_str=""):
@@ -1508,7 +1528,16 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     "2. Фиксируй визуальные символы без использования внешних словарей, автодополнения или языковых догадок.\n\n"
     "#### ПОТОК 2: ВИЗУАЛЬНО-ГЕОМЕТРИЧЕСКИЙ АНАЛИЗ (Layout & Context)\n"
     "1. Оцени визуальную структуру бланка: сетку граф, заголовки, нумерацию полей (поля 1, 2, 4a, 4b на ВУ, графы СТС, поля Паспорта).\n"
-    "2. Определи ТИП документа по его визуальному виду (PASSPORT, DRIVERS_LICENSE, VEHICLE_REGISTRATION, OTHER).\n"
+    "2. Определи ТОЧНУЮ КАТЕГОРИЮ каждой страницы для image_roles по следующей классификации:\n"
+    "   - PASSPORT_FRONT (Паспорт главная / ID карта лицевая)\n"
+    "   - PASSPORT_BACK (Паспорт 2-я страница / прописка / ID карта оборотная)\n"
+    "   - DRIVERS_LICENSE_FRONT (Водительское лицевая сторона с фото)\n"
+    "   - DRIVERS_LICENSE_BACK (Водительское оборотная сторона с сеткой категорий)\n"
+    "   - TRUCK_REGISTRATION_FRONT (СТС/Техпаспорт ТЯГАЧА лицевая с гос.номером)\n"
+    "   - TRUCK_REGISTRATION_BACK (СТС/Техпаспорт ТЯГАЧА оборотная с техническими данными)\n"
+    "   - TRAILER_REGISTRATION_FRONT (СТС/Техпаспорт ПРИЦЕПА лицевая с гос.номером)\n"
+    "   - TRAILER_REGISTRATION_BACK (СТС/Техпаспорт ПРИЦЕПА оборотная)\n"
+    "   - OTHER (Все остальные документы: лицензионные карточки, разрешения и т.д.)\n"
     "3. Привяжи визуально прочитанный текст к целевым графам бланка (например: графы 'Surname/Familiyasi', 'Given names/Ismi', 'Гос. номер', 'VIN', 'Действителен до').\n\n"
     "#### ПОТОК 3: СВЕРКА И КОНТРОЛЬ СТРОГОСТИ\n"
     "1. Убедись, что извлеченный текст на 100% совпадает с картинкой бланка и не поддался языковой автозамене.\n"
@@ -1705,7 +1734,16 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
             await bot.download_file(file_info.file_path, destination=buf)
             file_bytes = buf.getvalue()
             mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
-            contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+
+            if mime_type == "application/pdf":
+                extracted_imgs = extract_images_from_pdf_bytes(file_bytes)
+                if extracted_imgs:
+                    for img_b in extracted_imgs:
+                        contents.append(genai_types.Part.from_bytes(data=img_b, mime_type="image/jpeg"))
+                else:
+                    contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+            else:
+                contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
         except Exception as e:
             logging.error(f"Download file error for AI: {e}")
 
@@ -1781,12 +1819,46 @@ async def process_order_pdf_with_ai(file_bytes: bytes) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def extract_images_from_pdf_bytes(pdf_bytes: bytes) -> list[bytes]:
+    """
+    Извлекает растровые изображения со всех страниц PDF документа.
+    """
+    images_bytes = []
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        for page in reader.pages:
+            if hasattr(page, 'images') and page.images:
+                for img_obj in page.images:
+                    if hasattr(img_obj, 'data') and img_obj.data:
+                        images_bytes.append(img_obj.data)
+                        break
+    except Exception as e:
+        logging.error(f"Error extracting images from PDF: {e}")
+    return images_bytes
+
 async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=None) -> bytes:
     """
-    Автоматически обрезает лишний фон вокруг документов, сортирует их в строгом порядке 
-    (Паспорт ➔ Права ➔ СТС Тягача ➔ СТС Прицепа ➔ Лицензии) и склеивает в 1 единый PDF.
+    Распаковывает любые PDF и фото, обрезает сторонний фон (стол/покрывало) у КАЖДОЙ страницы,
+    сортирует страницы по ролям (Паспорт ➔ Права ➔ СТС Тягача ➔ СТС Прицепа ➔ Лицензии) 
+    и собирает 1 итоговый PDF.
     """
     from pypdf import PdfReader, PdfWriter
+
+    # Распаковываем все страницы PDF и отдельные фото в единый плоский список картинок
+    flat_images = []
+    
+    for fname, content in raw_files:
+        mime = detect_mime_type(content, fname)
+        if mime == "application/pdf":
+            extracted = extract_images_from_pdf_bytes(content)
+            if extracted:
+                for img_b in extracted:
+                    flat_images.append(img_b)
+            else:
+                flat_images.append(content)
+        else:
+            flat_images.append(content)
 
     # Приоритеты категорий от ИИ
     page_priorities = {}
@@ -1800,34 +1872,21 @@ async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, u
 
     processed_pages = []
 
-    for idx, (fname, content) in enumerate(raw_files):
+    for idx, img_bytes in enumerate(flat_images):
         priority = page_priorities.get(idx, 90)
-        mime = detect_mime_type(content, fname)
+        try:
+            # Обрезаем контур документа для КАЖДОЙ страницы, убирая зеленый стол/покрывало
+            cropped_img = crop_document_image(img_bytes)
+            if cropped_img:
+                cropped_img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+                img_buf = io.BytesIO()
+                cropped_img.save(img_buf, format="PDF", quality=82)
+                processed_pages.append((priority, img_buf.getvalue()))
+        except Exception as e:
+            logging.error(f"Error processing page {idx}: {e}")
 
-        if mime == "application/pdf":
-            try:
-                reader = PdfReader(io.BytesIO(content))
-                for page_num, page in enumerate(reader.pages):
-                    page_writer = PdfWriter()
-                    page_writer.add_page(page)
-                    p_buf = io.BytesIO()
-                    page_writer.write(p_buf)
-                    page_prio = page_priorities.get(idx + page_num, priority)
-                    processed_pages.append((page_prio, p_buf.getvalue()))
-            except Exception as e:
-                logging.error(f"Error processing PDF {fname}: {e}")
-        else:
-            try:
-                # Обрезаем контур документа, убирая сторонний фон
-                cropped_img = crop_document_image(content)
-                if cropped_img:
-                    img_buf = io.BytesIO()
-                    cropped_img.save(img_buf, format="PDF")
-                    processed_pages.append((priority, img_buf.getvalue()))
-            except Exception as e:
-                logging.error(f"Error processing image {fname}: {e}")
-
-    # Сортировка страниц в строгом порядке: Паспорт ➔ ВУ ➔ СТС ➔ Лицензии
+    # Сортировка всех страниц в строгом логическом порядке:
+    # 1. Паспорт ➔ 2. Права ➔ 3. СТС Тягача ➔ 4. СТС Прицепа ➔ 5. Лицензии
     processed_pages.sort(key=lambda x: x[0])
 
     final_writer = PdfWriter()
