@@ -1392,8 +1392,8 @@ def normalize_plate_number(plate_str: str) -> str:
 
 def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
     """
-    Автоматически обнаруживает ВСЕ документы на снимке (1, 2, 3 и более)
-    и разрезает их на отдельные выровненные изображения.
+    Разделяет совмещенные документы на одном фото (1, 2, 3 карточки рядом)
+    на отдельные самостоятельные выровненные изображения.
     """
     cropped_images = []
     try:
@@ -1417,9 +1417,13 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
         gray = cv2.cvtColor(img_cv_small, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        edges = cv2.Canny(blurred, 40, 180)
+        # Двойной порог для обнаружения независимых карточек в файлах/файликах
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+        edges = cv2.Canny(blurred, 30, 150)
+        combined = cv2.bitwise_or(thresh, edges)
+
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.dilate(edges, kernel, iterations=2)
+        dilated = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=2)
 
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -1428,39 +1432,36 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 0.04 * img_area < area < 0.95 * img_area:
-                peri = cv2.arcLength(cnt, True)
-                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-                
-                if len(approx) == 4:
-                    rect_pts = approx
-                else:
-                    x, y, bw, bh = cv2.boundingRect(cnt)
-                    if bw * bh > 0.04 * img_area:
-                        rect_pts = np.array([[[x, y]], [[x+bw, y]], [[x+bw, y+bh]], [[x, y+bh]]])
-                    else:
-                        continue
-                
-                found_rects.append((area, rect_pts))
+            # Каждый документ занимает от 3.5% до 90% кадра
+            if 0.035 * img_area < area < 0.95 * img_area:
+                x, y, bw, bh = cv2.boundingRect(cnt)
+                aspect_ratio = float(bw) / bh if bh > 0 else 0
+                # Игнорируем узкие длинные полосы, берем прямоугольные бланки
+                if 0.4 <= aspect_ratio <= 2.5:
+                    peri = cv2.arcLength(cnt, True)
+                    approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+                    rect_pts = approx if len(approx) == 4 else np.array([[[x, y]], [[x+bw, y]], [[x+bw, y+bh]], [[x, y+bh]]])
+                    found_rects.append((area, rect_pts, (x, y, bw, bh)))
 
-        found_rects.sort(key=lambda x: x[0], reverse=True)
-
+        # Исключаем перекрывающиеся/вложенные рамки
+        found_rects.sort(key=lambda item: item[0], reverse=True)
         final_rects = []
-        for area, pts in found_rects:
-            is_overlap = False
-            for f_area, f_pts in final_rects:
-                x1, y1, w1, h1 = cv2.boundingRect(pts)
-                x2, y2, w2, h2 = cv2.boundingRect(f_pts)
-                if x1 >= x2 and y1 >= y2 and (x1 + w1) <= (x2 + w2) and (y1 + h1) <= (y2 + h2):
-                    is_overlap = True
+        for area, pts, box in found_rects:
+            x1, y1, w1, h1 = box
+            is_inside = False
+            for f_area, f_pts, f_box in final_rects:
+                x2, y2, w2, h2 = f_box
+                if x1 >= x2 - 5 and y1 >= y2 - 5 and (x1 + w1) <= (x2 + w2 + 5) and (y1 + h1) <= (y2 + h2 + 5):
+                    is_inside = True
                     break
-            if not is_overlap:
-                final_rects.append((area, pts))
+            if not is_inside:
+                final_rects.append((area, pts, box))
 
-        final_rects.sort(key=lambda item: (cv2.boundingRect(item[1])[1] // 100, cv2.boundingRect(item[1])[0]))
+        # Сортируем документы визуально по положению на странице: сверху-вниз, слева-направо
+        final_rects.sort(key=lambda item: (item[2][1] // 120, item[2][0]))
 
         if final_rects:
-            for area, best_rect in final_rects:
+            for area, best_rect, box in final_rects:
                 pts = best_rect.reshape(4, 2).astype("float32")
                 pts[:, 0] *= scale_x
                 pts[:, 1] *= scale_y
@@ -1482,7 +1483,7 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
                 heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
                 maxHeight = max(int(heightA), int(heightB))
 
-                if maxWidth < 100 or maxHeight < 100:
+                if maxWidth < 80 or maxHeight < 80:
                     continue
 
                 dst = np.array([
@@ -1771,15 +1772,21 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
             file_bytes = buf.getvalue()
             mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
 
+            raw_imgs = []
             if mime_type == "application/pdf":
-                extracted_imgs = extract_images_from_pdf_bytes(file_bytes)
-                if extracted_imgs:
-                    for img_b in extracted_imgs:
-                        contents.append(genai_types.Part.from_bytes(data=img_b, mime_type="image/jpeg"))
-                else:
-                    contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+                extracted = extract_images_from_pdf_bytes(file_bytes)
+                raw_imgs = extracted if extracted else [file_bytes]
             else:
-                contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+                raw_imgs = [file_bytes]
+
+            # Разрезаем совмещенные фото НАПЕРЕД, чтобы ИИ сразу видел каждую карточку отдельно
+            for raw_b in raw_imgs:
+                cropped_pil_list = split_and_crop_documents(raw_b)
+                for pil_item in cropped_pil_list:
+                    out_b = io.BytesIO()
+                    pil_item.save(out_b, format="JPEG", quality=90)
+                    contents.append(genai_types.Part.from_bytes(data=out_b.getvalue(), mime_type="image/jpeg"))
+
         except Exception as e:
             logging.error(f"Download file error for AI: {e}")
 
@@ -1875,26 +1882,23 @@ def extract_images_from_pdf_bytes(pdf_bytes: bytes) -> list[bytes]:
 
 async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=None) -> bytes:
     """
-    Распаковывает любые PDF и фото, разрезает кадры с несколькими документами на отдельные карточки,
-    сортирует все карточки строго по ролям (1..9+) и собирает 1 итоговый PDF.
+    Сопоставляет каждую вырезанную карточку с приоритетами категорий ИИ (1..9+)
+    и склеивает их в 1 единый многостраничный PDF.
     """
     from pypdf import PdfReader, PdfWriter
 
+    # Распаковываем файлы и нарезаем карточки в том же порядке, что передавался в ИИ
     flat_images = []
     for fname, content in raw_files:
         mime = detect_mime_type(content, fname)
         if mime == "application/pdf":
             extracted = extract_images_from_pdf_bytes(content)
-            if extracted:
-                for img_b in extracted:
-                    # Разрезаем каждый кадр PDF, если там 2 или более документов
-                    split_imgs = split_and_crop_documents(img_b)
-                    flat_images.extend(split_imgs)
-            else:
-                flat_images.extend(split_and_crop_documents(content))
+            raw_imgs = extracted if extracted else [content]
         else:
-            split_imgs = split_and_crop_documents(content)
-            flat_images.extend(split_imgs)
+            raw_imgs = [content]
+
+        for raw_b in raw_imgs:
+            flat_images.extend(split_and_crop_documents(raw_b))
 
     page_priorities = {}
     image_roles = raw_json.get("image_roles") if isinstance(raw_json, dict) else []
@@ -1918,7 +1922,7 @@ async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, u
         except Exception as e:
             logging.error(f"Error processing page {idx}: {e}")
 
-    # Сортировка всех отдельных документов по вашему порядку (1..9+)
+    # Сортировка страниц строго по вашему порядку (1..9+)
     processed_pages.sort(key=lambda x: x[0])
 
     final_writer = PdfWriter()
