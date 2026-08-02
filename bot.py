@@ -1371,7 +1371,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
         return fallback_text, {}
 
-system_prompt = (
+    system_prompt = (
         "Ты — эксперт-аудитор международных транспортных документов. Твой метод работы — Двойной Контроль (Dual-Pass Protocol), аналогичный проверке человеком.\n"
         "Каждая ошибка приводит к огромным финансовым убыткам! Ты обязан использовать двойную проверку: сочетать чистое текстовое считывание с визуально-пространственным анализом структуры бланка.\n\n"
         "### ПРОТОКОЛ ДВОЙНОГО АНАЛИЗА (Заполняется строго в блоке <dual_verification_analysis>)\n"
