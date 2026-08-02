@@ -1392,22 +1392,20 @@ def normalize_plate_number(plate_str: str) -> str:
 
 def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
     """
-    Разделяет совмещенные документы с авто-поворотом боковых снимков 
-    и отсечением мусорных контуров темных сидений/фона.
+    Находит ВСЕ отдельные бланки документов на фотографии,
+    отсекает темные сиденья/покрывала и возвращает список вырезанных карточек.
     """
     cropped_images = []
     try:
         pil_img = Image.open(io.BytesIO(image_bytes))
         pil_img = ImageOps.exif_transpose(pil_img).convert('RGB')
 
-        # Если карточки сняты боком (высота больше ширины при боковом СТС), разворачиваем
-        w_orig, h_orig = pil_img.size
-        
         if not HAS_OPENCV:
             return [pil_img]
 
+        # Создаем рабочие копии
         small_pil = pil_img.copy()
-        small_pil.thumbnail((1000, 1000))
+        small_pil.thumbnail((1200, 1200))
         img_cv_small = cv2.cvtColor(np.array(small_pil), cv2.COLOR_RGB2BGR)
 
         orig_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -1418,15 +1416,15 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
         scale_y = orig_h / float(small_h)
 
         gray = cv2.cvtColor(img_cv_small, cv2.COLOR_BGR2GRAY)
+        
+        # Порог по яркости: отделяем светлые документы от темных кожаных сидений/стола
+        _, bright_thresh = cv2.threshold(gray, 70, 255, cv2.THRESH_BINARY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Двойной адаптивный порог для поиска четких контуров пластиковых карточек
-        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-        edges = cv2.Canny(blurred, 30, 150)
-        combined = cv2.bitwise_or(thresh, edges)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=2)
+        edges = cv2.Canny(blurred, 30, 140)
+        
+        combined = cv2.bitwise_and(edges, bright_thresh)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated = cv2.dilate(combined, kernel, iterations=2)
 
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -1435,22 +1433,23 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 0.035 * img_area < area < 0.92 * img_area:
+            # Документ занимает от 3% до 90% площади кадра
+            if 0.03 * img_area < area < 0.92 * img_area:
                 x, y, bw, bh = cv2.boundingRect(cnt)
                 
-                # Фильтр яркости: вырезанный блок должен быть светлым документом, а не темным сиденьем
+                # Проверка средней яркости прямоугольника (отсекаем черные складки кожи)
                 roi_gray = gray[y:y+bh, x:x+bw]
-                mean_brightness = cv2.mean(roi_gray)[0] if roi_gray.size > 0 else 0
-                if mean_brightness < 60: # Отбрасываем слишком темные мусорные контуры кожи
+                if roi_gray.size > 0 and cv2.mean(roi_gray)[0] < 65:
                     continue
 
                 aspect_ratio = float(bw) / bh if bh > 0 else 0
-                if 0.35 <= aspect_ratio <= 2.8:
+                if 0.3 <= aspect_ratio <= 3.2:
                     peri = cv2.arcLength(cnt, True)
                     approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
                     rect_pts = approx if len(approx) == 4 else np.array([[[x, y]], [[x+bw, y]], [[x+bw, y+bh]], [[x, y+bh]]])
                     found_rects.append((area, rect_pts, (x, y, bw, bh)))
 
+        # Сортировка по площади и отсечение вложенных контуров
         found_rects.sort(key=lambda item: item[0], reverse=True)
         final_rects = []
         for area, pts, box in found_rects:
@@ -1458,13 +1457,13 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
             is_inside = False
             for f_area, f_pts, f_box in final_rects:
                 x2, y2, w2, h2 = f_box
-                if x1 >= x2 - 5 and y1 >= y2 - 5 and (x1 + w1) <= (x2 + w2 + 5) and (y1 + h1) <= (y2 + h2 + 5):
+                if x1 >= x2 - 8 and y1 >= y2 - 8 and (x1 + w1) <= (x2 + w2 + 8) and (y1 + h1) <= (y2 + h2 + 8):
                     is_inside = True
                     break
             if not is_inside:
                 final_rects.append((area, pts, box))
 
-        # Сортировка вырезанных карточек сверху-вниз, слева-направо
+        # Упорядочивание вырезанных документов сверху-вниз, слева-направо
         final_rects.sort(key=lambda item: (item[2][1] // 100, item[2][0]))
 
         if final_rects:
@@ -1490,7 +1489,7 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
                 heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
                 maxHeight = max(int(heightA), int(heightB))
 
-                if maxWidth < 100 or maxHeight < 100:
+                if maxWidth < 90 or maxHeight < 90:
                     continue
 
                 dst = np.array([
@@ -1503,9 +1502,9 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
                 M = cv2.getPerspectiveTransform(rect, dst)
                 warped = cv2.warpPerspective(orig_cv, M, (maxWidth, maxHeight))
                 warped_pil = Image.fromarray(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
-                
-                # Если карточка вырезалась боком (высота больше ширины), разворачиваем горизонтально
-                if warped_pil.height > warped_pil.width * 1.2:
+
+                # Авто-поворот: карточки СТС и Прав должны лежать горизонтально
+                if warped_pil.height > warped_pil.width * 1.15:
                     warped_pil = warped_pil.rotate(270, expand=True)
 
                 cropped_images.append(warped_pil)
@@ -1524,31 +1523,31 @@ def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
 def get_category_priority(cat_str: str) -> int:
     s = str(cat_str).lower().strip()
     
-    # 1. Паспорт (лицевая / разворот)
+    # 1. Паспорт главный разворот
     if 'passport_front' in s or 'паспорт_лиц' in s or 'passport_main' in s: return 10
-    # 2. Паспорт 2-я сторона (прописка / ID-карта оборот)
+    # 2. Паспорт 2-я страница / ID оборот
     if 'passport_back' in s or 'паспорт_оборо' in s or 'id_back' in s: return 12
     if 'passport' in s or 'паспорт' in s: return 10
 
-    # 3. Водительское (лицевая)
+    # 3. Водительское удостоверение Лицевая
     if 'license_front' in s or 'права_лиц' in s or 'drivers_license_front' in s: return 20
-    # 4. Водительское 2-я сторона (оборот с категориями)
+    # 4. Водительское удостоверение Оборотная (сетка категорий)
     if 'license_back' in s or 'права_оборо' in s or 'drivers_license_back' in s: return 22
     if 'license' in s or 'права' in s or 'водительск' in s: return 20
 
-    # 5. Техпаспорт (СТС) Тягача — лицевая
+    # 5. СТС Тягача Лицевая (Daimler/Volvo/MAN)
     if ('truck' in s or 'тягач' in s) and ('front' in s or 'лиц' in s or '1' in s): return 30
-    # 6. Техпаспорт (СТС) Тягача — 2-я сторона (оборот)
+    # 6. СТС Тягача Оборотная
     if ('truck' in s or 'тягач' in s) and ('back' in s or 'оборо' in s or '2' in s): return 32
     if 'truck' in s or 'тягач' in s or 'стс_тягач' in s: return 30
 
-    # 7. Техпаспорт (СТС) Прицепа — лицевая
+    # 7. СТС Прицепа Лицевая (Schmitz/Krone)
     if ('trailer' in s or 'прицеп' in s) and ('front' in s or 'лиц' in s or '1' in s): return 40
-    # 8. Техпаспорт (СТС) Прицепа — 2-я сторона (оборот)
+    # 8. СТС Прицепа Оборотная
     if ('trailer' in s or 'прицеп' in s) and ('back' in s or 'оборо' in s or '2' in s): return 42
     if 'trailer' in s or 'прицеп' in s or 'стс_прицеп' in s: return 40
 
-    # 9+. Все остальное (лицензионные карточки, разрешения, сервисные книжки)
+    # 9+. Прочие документы (лицензии, карточки)
     return 90
 
 async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False, route_str=""):
