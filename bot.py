@@ -1369,6 +1369,92 @@ def is_doc_expired_or_expiring_soon(expiry_str: str, threshold_days: int = 20) -
     except ValueError:
         return False
 
+try:
+    import cv2
+    import numpy as np
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+
+def crop_document_image(image_bytes: bytes) -> Image.Image:
+    """
+    Обнаруживает контур документа на снимке и автоматически вырезает его,
+    удаляя сторонний фон (стол, покрывало, салон).
+    """
+    try:
+        pil_img = Image.open(io.BytesIO(image_bytes))
+        pil_img = ImageOps.exif_transpose(pil_img).convert('RGB')
+        
+        if not HAS_OPENCV:
+            return pil_img
+
+        img_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        h, w = img_cv.shape[:2]
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        edges = cv2.Canny(blurred, 50, 200)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_rect = None
+        max_area = 0
+        img_area = w * h
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > 0.12 * img_area and area > max_area:
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+                if len(approx) == 4:
+                    best_rect = approx
+                    max_area = area
+                else:
+                    x, y, bw, bh = cv2.boundingRect(cnt)
+                    if bw * bh > max_area and bw * bh > 0.12 * img_area:
+                        max_area = bw * bh
+                        best_rect = np.array([[[x, y]], [[x+bw, y]], [[x+bw, y+bh]], [[x, y+bh]]])
+
+        if best_rect is not None and max_area > 0.12 * img_area:
+            pts = best_rect.reshape(4, 2)
+            rect = np.zeros((4, 2), dtype="float32")
+            s = pts.sum(axis=1)
+            rect[0] = pts[np.argmin(s)]
+            rect[2] = pts[np.argmax(s)]
+            diff = np.diff(pts, axis=1)
+            rect[1] = pts[np.argmin(diff)]
+            rect[3] = pts[np.argmax(diff)]
+
+            (tl, tr, br, bl) = rect
+            widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+            widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+            maxWidth = max(int(widthA), int(widthB))
+
+            heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+            heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+            maxHeight = max(int(heightA), int(heightB))
+
+            dst = np.array([
+                [0, 0],
+                [maxWidth - 1, 0],
+                [maxWidth - 1, maxHeight - 1],
+                [0, maxHeight - 1]
+            ], dtype="float32")
+
+            M = cv2.getPerspectiveTransform(rect, dst)
+            warped = cv2.warpPerspective(img_cv, M, (maxWidth, maxHeight))
+            return Image.fromarray(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
+
+        return pil_img
+    except Exception as e:
+        logging.error(f"Crop document error: {e}")
+        try:
+            return Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        except Exception:
+            return None
+
 def get_category_priority(cat_str: str) -> int:
     s = str(cat_str).lower().strip()
     if 'passport_front' in s or 'паспорт_лиц' in s: return 10
@@ -1678,36 +1764,67 @@ async def process_order_pdf_with_ai(file_bytes: bytes) -> tuple[str, str, str]:
     return "", "", ""
 
 
-async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data) -> bytes:
-    buffer = io.BytesIO()
-    images = []
+async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=None) -> bytes:
+    """
+    Автоматически обрезает лишний фон вокруг документов, сортирует их в строгом порядке 
+    (Паспорт ➔ Права ➔ СТС Тягача ➔ СТС Прицепа ➔ Лицензии) и склеивает в 1 единый PDF.
+    """
+    from pypdf import PdfReader, PdfWriter
 
-    for fname, content in raw_files:
+    # Приоритеты категорий от ИИ
+    page_priorities = {}
+    image_roles = raw_json.get("image_roles") if isinstance(raw_json, dict) else []
+    for role in (image_roles or []):
+        if isinstance(role, dict):
+            idx = role.get("image_index")
+            cat = role.get("category", "other")
+            if idx is not None:
+                page_priorities[idx] = get_category_priority(cat)
+
+    processed_pages = []
+
+    for idx, (fname, content) in enumerate(raw_files):
+        priority = page_priorities.get(idx, 90)
         mime = detect_mime_type(content, fname)
+
         if mime == "application/pdf":
             try:
-                from pypdf import PdfReader
                 reader = PdfReader(io.BytesIO(content))
-                out_buf = io.BytesIO()
-                buffer.write(content)
-                return buffer.getvalue()
-            except Exception:
-                pass
+                for page_num, page in enumerate(reader.pages):
+                    page_writer = PdfWriter()
+                    page_writer.add_page(page)
+                    p_buf = io.BytesIO()
+                    page_writer.write(p_buf)
+                    page_prio = page_priorities.get(idx + page_num, priority)
+                    processed_pages.append((page_prio, p_buf.getvalue()))
+            except Exception as e:
+                logging.error(f"Error processing PDF {fname}: {e}")
         else:
             try:
-                img = Image.open(io.BytesIO(content))
-                img = ImageOps.exif_transpose(img)
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                images.append(img)
+                # Обрезаем контур документа, убирая сторонний фон
+                cropped_img = crop_document_image(content)
+                if cropped_img:
+                    img_buf = io.BytesIO()
+                    cropped_img.save(img_buf, format="PDF")
+                    processed_pages.append((priority, img_buf.getvalue()))
             except Exception as e:
-                logging.error(f"Error converting image to PDF: {e}")
+                logging.error(f"Error processing image {fname}: {e}")
 
-    if images:
-        images[0].save(buffer, format="PDF", save_all=True, append_images=images[1:])
-        return buffer.getvalue()
+    # Сортировка страниц в строгом порядке: Паспорт ➔ ВУ ➔ СТС ➔ Лицензии
+    processed_pages.sort(key=lambda x: x[0])
 
-    return b""
+    final_writer = PdfWriter()
+    for _, page_bytes in processed_pages:
+        try:
+            reader = PdfReader(io.BytesIO(page_bytes))
+            for page in reader.pages:
+                final_writer.add_page(page)
+        except Exception as e:
+            logging.error(f"Error adding page to final PDF: {e}")
+
+    out_buf = io.BytesIO()
+    final_writer.write(out_buf)
+    return out_buf.getvalue()
 
 async def sort_pdf_pages(doc_file_id, raw_json) -> io.BytesIO:
     try:
@@ -2371,18 +2488,36 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
                 reply_markup=reply_kb
             )
 
-        if documents:
-            sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
-            if sorted_pdf_buf:
-                pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
-                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
-            else:
-                for doc_id in documents:
-                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption="Документ")
-        elif photos:
-            pdf_buf = await create_pdf_report_with_images("Автономное преобразование", "Сегодня", "-", user_info, ai_formatted_data, photos)
-            pdf_bytes = pdf_buf.getvalue() if pdf_buf else b""
+        raw_files = []
+        for fid in (documents or []):
+            try:
+                f_info = await bot.get_file(fid)
+                buf_f = io.BytesIO()
+                await bot.download_file(f_info.file_path, destination=buf_f)
+                raw_files.append((f_info.file_path or "doc.pdf", buf_f.getvalue()))
+            except Exception: pass
+        for fid in (photos or []):
+            try:
+                f_info = await bot.get_file(fid)
+                buf_f = io.BytesIO()
+                await bot.download_file(f_info.file_path, destination=buf_f)
+                raw_files.append((f_info.file_path or "photo.jpg", buf_f.getvalue()))
+            except Exception: pass
+
+        if raw_files:
+            pdf_bytes = await generate_single_pdf_bytes(raw_files, "Автономное преобразование", "Сегодня", "-", user_info, ai_formatted_data)
             if pdf_bytes:
+                clean_name = re.sub(r'[^\w\s-]', '', driver_name).strip() or "ВОДИТЕЛЬ"
+                clean_truck = re.sub(r'[^\w]', '', truck_plate).strip()
+                clean_trailer = re.sub(r'[^\w]', '', trailer_plate).strip()
+
+                if clean_trailer and clean_trailer.lower() not in ["нераспознан", "неуказан"]:
+                    plates_str = f"{clean_truck}_{clean_trailer}"
+                else:
+                    plates_str = clean_truck
+
+                pdf_filename = f"{clean_name} - {plates_str}.pdf"
+
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
 
@@ -2624,20 +2759,43 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             parse_mode="Markdown"
         )
 
-        if documents:
-            sorted_pdf_buf = await sort_pdf_pages(documents[0], raw_json) if len(documents) == 1 else None
-            if sorted_pdf_buf:
-                pdf_file = types.BufferedInputFile(sorted_pdf_buf.getvalue(), filename=pdf_filename)
-                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
-            else:
-                for doc_id in documents:
-                    await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=doc_id, caption=file_caption)
-        elif photos:
-            pdf_buf = await create_pdf_report_with_images(route_str, date_str, price_str, carrier_text, ai_formatted_data, sorted_files)
-            pdf_bytes = pdf_buf.getvalue()
+        # Скачиваем абсолютно все файлы для склейки в 1 общий PDF
+        raw_files = []
+        for fid in (documents or []):
+            try:
+                f_info = await bot.get_file(fid)
+                buf_f = io.BytesIO()
+                await bot.download_file(f_info.file_path, destination=buf_f)
+                raw_files.append((f_info.file_path or "doc.pdf", buf_f.getvalue()))
+            except Exception as e:
+                logging.error(f"Download doc error: {e}")
+        for fid in (photos or []):
+            try:
+                f_info = await bot.get_file(fid)
+                buf_f = io.BytesIO()
+                await bot.download_file(f_info.file_path, destination=buf_f)
+                raw_files.append((f_info.file_path or "photo.jpg", buf_f.getvalue()))
+            except Exception as e:
+                logging.error(f"Download photo error: {e}")
+
+        if raw_files:
+            pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, carrier_text, ai_formatted_data)
             if pdf_bytes:
+                clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name).strip() or "ВОДИТЕЛЬ"
+                clean_truck = re.sub(r'[^\w]', '', new_truck_plate).strip()
+                clean_trailer = re.sub(r'[^\w]', '', new_trailer_plate).strip()
+
+                if clean_trailer and clean_trailer.lower() not in ["нераспознан", "неуказан"]:
+                    plates_str = f"{clean_truck}_{clean_trailer}"
+                else:
+                    plates_str = clean_truck
+
+                pdf_filename = f"{clean_name} - {plates_str}.pdf"
+                file_caption = f"{date_str} {route_str}"
+
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
+                
     except Exception as e:
         logging.error(f"Error forwarding docs to admin channel: {e}", exc_info=True)
 
@@ -4206,12 +4364,19 @@ async def direct_upload_docs_api(request):
             logging.error(f"Markdown send failed in direct upload: {e}")
 
         if raw_files:
-            clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name)
-            clean_truck = re.sub(r'[^\w]', '', new_truck_plate)
-            pdf_filename = f"{clean_name} - {clean_truck}.pdf"
+            clean_name = re.sub(r'[^\w\s-]', '', new_driver_short_name).strip() or "ВОДИТЕЛЬ"
+            clean_truck = re.sub(r'[^\w]', '', new_truck_plate).strip()
+            clean_trailer = re.sub(r'[^\w]', '', new_trailer_plate).strip()
+
+            if clean_trailer and clean_trailer.lower() not in ["нераспознан", "неуказан"]:
+                plates_str = f"{clean_truck}_{clean_trailer}"
+            else:
+                plates_str = clean_truck
+
+            pdf_filename = f"{clean_name} - {plates_str}.pdf"
             file_caption = f"{date_str} {route_str}"
 
-            pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data)
+            pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=raw_json)
             if pdf_bytes:
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
