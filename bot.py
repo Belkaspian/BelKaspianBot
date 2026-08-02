@@ -95,7 +95,11 @@ try:
 except ValueError:
     ORDERS_CHANNEL_ID = -1004337686386
 
-bot = Bot(token=TOKEN)
+from aiogram.client.session.aiohttp import AiohttpSession
+
+# Задаем базовой HTTP-сессии бота лимит ожидания в 5 минут (300 сек)
+session = AiohttpSession(timeout=300.0)
+bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher(storage=MemoryStorage())
 
 CHANNELS = {
@@ -2532,7 +2536,7 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
                 pdf_filename = f"{clean_name} - {plates_str}.pdf"
 
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ")
+                await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption="Преобразованный документ", request_timeout=300)
 
         try:
             await status_msg.delete()
