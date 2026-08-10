@@ -5097,6 +5097,7 @@ async def admin_toggle_carrier_status_api(request):
     try:
         data = await request.json()
         u_id = int(data.get('user_id'))
+        reason = data.get('reason', '').strip()
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM users WHERE user_id = ?", (u_id,))
@@ -5105,6 +5106,21 @@ async def admin_toggle_carrier_status_api(request):
         cursor.execute("UPDATE users SET status = ? WHERE user_id = ?", (new_status, u_id))
         conn.commit()
         conn.close()
+
+        # Отправляем уведолмения в Telegram и сохраняем в журнал
+        if new_status == 'BLOCKED':
+            msg_text = f"⛔️ Ваш аккаунт заблокирован администратором.\nПричина: {reason if reason else 'Нарушение правил'}"
+            add_notification(u_id, "Аккаунт заблокирован", msg_text)
+            try:
+                await bot.send_message(chat_id=u_id, text=msg_text)
+            except Exception: pass
+        else:
+            msg_text = "✅ Ваш аккаунт разблокирован администратором. Все функции бота и WebApp снова доступны."
+            add_notification(u_id, "Аккаунт разблокирован", msg_text)
+            try:
+                await bot.send_message(chat_id=u_id, text=msg_text)
+            except Exception: pass
+
         return web.json_response({"status": "success", "new_status": new_status})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
@@ -5116,7 +5132,8 @@ async def admin_get_loads_api(request):
         SELECT l.load_id, l.route, l.date, l.cars_count, l.price, l.status,
                COALESCE(l.car_type, 'Тент/реф'), COALESCE(l.cargo_type, 'ТНП'),
                COALESCE(l.weight, 'до 22т'), COALESCE(l.admin_comment, ''),
-               GROUP_CONCAT(u.company || ' (' || u.name || ')', '; ') as carriers
+               GROUP_CONCAT(u.company || ' (' || u.name || ')', '; ') as carriers,
+               COALESCE(l.destination_country, 'Все')
         FROM loads l
         LEFT JOIN confirmed_deals cd ON l.load_id = cd.load_id
         LEFT JOIN users u ON cd.user_id = u.user_id
@@ -5129,7 +5146,8 @@ async def admin_get_loads_api(request):
     loads = [{
         "id": r[0], "route": r[1], "date": r[2], "cars": r[3], "price": r[4],
         "status": r[5], "car_type": r[6], "cargo_type": r[7], "weight": r[8],
-        "admin_comment": r[9], "carrier_info": r[10] or "Не забран"
+        "admin_comment": r[9], "carrier_info": r[10] or "Не забран",
+        "destination_country": r[11]
     } for r in rows]
     return web.json_response({"loads": loads})
 
@@ -5189,9 +5207,11 @@ async def admin_get_confirmed_deals_api(request):
     cursor.execute("""
         SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, cd.details, cd.user_id,
                COALESCE(u.company, 'Не указана'), COALESCE(u.name, 'Пользователь'), COALESCE(u.phone, 'Не указан'),
-               COALESCE(u.status, 'ACTIVE')
+               COALESCE(u.status, 'ACTIVE'),
+               COALESCE(l.destination_country, '')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
+        LEFT JOIN loads l ON cd.load_id = l.load_id
         ORDER BY cd.id DESC
     """)
     rows = cursor.fetchall()
@@ -5199,7 +5219,7 @@ async def admin_get_confirmed_deals_api(request):
     deals = [{
         "deal_id": r[0], "load_id": r[1], "date": r[2], "route": r[3], "cars": r[4], 
         "price": r[5], "details": r[6], "user_id": r[7], "company": r[8], 
-        "name": r[9], "phone": r[10], "carrier_status": r[11]
+        "name": r[9], "phone": r[10], "carrier_status": r[11], "destination_country": r[12]
     } for r in rows]
     return web.json_response({"deals": deals})
 
@@ -5207,16 +5227,46 @@ async def admin_edit_deal_api(request):
     try:
         data = await request.json()
         deal_id = int(data.get('deal_id'))
+        new_cars = int(data.get('cars', 1))
+        new_route = data.get('route')
+        new_date = data.get('date')
+        new_price = format_custom_rate(data.get('price'))
+        new_details = data.get('details', '')
+
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE confirmed_deals 
-            SET route = ?, date = ?, price = ?, cars = ?, details = ?
-            WHERE id = ?
-        """, (data.get('route'), data.get('date'), format_custom_rate(data.get('price')), int(data.get('cars', 1)), data.get('details', ''), deal_id))
-        conn.commit()
-        conn.close()
-        return web.json_response({"status": "success"})
+        cursor.execute("SELECT load_id, user_id, cars FROM confirmed_deals WHERE id = ?", (deal_id,))
+        row = cursor.fetchone()
+
+        if row:
+            load_id, user_id, old_cars = row[0], row[1], row[2]
+
+            cursor.execute("""
+                UPDATE confirmed_deals 
+                SET route = ?, date = ?, price = ?, cars = 1, details = ?
+                WHERE id = ?
+            """, (new_route, new_date, new_price, new_details, deal_id))
+
+            # Если количество машин увеличено (например с 1 до 2), создаем дополнительные дубликаты заказа для перевозчика
+            diff = new_cars - old_cars
+            if diff > 0:
+                for _ in range(diff):
+                    cursor.execute("""
+                        INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                        VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """, (load_id, user_id, new_date, new_route, new_price, new_details))
+
+                add_notification(user_id, "Добавлен груз", f"Количество авто по заказу ({new_route}) изменено на {new_cars}. Вам добавлен второй такой же груз.")
+                try:
+                    await bot.send_message(chat_id=user_id, text=f"• В ваш раздел «Мои грузы» добавлен еще {diff} аналогичный груз ({new_route}).")
+                except Exception: pass
+
+            conn.commit()
+            conn.close()
+            return web.json_response({"status": "success"})
+        else:
+            conn.close()
+            return web.json_response({"error": "Сделка не найдена"}, status=404)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
