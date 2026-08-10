@@ -850,7 +850,7 @@ async def update_cargo_messages_for_all_users(cargo_id: int):
                 )
             else:
                 builder = InlineKeyboardBuilder()
-                web_app_url = f"{RENDER_URL}/webapp"
+                web_app_url = f"{RENDER_URL}/webapp?user_id={u_id}"
                 builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
                 await bot.edit_message_text(
                     chat_id=u_id,
@@ -1204,7 +1204,7 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
     
     builder = InlineKeyboardBuilder()
     if not is_closed:
-        web_app_url = f"{RENDER_URL}/webapp"
+        web_app_url = f"{RENDER_URL}/webapp?user_id={user_id}"
         builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
     
     try:
@@ -2125,7 +2125,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await send_welcome_message(message)
 
 async def send_welcome_message(message: types.Message):
-    web_app_url = f"{RENDER_URL}/webapp"
+    u_id = message.from_user.id
+    web_app_url = f"{RENDER_URL}/webapp?user_id={u_id}"
     inline_builder1 = InlineKeyboardBuilder()
     inline_builder1.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
 
@@ -2249,7 +2250,8 @@ async def callback_menu_active(callback: types.CallbackQuery):
             pass
 
     builder = InlineKeyboardBuilder()
-    web_app_url = f"{RENDER_URL}/webapp"
+    u_id = callback.from_user.id
+    web_app_url = f"{RENDER_URL}/webapp?user_id={u_id}"
     builder.row(types.InlineKeyboardButton(text="🚀 Открыть в Web App", web_app=WebAppInfo(url=web_app_url)))
     await callback.message.answer("Для бронирования и работы с приложением:", reply_markup=builder.as_markup())
 
