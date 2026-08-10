@@ -1582,76 +1582,29 @@
         </div>
     </div>
 
-    <!-- Модальное окно редактирования ПОДТВЕРЖДЕННОГО ЗАКАЗА -->
-    <div class="modal-overlay" id="adminEditDealModal">
+   
+    <!-- Модальное окно причин блокировки перевозчика -->
+    <div class="modal-overlay" id="adminBlockReasonModal" style="z-index: 3000 !important;">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Редактирование заказа</div>
-                <div class="modal-close" onclick="closeModal('adminEditDealModal')">
+                <div class="modal-title">Блокировка перевозчика</div>
+                <div class="modal-close" onclick="closeModal('adminBlockReasonModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
             </div>
-            <input type="hidden" id="editDealId" />
+            <input type="hidden" id="blockCarrierUserId" />
             <div class="form-group">
-                <label>Маршрут</label>
-                <input type="text" id="editDealRoute" placeholder="Минск → Москва" />
-            </div>
-            <div class="form-group">
-                <label>Дата погрузки</label>
-                <input type="text" id="editDealDate" placeholder="15.05" />
-            </div>
-            <div class="form-group">
-                <label>Ставка</label>
-                <input type="text" id="editDealPrice" placeholder="2500 USD" />
-            </div>
-            <div class="form-group">
-                <label>Количество авто</label>
-                <input type="number" id="editDealCars" value="1" min="1" />
-            </div>
-            <div class="form-group">
-                <label>Дополнительные детали</label>
-                <textarea id="editDealDetails" placeholder="Условия..."></textarea>
+                <label>Укажите причину блокировки (придет в сообщении):</label>
+                <textarea id="blockCarrierReason" placeholder="Причина внесения в ЧС..."></textarea>
             </div>
             <div class="buttons">
-                <button class="btn btn-primary" onclick="submitAdminEditDeal()">Сохранить изменения</button>
-                <button class="btn btn-secondary" onclick="closeModal('adminEditDealModal')">Отмена</button>
+                <button class="btn btn-danger" onclick="submitCarrierBlockWithReason()">Заблокировать</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminBlockReasonModal')">Отмена</button>
             </div>
         </div>
     </div>
 
-    <!-- Модальное окно редактирования заказа администратором -->
-    <div class="modal-overlay" id="adminEditDealModal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <div class="modal-title">Редактирование заказа</div>
-                <div class="modal-close" onclick="closeModal('adminEditDealModal')">
-                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </div>
-            </div>
-            <input type="hidden" id="editDealId" />
-            <div class="form-group">
-                <label>Маршрут</label>
-                <input type="text" id="editDealRoute" placeholder="Минск → Москва" />
-            </div>
-            <div class="form-group">
-                <label>Дата погрузки</label>
-                <input type="text" id="editDealDate" placeholder="15.05" />
-            </div>
-            <div class="form-group">
-                <label>Ставка</label>
-                <input type="text" id="editDealPrice" placeholder="2500 USD" />
-            </div>
-            <div class="form-group">
-                <label>Количество авто</label>
-                <input type="number" id="editDealCars" value="1" min="1" />
-            </div>
-            <div class="buttons">
-                <button class="btn btn-primary" onclick="submitAdminEditDeal()">Сохранить изменения</button>
-                <button class="btn btn-secondary" onclick="closeModal('adminEditDealModal')">Отмена</button>
-            </div>
-        </div>
-    </div>
-
+    
     <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -2004,15 +1957,19 @@
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
 
-            // Исключаем закрытые грузы и грузы, у которых разобрали все авто (cars <= 0)
             let list = allAdminLoadsArray.filter(l => l.status === 'ACTIVE' && parseInt(l.cars) > 0);
 
             if (selectedDirection !== 'ALL') {
-                list = list.filter(l => (l.route || '').toLowerCase().includes(selectedDirection.toLowerCase()));
+                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
+                list = list.filter(l => {
+                    let countryStr = (l.destination_country || '').toLowerCase();
+                    let routeStr = (l.route || '').toLowerCase();
+                    return countryStr.includes(cleanDir) || routeStr.includes(cleanDir);
+                });
             }
 
             if (searchQuery) {
-                list = list.filter(l => `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment}`.toLowerCase().includes(searchQuery));
+                list = list.filter(l => `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment} ${l.destination_country}`.toLowerCase().includes(searchQuery));
             }
 
             if (list.length === 0) {
@@ -2036,8 +1993,8 @@
                                 <div class="marquee-box"><span class="marquee-text">${l.route}</span></div>
                             </div>
                             <div class="col-truck">
-                                <span class="badge badge-today" style="font-size:9px;">
-                                    ${l.cars} авто
+                                <span style="font-weight:700; color:var(--text); font-size:12px;">
+                                    ${l.cars}
                                 </span>
                             </div>
                             ${formatPriceHTML(l.price)}
@@ -2088,7 +2045,12 @@
             }
 
             if (selectedDirection !== 'ALL') {
-                filtered = filtered.filter(d => (d.route || '').toLowerCase().includes(selectedDirection.toLowerCase()));
+                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
+                filtered = filtered.filter(d => {
+                    let countryStr = (d.destination_country || '').toLowerCase();
+                    let routeStr = (d.route || '').toLowerCase();
+                    return countryStr.includes(cleanDir) || routeStr.includes(cleanDir);
+                });
             }
 
             if (searchQuery) {
@@ -2162,7 +2124,8 @@
             let list = [...allAdminCarriersArray];
 
             if (selectedDirection !== 'ALL') {
-                list = list.filter(c => (c.subscriptions || '').toLowerCase().includes(selectedDirection.toLowerCase()));
+                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
+                list = list.filter(c => (c.subscriptions || '').toLowerCase().includes(cleanDir));
             }
 
             if (searchQuery) {
@@ -2176,7 +2139,7 @@
 
             body.innerHTML = `
                 <div class="table-container">
-                    <div class="t-head" style="grid-template-columns: 60px 1fr 75px 95px;">
+                    <div class="t-head" style="grid-template-columns: 80px 1fr 70px 95px;">
                         <div>ID</div>
                         <div>Компания / Имя</div>
                         <div style="text-align: center;">Статус</div>
@@ -2185,7 +2148,7 @@
                     ${list.map(c => {
                         let isBlocked = (c.status === 'BLOCKED');
                         return `
-                        <div class="t-row" id="row-carrier-${c.user_id}" style="grid-template-columns: 60px 1fr 75px 95px;" onclick="toggleRow('carrier-${c.user_id}')">
+                        <div class="t-row" id="row-carrier-${c.user_id}" style="grid-template-columns: 80px 1fr 70px 95px;" onclick="toggleRow('carrier-${c.user_id}')">
                             <div class="col-date" style="font-size:10px; color:var(--text-muted); font-weight:700;">
                                 #${c.user_id}
                             </div>
@@ -2222,30 +2185,37 @@
             updateMarquees();
         }
 
-        /* Мгновенная блокировка / разблокировка перевозчика */
+        /* Внесение перевозчика в ЧС с причиной / Разблокировка */
         async function toggleCarrierStatus(uId) {
+            let carrier = allAdminCarriersArray.find(c => String(c.user_id) === String(uId));
+            if (carrier && carrier.status === 'ACTIVE') {
+                // Открываем диалог ввода причины блокировки
+                document.getElementById('blockCarrierUserId').value = uId;
+                document.getElementById('blockCarrierReason').value = '';
+                document.getElementById('adminBlockReasonModal').classList.add('active');
+            } else {
+                // Разблокировка без диалога
+                await executeCarrierStatusChange(uId, '');
+            }
+        }
+
+        async function submitCarrierBlockWithReason() {
+            let uId = document.getElementById('blockCarrierUserId').value;
+            let reason = document.getElementById('blockCarrierReason').value.trim();
+            closeModal('adminBlockReasonModal');
+            await executeCarrierStatusChange(uId, reason);
+        }
+
+        async function executeCarrierStatusChange(uId, reason) {
             try {
                 let res = await fetch('/api/admin/carrier_status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({user_id: uId})
+                    body: JSON.stringify({user_id: uId, reason: reason})
                 });
-                let data = await res.json();
                 if (res.ok) {
                     showToast('Статус перевозчика изменён', 'success');
-
-                    // Мгновенное обновление локальных данных в памяти
-                    let newStatus = data.new_status || 'ACTIVE';
-                    
-                    let carrier = allAdminCarriersArray.find(c => String(c.user_id) === String(uId));
-                    if (carrier) carrier.status = newStatus;
-
-                    allAdminDeals.forEach(d => {
-                        if (String(d.user_id) === String(uId)) d.carrier_status = newStatus;
-                    });
-
-                    // Мгновенная переотрисовка без полной перезагрузки
-                    applyAdminFilters();
+                    loadAdminData();
                 } else {
                     showToast('Ошибка смены статуса', 'error');
                 }
