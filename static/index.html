@@ -1475,32 +1475,32 @@
     </div>
 
     <div class="modal-overlay" id="adminPanelModal">
-        <div class="modal-card" style="max-width: 550px;">
+        <div class="modal-card" style="max-width: 650px;">
             <div class="modal-header">
-                <div class="modal-title">Панель Управления</div>
+                <div class="modal-title">Панель администратора</div>
                 <div class="modal-close" onclick="closeModal('adminPanelModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
             </div>
 
+            <!-- Главная навигация админки -->
             <div class="sub-nav" style="margin-bottom: 12px;">
-                <div class="sub-nav-btn active" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">Перевозчики</div>
-                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">Заявки</div>
-                <div class="sub-nav-btn" id="admTabConfirmed" onclick="switchAdminSubTab('confirmed')">Сделки</div>
+                <div class="sub-nav-btn active" id="admTabDeals" onclick="switchAdminSubTab('deals')">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> Все заказы
+                </div>
+                <div class="sub-nav-btn" id="admTabExchange" onclick="switchAdminSubTab('exchange')">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg> Биржа
+                </div>
+                <div class="sub-nav-btn" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg> Перевозчики (ЧС)
+                </div>
             </div>
 
-            <div class="sort-search-bar" id="admin-sort-search-container" style="margin-bottom: 10px;">
-                <div class="sort-container">
-                    <button class="sort-dir-btn" id="adminSortDirBtn" onclick="toggleAdminSortDirection()" title="Направление сортировки">
-                        <svg class="icon pyramid-icon" viewBox="0 0 24 24" id="adminPyramidIcon">
-                            <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                            <line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                            <line x1="10" y1="18" x2="14" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-                        </svg>
-                    </button>
-                    <select id="adminSortSelect" onchange="applyAdminFilters()">
-                        <option value="name">По алфавиту (А-Я)</option>
-                        <option value="status">Сначала активные</option>
+            <!-- Фильтр по перевозчикам и Поиск -->
+            <div class="sort-search-bar" id="admin-sort-search-container" style="margin-bottom: 10px; gap: 6px;">
+                <div class="sort-container" style="flex: 1.2;">
+                    <select id="adminCarrierFilter" onchange="applyAdminFilters()">
+                        <option value="ALL">Все перевозчики</option>
                     </select>
                 </div>
 
@@ -1508,11 +1508,44 @@
                     <button class="search-toggle-btn" onclick="toggleAdminSearchInput()" title="Поиск">
                         <svg class="icon" viewBox="0 0 24 24" id="adminSearchBtnIcon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </button>
-                    <input type="text" id="adminSearchInput" placeholder="Поиск компаний, рейсов..." oninput="applyAdminFilters()" />
+                    <input type="text" id="adminSearchInput" placeholder="Поиск маршрута, компании..." oninput="applyAdminFilters()" />
                 </div>
             </div>
 
             <div id="adminContentBody"><div class="loader"><div class="spinner"></div>Загрузка...</div></div>
+        </div>
+    </div>
+
+    <!-- Модальное окно редактирования заказа администратором -->
+    <div class="modal-overlay" id="adminEditDealModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Редактирование заказа</div>
+                <div class="modal-close" onclick="closeModal('adminEditDealModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="editDealId" />
+            <div class="form-group">
+                <label>Маршрут</label>
+                <input type="text" id="editDealRoute" placeholder="Минск → Москва" />
+            </div>
+            <div class="form-group">
+                <label>Дата погрузки</label>
+                <input type="text" id="editDealDate" placeholder="15.05" />
+            </div>
+            <div class="form-group">
+                <label>Ставка</label>
+                <input type="text" id="editDealPrice" placeholder="2500 USD" />
+            </div>
+            <div class="form-group">
+                <label>Количество авто</label>
+                <input type="number" id="editDealCars" value="1" min="1" />
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitAdminEditDeal()">Сохранить изменения</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminEditDealModal')">Отмена</button>
+            </div>
         </div>
     </div>
 
@@ -1765,57 +1798,183 @@
 
         function openAdminPanel() {
             document.getElementById('adminPanelModal').classList.add('active');
-            switchAdminSubTab(adminSubTab);
+            loadAdminData();
+        }
+
+        async function loadAdminData() {
+            // Загружаем данные перевозчиков и заказов параллельно
+            try {
+                let [cRes, dRes] = await Promise.all([
+                    fetch('/api/admin/carriers?t=' + Date.now()),
+                    fetch('/api/admin/confirmed_deals?t=' + Date.now())
+                ]);
+                let cData = await cRes.json();
+                let dData = await dRes.json();
+                
+                allAdminCarriersArray = cData.carriers || [];
+                allAdminDeals = dData.deals || [];
+
+                populateAdminCarrierFilter();
+                switchAdminSubTab(adminSubTab);
+            } catch(e) {
+                showToast('Ошибка загрузки админ-данных', 'error');
+            }
+        }
+
+        function populateAdminCarrierFilter() {
+            let select = document.getElementById('adminCarrierFilter');
+            if (!select) return;
+            let currentVal = select.value;
+            select.innerHTML = '<option value="ALL">Все перевозчики</option>';
+            allAdminCarriersArray.forEach(c => {
+                let opt = document.createElement('option');
+                opt.value = String(c.user_id);
+                opt.textContent = `${c.company} (${c.name})`;
+                select.appendChild(opt);
+            });
+            if (currentVal) select.value = currentVal;
         }
 
         function switchAdminSubTab(tab) {
             adminSubTab = tab;
-            document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
+            document.getElementById('admTabDeals').classList.toggle('active', tab === 'deals');
             document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
-            document.getElementById('admTabConfirmed').classList.toggle('active', tab === 'confirmed');
-            document.getElementById('admin-sort-search-container').style.display = 'flex';
-            if (tab === 'carriers') loadAdminCarriers();
+            document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
+
+            document.getElementById('adminCarrierFilter').style.display = (tab === 'deals') ? 'block' : 'none';
+
+            if (tab === 'deals') renderAdminConfirmedDeals();
             else if (tab === 'exchange') loadAdminLoads();
-            else if (tab === 'confirmed') loadAdminConfirmedDeals();
+            else if (tab === 'carriers') renderAdminCarriers();
         }
 
         function applyAdminFilters() {
-            if (adminSubTab === 'carriers') renderAdminCarriers();
+            if (adminSubTab === 'deals') renderAdminConfirmedDeals();
             else if (adminSubTab === 'exchange') renderAdminLoads();
-            else if (adminSubTab === 'confirmed') renderAdminConfirmedDeals();
+            else if (adminSubTab === 'carriers') renderAdminCarriers();
         }
 
-        async function loadAdminCarriers() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
-            try {
-                let res = await fetch('/api/admin/carriers?t=' + Date.now());
-                let data = await res.json();
-                allAdminCarriersArray = data.carriers || [];
-                renderAdminCarriers();
-            } catch(e) { body.innerHTML = 'Ошибка загрузки'; }
-        }
-
-        function renderAdminCarriers() {
+        function renderAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-            let list = [...allAdminCarriersArray];
-            if (searchQuery) {
-                list = list.filter(c => `${c.company} ${c.name} ${c.phone} ${c.user_id}`.toLowerCase().includes(searchQuery));
+            let selectedCarrier = document.getElementById('adminCarrierFilter')?.value || 'ALL';
+
+            let filtered = [...allAdminDeals];
+
+            // Фильтр по выбранному перевозчику
+            if (selectedCarrier !== 'ALL') {
+                filtered = filtered.filter(d => String(d.user_id) === String(selectedCarrier));
             }
-            if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Перевозчики не найдены</div>';
+
+            // Фильтр по поисковой строке
+            if (searchQuery) {
+                filtered = filtered.filter(d => `${d.deal_id} ${d.route} ${d.date} ${d.price} ${d.company} ${d.name} ${d.phone}`.toLowerCase().includes(searchQuery));
+            }
+
+            if (filtered.length === 0) {
+                body.innerHTML = emptyStateHTML;
                 return;
             }
-            body.innerHTML = list.map(c => `
-                <div class="notif-item">
-                    <div class="notif-title">${c.company} | ${c.name}</div>
-                    <div class="notif-text">Тел: ${c.phone} | ID: ${c.user_id}</div>
-                    <button class="btn ${c.status === 'ACTIVE' ? 'btn-danger' : 'btn-success'}" style="margin-top:8px; padding:5px 10px;" onclick="toggleCarrierStatus(${c.user_id})">
-                        ${c.status === 'ACTIVE' ? 'Заблокировать' : 'Разблокировать'}
-                    </button>
+
+            body.innerHTML = `
+                <div class="table-container">
+                    <div class="t-head">
+                        <div>Дата</div>
+                        <div>Маршрут</div>
+                        <div style="text-align: center;">Перевозчик</div>
+                        <div style="text-align: right;">Ставка</div>
+                        <div></div>
+                    </div>
+                    ${filtered.map(d => {
+                        let isBlocked = (d.carrier_status === 'BLOCKED');
+                        return `
+                        <div class="t-row" id="adm-row-${d.deal_id}" onclick="toggleRow('adm-${d.deal_id}')">
+                            <div class="col-date"><div>${d.date}</div></div>
+                            <div class="col-route">
+                                <div class="marquee-box"><span class="marquee-text">${d.route}</span></div>
+                            </div>
+                            <div class="col-truck">
+                                <span style="font-weight:700; color:var(--text);">${d.company}</span>
+                                <span style="font-size:9px; color:var(--text-muted);">${d.name}</span>
+                            </div>
+                            ${formatPriceHTML(d.price)}
+                            <div class="col-arrow">
+                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                            </div>
+                        </div>
+                        <div class="t-details" id="details-adm-${d.deal_id}">
+                            <div class="info-grid">
+                                <div class="info-item"><span>Заказ ID</span><b>#${d.deal_id}</b></div>
+                                <div class="info-item"><span>Перевозчик</span><b>${d.company} (${d.name})</b></div>
+                                <div class="info-item"><span>Телефон</span><b>${d.phone}</b></div>
+                                <div class="info-item"><span>Количество авто</span><b>${d.cars} авто</b></div>
+                            </div>
+
+                            <div class="buttons" style="margin-top:10px;">
+                                <button class="btn btn-primary" style="padding:6px 10px;" onclick="openAdminEditDealModal(${d.deal_id})">
+                                    ✏️ Редактировать
+                                </button>
+                                <button class="btn btn-danger" style="padding:6px 10px;" onclick="cancelAdminDeal(${d.deal_id})">
+                                    ❌ Удалить заказ
+                                </button>
+                                <button class="btn ${isBlocked ? 'btn-success' : 'btn-warning'}" style="padding:6px 10px;" onclick="toggleCarrierStatus(${d.user_id})">
+                                    ${isBlocked ? 'Разблокировать' : '🚫 В ЧС'}
+                                </button>
+                            </div>
+                        </div>
+                    `}).join('')}
                 </div>
-            `).join('');
+            `;
+            updateMarquees();
+        }
+
+        function openAdminEditDealModal(dealId) {
+            let deal = allAdminDeals.find(d => String(d.deal_id) === String(dealId));
+            if (!deal) return;
+
+            document.getElementById('editDealId').value = deal.deal_id;
+            document.getElementById('editDealRoute').value = deal.route || '';
+            document.getElementById('editDealDate').value = deal.date || '';
+            document.getElementById('editDealPrice').value = deal.price || '';
+            document.getElementById('editDealCars').value = deal.cars || 1;
+
+            document.getElementById('adminEditDealModal').classList.add('active');
+        }
+
+        async function submitAdminEditDeal() {
+            let dealId = document.getElementById('editDealId').value;
+            let route = document.getElementById('editDealRoute').value.trim();
+            let date = document.getElementById('editDealDate').value.trim();
+            let price = document.getElementById('editDealPrice').value.trim();
+            let cars = document.getElementById('editDealCars').value;
+
+            if (!route || !date || !price) {
+                return showToast('Заполните Маршрут, Дату и Ставку', 'error');
+            }
+
+            try {
+                let res = await fetch('/api/admin/edit_deal', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        deal_id: dealId,
+                        route: route,
+                        date: date,
+                        price: price,
+                        cars: cars
+                    })
+                });
+                if (res.ok) {
+                    showToast('Заказ успешно отредактирован', 'success');
+                    closeModal('adminEditDealModal');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast('Ошибка при сохранении', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
         }
 
         async function toggleCarrierStatus(uId) {
