@@ -311,9 +311,12 @@ def init_db():
 
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
     
+    # Восстанавливаем грузы, ошибочно списанные из-за распознавания веса "до 22т" как времени
+    cursor.execute("UPDATE loads SET status = 'ACTIVE' WHERE status = 'EXPIRED'")
+
     conn.commit()
     conn.close()
-
+    
 init_db()
 
 def add_notification(user_id: int, title: str, text: str):
@@ -571,26 +574,42 @@ def format_custom_rate(rate_text: str) -> str:
     return rate_text.strip()
 
 def extract_time_limit(text: str):
-    match = re.search(r'до\s*(\d{1,2}[\:\.]\d{2}|\d{1,2})\b', text, re.IGNORECASE)
-    if match:
-        raw_time = match.group(1).replace('.', ':')
-        try:
-            if ':' not in raw_time:
-                hours = int(raw_time)
+    if not text:
+        return None, None
+
+    # Исключаем ложные срабатывания на вес/объем (до 22т, до 15т, до 33 паллет).
+    # Ищем строго временные конструкции: "до 15:00", "до 15 МСК", "торги до 17:00"
+    
+    match_time = re.search(r'\b(?:до|торги\s+до|ставка\s+до)\s*(\d{1,2})[\:\.](\d{2})\b', text, re.IGNORECASE)
+    hours = None
+    minutes = 0
+
+    if match_time:
+        hours = int(match_time.group(1))
+        minutes = int(match_time.group(2))
+    else:
+        match_hour = re.search(r'\b(?:торги\s+до|ставка\s+до|до)\s*(\d{1,2})\s*(?:ч|часов|мск|по\s+мск)\b', text, re.IGNORECASE)
+        if match_hour:
+            hours = int(match_hour.group(1))
+            minutes = 0
+        else:
+            match_bid = re.search(r'\b(?:торги\s+до|ставки\s+до)\s*(\d{1,2})\b', text, re.IGNORECASE)
+            if match_bid:
+                hours = int(match_bid.group(1))
                 minutes = 0
-            else:
-                parts = raw_time.split(':')
-                hours, minutes = int(parts[0]), int(parts[1])
-                
-            if 0 <= hours <= 23 and 0 <= minutes <= 59:
-                time_formatted = f"{hours:02d}:{minutes:02d}"
-                msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
-                expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
-                expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
-                return time_formatted, expire_str
-        except (ValueError, TypeError):
-            pass
+
+    if hours is not None and 0 <= hours <= 23 and 0 <= minutes <= 59:
+        time_formatted = f"{hours:02d}:{minutes:02d}"
+        msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+        expire_dt = msk_now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
         
+        # Если указанный час сегодня уже прошёл, ставим лимит на ближайшие торги завтра
+        if expire_dt <= msk_now:
+            expire_dt += timedelta(days=1)
+            
+        expire_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+        return time_formatted, expire_str
+
     return None, None
 
 def parse_cargo_date(date_str: str) -> date | None:
