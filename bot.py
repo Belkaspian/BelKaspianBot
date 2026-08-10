@@ -4133,9 +4133,14 @@ async def get_loads_api(request):
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
-    cursor.execute("SELECT subscriptions, COALESCE(verification_status, 'UNVERIFIED') FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT subscriptions, COALESCE(verification_status, 'UNVERIFIED'), status FROM users WHERE user_id = ?", (user_id,))
     u_row = cursor.fetchone()
     
+    # Если перевозчик заблокирован — возвращаем пустой список и статус блокировки
+    if u_row and u_row[2] == 'BLOCKED':
+        conn.close()
+        return web.json_response({"loads": [], "is_verified": False, "is_blocked": True})
+
     user_subs = []
     is_verified = False
     if u_row:
@@ -4145,7 +4150,7 @@ async def get_loads_api(request):
 
     if user_id and not user_subs and not (country and country != 'ALL'):
         conn.close()
-        return web.json_response({"loads": [], "is_verified": is_verified})
+        return web.json_response({"loads": [], "is_verified": is_verified, "is_blocked": False})
 
     query = """
         SELECT load_id, route, date, cars_count, price, text, 
@@ -4210,6 +4215,13 @@ async def my_loads_api(request):
         
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    
+    # Проверка блокировки
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (user_id,))
+    u_row = cursor.fetchone()
+    if u_row and u_row[0] == 'BLOCKED':
+        conn.close()
+        return web.json_response({"deals": [], "is_blocked": True})
     
     try:
         cursor.execute("""
