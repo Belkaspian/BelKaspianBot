@@ -1916,6 +1916,16 @@
                 const params = new URLSearchParams(window.location.search);
                 uid = params.get('user_id');
             }
+            if (!uid && window.Telegram?.WebApp?.initData) {
+                try {
+                    const searchParams = new URLSearchParams(tg.initData);
+                    const userStr = searchParams.get('user');
+                    if (userStr) {
+                        const userObj = JSON.parse(userStr);
+                        if (userObj && userObj.id) uid = userObj.id;
+                    }
+                } catch(e) {}
+            }
             if (!uid && window.localStorage) uid = localStorage.getItem('tg_user_id');
             else if (uid && window.localStorage) localStorage.setItem('tg_user_id', uid);
             return uid ? parseInt(uid) : 0;
