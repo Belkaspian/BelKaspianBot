@@ -1161,7 +1161,16 @@
         }
 
         @media (min-width: 640px) {
-            body { max-width: 600px; margin: 0 auto; }
+            body { 
+                max-width: 100%; 
+                padding: 16px 24px 100px 24px; 
+            }
+            .info-grid { 
+                grid-template-columns: repeat(4, 1fr); 
+            }
+            .subs-grid { 
+                grid-template-columns: repeat(3, 1fr); 
+            }
         }
     </style>
 </head>
@@ -1688,7 +1697,10 @@
             if (headerTimer) clearTimeout(headerTimer);
             if (headerClicks >= 5) {
                 headerClicks = 0;
-                if (sessionStorage.getItem('admin_authed') === 'true') {
+                let userId = getUserId();
+                let isAuthed = localStorage.getItem('admin_authed') === 'true' || 
+                               (userId && localStorage.getItem('admin_authed_' + userId) === 'true');
+                if (isAuthed) {
                     openAdminPanel();
                 } else {
                     document.getElementById('adminPassModal').classList.add('active');
@@ -1701,14 +1713,18 @@
         async function submitAdminPassword() {
             let pass = document.getElementById('adminPassInput').value.trim();
             if (!pass) return;
+            let userId = getUserId();
             try {
                 let res = await fetch('/api/admin/verify_pass', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({password: pass})
+                    body: JSON.stringify({password: pass, user_id: userId})
                 });
                 if (res.ok) {
-                    sessionStorage.setItem('admin_authed', 'true');
+                    localStorage.setItem('admin_authed', 'true');
+                    if (userId) {
+                        localStorage.setItem('admin_authed_' + userId, 'true');
+                    }
                     closeModal('adminPassModal');
                     openAdminPanel();
                     showToast('Вход в админ-панель выполнен', 'success');
@@ -1914,6 +1930,7 @@
 
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
             document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
+            document.getElementById('archive-sub-nav').style.display = (tab === 'my' && mySubTab === 'archive') ? 'flex' : 'none';
 
             const tableHeader = document.getElementById('tableHeader');
             if (tab === 'my') {
