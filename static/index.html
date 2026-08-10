@@ -1009,6 +1009,11 @@
             padding: 16px;
         }
 
+        /* Окна подтверждения и редактирования поверх панели админа */
+        #confirmModal, #bidModal, #directUploadModal, #adminEditLoadModal, #adminEditDealModal, #notifModal {
+            z-index: 2500 !important;
+        }
+
         .modal-overlay.active { display: flex; }
 
         .modal-card {
@@ -1993,13 +1998,14 @@
             else if (adminSubTab === 'carriers') renderAdminCarriers();
         }
 
-        /* 1. ОТРИСОВКА ВКТАДКИ "БИРЖА" */
+        /* 1. ОТРИСОВКА ВКЛАДКИ "БИРЖА" */
         function renderAdminLoads() {
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
 
-            let list = [...allAdminLoadsArray];
+            // Исключаем закрытые грузы и грузы, у которых разобрали все авто (cars <= 0)
+            let list = allAdminLoadsArray.filter(l => l.status === 'ACTIVE' && parseInt(l.cars) > 0);
 
             if (selectedDirection !== 'ALL') {
                 list = list.filter(l => (l.route || '').toLowerCase().includes(selectedDirection.toLowerCase()));
@@ -2010,7 +2016,7 @@
             }
 
             if (list.length === 0) {
-                body.innerHTML = emptyStateHTML;
+                body.innerHTML = '<div class="loader">Активных грузов на Бирже нет</div>';
                 return;
             }
 
@@ -2019,19 +2025,19 @@
                     <div class="t-head">
                         <div>Дата</div>
                         <div>Маршрут</div>
-                        <div style="text-align: center;">Статус</div>
+                        <div style="text-align: center;">Авто</div>
                         <div style="text-align: right;">Ставка</div>
                         <div></div>
                     </div>
                     ${list.map(l => `
-                        <div class="t-row" id="adm-load-row-${l.id}" onclick="toggleRow('adm-load-${l.id}')">
+                        <div class="t-row" id="row-adm-load-${l.id}" onclick="toggleRow('adm-load-${l.id}')">
                             <div class="col-date"><div>${l.date}</div></div>
                             <div class="col-route">
                                 <div class="marquee-box"><span class="marquee-text">${l.route}</span></div>
                             </div>
                             <div class="col-truck">
-                                <span class="badge" style="font-size:9px; ${l.status === 'ACTIVE' ? 'background:#dcfce7; color:#15803d;' : 'background:#fee2e2; color:#b91c1c;'}">
-                                    ${l.status === 'ACTIVE' ? 'Активен' : 'Закрыт'}
+                                <span class="badge badge-today" style="font-size:9px;">
+                                    ${l.cars} авто
                                 </span>
                             </div>
                             ${formatPriceHTML(l.price)}
@@ -2055,7 +2061,7 @@
                                     ✏️ Редактировать
                                 </button>
                                 <button class="btn btn-secondary" style="padding:6px 10px;" onclick="toggleAdminLoadStatus(${l.id})">
-                                    ${l.status === 'ACTIVE' ? '⏸ Выключить' : '▶️ Включить'}
+                                    ⏸ Выключить
                                 </button>
                                 <button class="btn btn-danger" style="padding:6px 10px;" onclick="hardDeleteAdminLoad(${l.id})">
                                     ❌ Удалить
@@ -2090,7 +2096,7 @@
             }
 
             if (filtered.length === 0) {
-                body.innerHTML = emptyStateHTML;
+                body.innerHTML = '<div class="loader">Заказы не найдены</div>';
                 return;
             }
 
@@ -2106,7 +2112,7 @@
                     ${filtered.map(d => {
                         let isBlocked = (d.carrier_status === 'BLOCKED');
                         return `
-                        <div class="t-row" id="adm-deal-row-${d.deal_id}" onclick="toggleRow('adm-deal-${d.deal_id}')">
+                        <div class="t-row" id="row-adm-deal-${d.deal_id}" onclick="toggleRow('adm-deal-${d.deal_id}')">
                             <div class="col-date"><div>${d.date}</div></div>
                             <div class="col-route">
                                 <div class="marquee-box"><span class="marquee-text">${d.route}</span></div>
@@ -2164,13 +2170,13 @@
             }
 
             if (list.length === 0) {
-                body.innerHTML = emptyStateHTML;
+                body.innerHTML = '<div class="loader">Перевозчики не найдены</div>';
                 return;
             }
 
             body.innerHTML = `
                 <div class="table-container">
-                    <div class="t-head" style="grid-template-columns: 55px 1fr 85px 100px;">
+                    <div class="t-head" style="grid-template-columns: 60px 1fr 75px 95px;">
                         <div>ID</div>
                         <div>Компания / Имя</div>
                         <div style="text-align: center;">Статус</div>
@@ -2179,16 +2185,16 @@
                     ${list.map(c => {
                         let isBlocked = (c.status === 'BLOCKED');
                         return `
-                        <div class="t-row" id="carrier-row-${c.user_id}" style="grid-template-columns: 55px 1fr 85px 100px;" onclick="toggleRow('carrier-${c.user_id}')">
-                            <div class="col-date" style="font-size:10px; color:var(--text-muted);">
+                        <div class="t-row" id="row-carrier-${c.user_id}" style="grid-template-columns: 60px 1fr 75px 95px;" onclick="toggleRow('carrier-${c.user_id}')">
+                            <div class="col-date" style="font-size:10px; color:var(--text-muted); font-weight:700;">
                                 #${c.user_id}
                             </div>
                             <div class="col-route">
-                                <span style="font-weight:700; color:var(--text);">${c.company}</span>
-                                <span style="font-size:9.5px; color:var(--text-muted);">${c.name} • ${c.phone}</span>
+                                <span style="font-weight:700; color:var(--text); text-overflow:ellipsis; overflow:hidden;">${c.company}</span>
+                                <span style="font-size:9.5px; color:var(--text-muted); text-overflow:ellipsis; overflow:hidden;">${c.name} • ${c.phone}</span>
                             </div>
                             <div class="col-truck">
-                                <span class="badge" style="font-size:8.5px; padding:2px 6px; ${isBlocked ? 'background:#fee2e2; color:#b91c1c;' : 'background:#dcfce7; color:#15803d;'}">
+                                <span class="badge" style="font-size:8.5px; padding:2px 5px; ${isBlocked ? 'background:#fee2e2; color:#b91c1c;' : 'background:#dcfce7; color:#15803d;'}">
                                     ${isBlocked ? 'В ЧС' : 'Активен'}
                                 </span>
                             </div>
@@ -2214,6 +2220,36 @@
                 </div>
             `;
             updateMarquees();
+        }
+
+        /* Мгновенная блокировка / разблокировка перевозчика */
+        async function toggleCarrierStatus(uId) {
+            try {
+                let res = await fetch('/api/admin/carrier_status', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: uId})
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Статус перевозчика изменён', 'success');
+
+                    // Мгновенное обновление локальных данных в памяти
+                    let newStatus = data.new_status || 'ACTIVE';
+                    
+                    let carrier = allAdminCarriersArray.find(c => String(c.user_id) === String(uId));
+                    if (carrier) carrier.status = newStatus;
+
+                    allAdminDeals.forEach(d => {
+                        if (String(d.user_id) === String(uId)) d.carrier_status = newStatus;
+                    });
+
+                    // Мгновенная переотрисовка без полной перезагрузки
+                    applyAdminFilters();
+                } else {
+                    showToast('Ошибка смены статуса', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
         /* 4. МОДАЛКИ РЕДАКТИРОВАНИЯ */
@@ -2299,15 +2335,6 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
-        async function toggleCarrierStatus(uId) {
-            await fetch('/api/admin/carrier_status', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: uId})
-            });
-            showToast('Статус перевозчика изменён', 'success');
-            loadAdminData();
-        }
 
         function openAdminEditDealModal(dealId) {
             let deal = allAdminDeals.find(d => String(d.deal_id) === String(dealId));
@@ -2358,16 +2385,6 @@
             }
         }
 
-        async function toggleCarrierStatus(uId) {
-            await fetch('/api/admin/carrier_status', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: uId})
-            });
-            showToast('Статус изменён', 'success');
-            loadAdminCarriers();
-        }
-
         async function loadAdminLoads() {
             let body = document.getElementById('adminContentBody');
             body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
@@ -2379,28 +2396,6 @@
             } catch(e) { body.innerHTML = 'Ошибка загрузки'; }
         }
 
-        function renderAdminLoads() {
-            let body = document.getElementById('adminContentBody');
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-            let list = [...allAdminLoadsArray];
-            if (searchQuery) {
-                list = list.filter(l => `${l.route} ${l.date} ${l.price}`.toLowerCase().includes(searchQuery));
-            }
-            if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Грузы не найдены</div>';
-                return;
-            }
-            body.innerHTML = list.map(l => `
-                <div class="notif-item">
-                    <div class="notif-title">${l.date} | ${l.route} (${l.price})</div>
-                    <div class="notif-text">Доступно авто: ${l.cars} | Статус: ${l.status}</div>
-                    <div class="buttons" style="margin-top:8px;">
-                        <button class="btn btn-secondary" style="padding:4px 8px;" onclick="toggleAdminLoadStatus(${l.id})">Статус</button>
-                        <button class="btn btn-danger" style="padding:4px 8px;" onclick="hardDeleteAdminLoad(${l.id})">Удалить</button>
-                    </div>
-                </div>
-            `).join('');
-        }
 
         async function toggleAdminLoadStatus(id) {
             await fetch('/api/admin/toggle_load_active', {
@@ -2439,28 +2434,7 @@
             } catch(e) { body.innerHTML = 'Ошибка загрузки сделок'; }
         }
 
-        function renderAdminConfirmedDeals() {
-            let body = document.getElementById('adminContentBody');
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-            let filtered = allAdminDeals;
-            if (searchQuery) {
-                filtered = filtered.filter(d => `${d.deal_id} ${d.route} ${d.company} ${d.name}`.toLowerCase().includes(searchQuery));
-            }
-            if (filtered.length === 0) {
-                body.innerHTML = '<div class="loader">Сделок не найдено</div>';
-                return;
-            }
-            body.innerHTML = filtered.map(d => `
-                <div class="notif-item">
-                    <div class="notif-title">Сделка #${d.deal_id} | ${d.route}</div>
-                    <div class="notif-text">Дата: ${d.date} | Ставка: ${d.price}</div>
-                    <div class="notif-text" style="color:var(--primary);">Компания: ${d.company} (${d.name})</div>
-                    <div class="buttons" style="margin-top:8px;">
-                        <button class="btn btn-danger" style="padding:4px 8px;" onclick="cancelAdminDeal(${d.deal_id})">Отменить сделку</button>
-                    </div>
-                </div>
-            `).join('');
-        }
+        
 
         async function cancelAdminDeal(dealId) {
             askConfirm('Отменить подтвержденную сделку?', async (confirmed) => {
