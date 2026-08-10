@@ -311,9 +311,6 @@ def init_db():
 
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
     
-    # Восстанавливаем грузы, ошибочно списанные из-за распознавания веса "до 22т" как времени
-    cursor.execute("UPDATE loads SET status = 'ACTIVE' WHERE status = 'EXPIRED'")
-
     conn.commit()
     conn.close()
     
@@ -4521,7 +4518,7 @@ async def direct_upload_docs_api(request):
             pdf_filename = f"{clean_name} - {plates_str}.pdf"
             file_caption = f"{date_str} {route_str}"
 
-            pdf_bytes = await asyncio.to_thread(generate_single_pdf_bytes, raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json)
+            pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json)
             if pdf_bytes:
                 pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
                 await bot.send_document(chat_id=DOCS_CHANNEL_ID, document=pdf_file, caption=file_caption)
