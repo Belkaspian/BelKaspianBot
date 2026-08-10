@@ -1026,7 +1026,7 @@
             max-height: 85vh;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            overflow-y: auto;
             border: 1px solid var(--border);
         }
 
@@ -1329,15 +1329,15 @@
             </div>
             <div class="form-group">
                 <label>Название компании</label>
-                <input type="text" id="profCompany" placeholder="ООО / ЧТУП / ИП..." oninput="autoSaveProfile()" />
+                <input type="text" id="profCompany" placeholder="ООО / ЧТУП / ИП..." oninput="onProfileInput(); autoSaveProfile();" />
             </div>
             <div class="form-group">
                 <label>ФИО Контактного лица</label>
-                <input type="text" id="profName" placeholder="Имя Фамилия" oninput="autoSaveProfile()" />
+                <input type="text" id="profName" placeholder="Имя Фамилия" oninput="onProfileInput(); autoSaveProfile();" />
             </div>
             <div class="form-group">
                 <label>Контактный телефон</label>
-                <input type="text" id="profPhone" placeholder="+375 / +7..." oninput="autoSaveProfile()" />
+                <input type="text" id="profPhone" placeholder="+375 / +7..." oninput="onProfileInput(); autoSaveProfile();" />
             </div>
 
             <!-- Динамический блок кнопок верификации -->
@@ -1582,7 +1582,45 @@
         </div>
     </div>
 
-   
+
+    <!-- Модальное окно редактирования ЗАКАЗА В АДМИНКЕ -->
+    <div class="modal-overlay" id="adminEditDealModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Редактирование заказа</div>
+                <div class="modal-close" onclick="closeModal('adminEditDealModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="editDealId" />
+            <div class="form-group">
+                <label>Маршрут</label>
+                <input type="text" id="editDealRoute" placeholder="Минск → Ташкент" />
+            </div>
+            <div class="form-group">
+                <label>Дата погрузки</label>
+                <input type="text" id="editDealDate" placeholder="15.05" />
+            </div>
+            <div class="form-group">
+                <label>Ставка</label>
+                <input type="text" id="editDealPrice" placeholder="2500 USD" />
+            </div>
+            <div class="form-group">
+                <label>Количество авто</label>
+                <input type="number" id="editDealCars" value="1" min="1" />
+            </div>
+            <div class="form-group">
+                <label>Детали заказа</label>
+                <textarea id="editDealDetails" placeholder="Дополнительные условия..."></textarea>
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitAdminEditDeal()">Сохранить изменения</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminEditDealModal')">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    
     <!-- Модальное окно причин блокировки перевозчика -->
     <div class="modal-overlay" id="adminBlockReasonModal" style="z-index: 3000 !important;">
         <div class="modal-card">
@@ -2393,6 +2431,7 @@
             if (tab === 'profile') {
                 tableEl.style.display = 'none';
                 profileEl.style.display = 'block';
+                isProfileInputDirty = false;
                 loadProfile();
             } else {
                 profileEl.style.display = 'none';
@@ -3101,8 +3140,17 @@
                 if (currentTab === 'catalog') {
                     let res = await fetch(`/api/loads?user_id=${userId}&t=` + Date.now());
                     let data = await res.json();
+                    
+                    if (data.is_blocked) {
+                        tbody.innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-title" style="color: var(--error);">Аккаунт заблокирован</div>
+                                <div class="empty-desc">Ваш профиль заблокирован администратором. Доступ к бирже ограничен.</div>
+                            </div>`;
+                        return;
+                    }
+
                     let rawLoads = data.loads || [];
-                    allAdminLoadsArray = rawLoads;
 
                     if (data.is_verified !== undefined) {
                         userVerificationStatus = data.is_verified ? 'VERIFIED' : userVerificationStatus;
@@ -3297,6 +3345,12 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
+        let isProfileInputDirty = false;
+
+        function onProfileInput() {
+            isProfileInputDirty = true;
+        }
+
         async function loadProfile() {
             let userId = getUserId();
             if (!userId) return;
@@ -3311,9 +3365,12 @@
                     const nameEl = document.getElementById('profName');
                     const phoneEl = document.getElementById('profPhone');
 
-                    if (document.activeElement !== compEl) compEl.value = data.profile.company || '';
-                    if (document.activeElement !== nameEl) nameEl.value = data.profile.name || '';
-                    if (document.activeElement !== phoneEl) phoneEl.value = data.profile.phone || '';
+                    // Если пользователь редактирует поля, не перезаписываем их данными с сервера
+                    if (!isProfileInputDirty) {
+                        if (compEl) compEl.value = data.profile.company || '';
+                        if (nameEl) nameEl.value = data.profile.name || '';
+                        if (phoneEl) phoneEl.value = data.profile.phone || '';
+                    }
                     
                     renderVerificationControls(data.profile);
 
@@ -3410,6 +3467,7 @@
                 });
                 if (res.ok) {
                     showToast('Заявка на верификацию отправлена', 'success');
+                    isProfileInputDirty = false;
                     loadProfile();
                 } else {
                     let d = await res.json();
@@ -3441,6 +3499,7 @@
                 let data = await res.json();
                 if (res.ok) {
                     showToast('Изменения отправлены на рассмотрение', 'success');
+                    isProfileInputDirty = false;
                     loadProfile();
                 } else {
                     showToast(data.error || 'Ошибка отправки', 'error');
