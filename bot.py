@@ -5211,9 +5211,9 @@ async def admin_edit_deal_api(request):
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE confirmed_deals 
-            SET route = ?, date = ?, price = ?, cars = ?
+            SET route = ?, date = ?, price = ?, cars = ?, details = ?
             WHERE id = ?
-        """, (data.get('route'), data.get('date'), format_custom_rate(data.get('price')), int(data.get('cars', 1)), deal_id))
+        """, (data.get('route'), data.get('date'), format_custom_rate(data.get('price')), int(data.get('cars', 1)), data.get('details', ''), deal_id))
         conn.commit()
         conn.close()
         return web.json_response({"status": "success"})
