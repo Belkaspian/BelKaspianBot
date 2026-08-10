@@ -1858,45 +1858,6 @@
         }
 
         async function loadAdminData() {
-            // Загружаем данные перевозчиков и заказов параллельно
-            try {
-                let [cRes, dRes] = await Promise.all([
-                    fetch('/api/admin/carriers?t=' + Date.now()),
-                    fetch('/api/admin/confirmed_deals?t=' + Date.now())
-                ]);
-                let cData = await cRes.json();
-                let dData = await dRes.json();
-                
-                allAdminCarriersArray = cData.carriers || [];
-                allAdminDeals = dData.deals || [];
-
-                populateAdminCarrierFilter();
-                switchAdminSubTab(adminSubTab);
-            } catch(e) {
-                showToast('Ошибка загрузки админ-данных', 'error');
-            }
-        }
-
-        function populateAdminCarrierFilter() {
-            let select = document.getElementById('adminCarrierFilter');
-            if (!select) return;
-            let currentVal = select.value;
-            select.innerHTML = '<option value="ALL">Все перевозчики</option>';
-            allAdminCarriersArray.forEach(c => {
-                let opt = document.createElement('option');
-                opt.value = String(c.user_id);
-                opt.textContent = `${c.company} (${c.name})`;
-                select.appendChild(opt);
-            });
-            if (currentVal) select.value = currentVal;
-        }
-
-        function openAdminPanel() {
-            document.getElementById('adminPanelModal').classList.add('active');
-            loadAdminData();
-        }
-
-        async function loadAdminData() {
             try {
                 let [cRes, dRes, lRes] = await Promise.all([
                     fetch('/api/admin/carriers?t=' + Date.now()),
@@ -2283,48 +2244,11 @@
 
         async function submitAdminEditDeal() {
             let dealId = document.getElementById('editDealId').value;
-            try {
-                let res = await fetch('/api/admin/edit_deal', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        deal_id: dealId,
-                        route: document.getElementById('editDealRoute').value.trim(),
-                        date: document.getElementById('editDealDate').value.trim(),
-                        price: document.getElementById('editDealPrice').value.trim(),
-                        cars: document.getElementById('editDealCars').value,
-                        details: document.getElementById('editDealDetails').value.trim()
-                    })
-                });
-                if (res.ok) {
-                    showToast('Заказ обновлён', 'success');
-                    closeModal('adminEditDealModal');
-                    loadAdminData();
-                    loadData(false);
-                } else { showToast('Ошибка сохранения', 'error'); }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
-        }
-
-
-        function openAdminEditDealModal(dealId) {
-            let deal = allAdminDeals.find(d => String(d.deal_id) === String(dealId));
-            if (!deal) return;
-
-            document.getElementById('editDealId').value = deal.deal_id;
-            document.getElementById('editDealRoute').value = deal.route || '';
-            document.getElementById('editDealDate').value = deal.date || '';
-            document.getElementById('editDealPrice').value = deal.price || '';
-            document.getElementById('editDealCars').value = deal.cars || 1;
-
-            document.getElementById('adminEditDealModal').classList.add('active');
-        }
-
-        async function submitAdminEditDeal() {
-            let dealId = document.getElementById('editDealId').value;
             let route = document.getElementById('editDealRoute').value.trim();
             let date = document.getElementById('editDealDate').value.trim();
             let price = document.getElementById('editDealPrice').value.trim();
             let cars = document.getElementById('editDealCars').value;
+            let details = document.getElementById('editDealDetails') ? document.getElementById('editDealDetails').value.trim() : '';
 
             if (!route || !date || !price) {
                 return showToast('Заполните Маршрут, Дату и Ставку', 'error');
@@ -2339,7 +2263,8 @@
                         route: route,
                         date: date,
                         price: price,
-                        cars: cars
+                        cars: cars,
+                        details: details
                     })
                 });
                 if (res.ok) {
