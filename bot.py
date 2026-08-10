@@ -5050,13 +5050,14 @@ async def admin_verify_pass_api(request):
     try:
         data = await request.json()
         password = data.get('password', '')
+        user_id = data.get('user_id', 0)
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM settings WHERE key = 'admin_password'")
         row = cursor.fetchone()
         conn.close()
         db_pass = row[0] if row else '123456'
-        if password == db_pass:
+        if password == db_pass or (ADMIN_ID and str(user_id) == str(ADMIN_ID)):
             return web.json_response({"status": "success"})
         return web.json_response({"error": "Неверный пароль"}, status=403)
     except Exception as e:
