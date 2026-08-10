@@ -5188,14 +5188,19 @@ async def admin_get_confirmed_deals_api(request):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, cd.details, cd.user_id,
-               COALESCE(u.company, 'Не указана'), COALESCE(u.name, 'Пользователь'), COALESCE(u.phone, 'Не указан')
+               COALESCE(u.company, 'Не указана'), COALESCE(u.name, 'Пользователь'), COALESCE(u.phone, 'Не указан'),
+               COALESCE(u.status, 'ACTIVE')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
         ORDER BY cd.id DESC
     """)
     rows = cursor.fetchall()
     conn.close()
-    deals = [{"deal_id": r[0], "load_id": r[1], "date": r[2], "route": r[3], "cars": r[4], "price": r[5], "details": r[6], "user_id": r[7], "company": r[8], "name": r[9], "phone": r[10]} for r in rows]
+    deals = [{
+        "deal_id": r[0], "load_id": r[1], "date": r[2], "route": r[3], "cars": r[4], 
+        "price": r[5], "details": r[6], "user_id": r[7], "company": r[8], 
+        "name": r[9], "phone": r[10], "carrier_status": r[11]
+    } for r in rows]
     return web.json_response({"deals": deals})
 
 async def admin_edit_deal_api(request):
