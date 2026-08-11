@@ -2870,12 +2870,30 @@
             let s = dateStr.toLowerCase().trim();
             if (s.includes('сегодня') || s.includes('срочно')) return true;
 
+            let now = new Date();
+            let currentDay = now.getDate();
+            let currentMonth = now.getMonth() + 1;
+
+            // Проверка диапазонов (09.08-15.08 или 09-15.08)
+            let rangeMatch = s.match(/(\d{1,2})(?:[\./](\d{1,2}))?\s*[-—–]\s*(\d{1,2})[\./](\d{1,2})/);
+            if (rangeMatch) {
+                let d1 = parseInt(rangeMatch[1]);
+                let m1 = rangeMatch[2] ? parseInt(rangeMatch[2]) : parseInt(rangeMatch[4]);
+                let d2 = parseInt(rangeMatch[3]);
+                let m2 = parseInt(rangeMatch[4]);
+
+                let dtStart = new Date(now.getFullYear(), m1 - 1, d1);
+                let dtEnd = new Date(now.getFullYear(), m2 - 1, d2);
+                let dtNow = new Date(now.getFullYear(), currentMonth - 1, currentDay);
+
+                return dtNow >= dtStart && dtNow <= dtEnd;
+            }
+
             let m = s.match(/(\d{1,2})[\./](\d{1,2})/);
             if (m) {
                 let day = parseInt(m[1]);
                 let month = parseInt(m[2]);
-                let now = new Date();
-                if (now.getDate() === day && (now.getMonth() + 1) === month) {
+                if (currentDay === day && currentMonth === month) {
                     return true;
                 }
             }
