@@ -456,6 +456,7 @@ def translate_country(country_str: str) -> str:
     mapping = {
         'uzbekistan': 'Узбекистан', 'uzb': 'Узбекистан', 'узбекистан': 'Узбекистан',
         'kazakhstan': 'Казахстан', 'kzt': 'Казахстан', 'казахстан': 'Казахстан',
+        'tajikistan': 'Таджикистан', 'tjk': 'Таджикистан', 'tj': 'Таджикистан', 'таджикистан': 'Таджикистан',
         'russia': 'Россия', 'russian federation': 'Россия', 'россия': 'Россия',
         'belarus': 'Беларусь', 'by': 'Беларусь', 'беларусь': 'Беларусь',
         'kyrgyzstan': 'Кыргызстан', 'kgz': 'Кыргызстан', 'кыргызстан': 'Кыргызстан',
@@ -645,7 +646,8 @@ def parse_cargo_raw(raw_text: str):
     if time_limit and "по МСК" not in price_str:
         price_str = f"{price_str} (до {time_limit} по МСК)"
 
-    date_pattern = re.compile(r'(\d{1,2}[\./]\d{1,2})')
+    # Регулярное выражение с поддержкой диапазонов (09.08-15.08, 09-15.08, 09.08 - 15.08)
+    date_pattern = re.compile(r'(\d{1,2}(?:[\./]\d{1,2})?(?:[\./]\d{2,4})?\s*[-—–]\s*\d{1,2}[\./]\d{1,2}(?:[\./]\d{2,4})?|\d{1,2}[\./]\d{1,2}(?:[\./]\d{2,4})?)')
     cars_pattern = re.compile(r'(\d+)\s*(?:авт[оа]|машин[аы]?[е]?[е]?)', re.IGNORECASE)
     
     for line in clean_lines:
@@ -763,6 +765,39 @@ def parse_cargo_raw(raw_text: str):
     details_text = ", ".join(details_list)
 
     return date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at
+
+
+
+def parse_cargo_date_range(date_str: str) -> tuple[date | None, date | None]:
+    """
+    Парсит диапазон дат (например, '09.08-15.08', '09-15.08') или одиночную дату ('09.08').
+    Возвращает (start_date, end_date).
+    """
+    if not date_str:
+        return None, None
+    s = str(date_str).strip()
+
+    # 1. Полный диапазон: 09.08-15.08 или 09.08.2026-15.08.2026
+    match_full = re.search(r'(\d{1,2})[\./](\d{1,2})(?:[\./](\d{2,4}))?\s*[-—–]\s*(\d{1,2})[\./](\d{1,2})(?:[\./](\d{2,4}))?', s)
+    if match_full:
+        d1, m1, y1 = match_full.group(1), match_full.group(2), match_full.group(3)
+        d2, m2, y2 = match_full.group(4), match_full.group(5), match_full.group(6)
+        dt1 = parse_cargo_date(f"{d1}.{m1}" + (f".{y1}" if y1 else ""))
+        dt2 = parse_cargo_date(f"{d2}.{m2}" + (f".{y2}" if y2 else ""))
+        return dt1, dt2
+
+    # 2. Сокращённый диапазон: 09-15.08
+    match_short = re.search(r'(\d{1,2})\s*[-—–]\s*(\d{1,2})[\./](\d{1,2})(?:[\./](\d{2,4}))?', s)
+    if match_short:
+        d1, d2, m2, y2 = match_short.group(1), match_short.group(2), match_short.group(3), match_short.group(4)
+        dt1 = parse_cargo_date(f"{d1}.{m2}" + (f".{y2}" if y2 else ""))
+        dt2 = parse_cargo_date(f"{d2}.{m2}" + (f".{y2}" if y2 else ""))
+        return dt1, dt2
+
+    # 3. Одиночная дата
+    dt = parse_cargo_date(s)
+    return dt, dt
+
 
 def parse_multiple_cargos(raw_text: str):
     lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
@@ -1605,21 +1640,16 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
 ПРАВИЛА ПОЛЕЙ (ЯСНО И ОДНОЗНАЧНО)
 ==================================================
 driver.full_name
-- Источник: только страница ПАСПОРТА с личными данными (Surname / Given names / Patronymic).
-- ВЗЯТЬ ФИО С ВОДИТЕЛЬСКОГО НЕЛЬЗЯ — только паспорт.
-- MRZ (строка с '<') категорически запрещено использовать даже при частичной нечитаемости основного текста; в таком случае full_name = null.
-- Сохранять регистр символов как на документе (не менять ALL CAPS).
-- Если паспорт отсутствует или ФИО нечитаемо — full_name = null.
-
-passport.series_number / license.number
-- Считывать серию и номер по визуальному слою, удаляя пробелы и знак "№".
-- Если документ данного типа отсутствует или номер нечитаем — null.
+- Источник: СТРОГО И ИСКЛЮЧИТЕЛЬНО страница ПАСПОРТА (Surname / Given names / Patronymic).
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО брать ФИО с Водительского удостоверения (В/У)! Если паспорта нет — driver.full_name = null.
+- MRZ (строка с '<') категорически запрещено использовать; в таком случае full_name = null.
+- Сохранять регистр символов как на документе.
 
 passport.issuing_authority
-- Считывать орган выдачи рядом с метками 'Орган выдачи', 'Выдан', 'Issued by', 'MIA', 'УВД', 'MVD' и т.д.; сохранять как есть (заглавные буквы и цифры).
+- Считывать ТОЛЬКО краткое наименование или код органа выдачи (например: 'МВД 02001', 'MVD TJ', 'УВД', 'MIA', 'ИИБ').
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать область, регион, район, город или место рождения (например: 'FERGANA REGION', 'SUGHD REGION', 'OBLAST', 'DISTRICT')! Место жительства/рождения — это НЕ орган выдачи.
 - Заменять переносы строк и повторяющиеся пробелы на один одиночный пробел.
 - Если поле отсутствует — passport.issuing_authority = null.
-- Если распознано частично — записать прочитанное и добавлять review_reasons "Орган выдачи частично нечитаем".
 
 passport.date_of_birth
 - Источник: поле "Date of birth / Дата рождения" на странице паспорта.
@@ -1813,11 +1843,18 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
                 if show_model and m and m.lower() not in b.lower(): return f"{b} {m}"
                 return b
 
-            p_full_name = (p.get("full_name") or d.get("full_name") or "").strip()
+            # ФИО берется СТРОГО с паспорта (без фоллбека на В/У)
+            p_full_name = (p.get("full_name") or "").strip()
             if p.get("number") in ["Не распознан", None, ""] or not p_full_name:
                 driver_full_name = "Не распознан"
             else:
                 driver_full_name = p_full_name
+
+            # Жесткая отсечка названий областей/районов из наименования органа выдачи
+            p_auth = (p.get('authority') or 'Не распознан').strip()
+            p_auth = re.sub(r'(?i)\b(?:fergana|sughd|khatlon|gorno-badakhshan|region|oblast|obl|district)\b.*$', '', p_auth).strip(' ,.-')
+            if not p_auth:
+                p_auth = "Не распознан"
 
             truck_brand_only = (t.get('brand') or 'Не распознан').strip()
             truck_full_brand = build_brand_str(t, show_model=True)
@@ -1831,7 +1868,6 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
 
             p_num = p.get('number') or 'Не распознан'
             p_date = p.get('issue_date') or 'Не распознана'
-            p_auth = p.get('authority') or 'Не распознан'
 
             l_num = l.get('number') or 'Не распознан'
             l_date = l.get('issue_date') or 'Не распознана'
@@ -1843,7 +1879,8 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
             b_date = d.get('birth_date') or 'Не распознана'
             b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
 
-            route_check_str = (route_str or text_notes or "").lower()
+            # Объединенная проверка слова полиэтилен по всем источникам
+            route_check_str = f"{route_str or ''} {text_notes or ''}".lower()
 
             if is_polyethylene or "полиэтилен" in route_check_str or "polyethylene" in route_check_str:
                 formatted_output = (
@@ -1855,6 +1892,9 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
                     f"Паспорт (серия, №, когда и кем выдан): {p_num} выдан {p_date}г. {p_auth}\n"
                     f"Дата рождения: {b_date_str}"
                 )
+
+            # Безопасная очистка символов подчёркивания для предотвращения сбоя Markdown Telegram
+            formatted_output = formatted_output.replace('_', ' ')
             elif "боржоми" in route_check_str or "borjomi" in route_check_str:
                 formatted_output = (
                     f"Машина: {truck_brand_only}, гос. номер: {truck_plate}/{trailer_plate}\n"
@@ -4287,8 +4327,8 @@ async def get_loads_api(request):
 
     loads = []
     for r in rows:
-        c_date = parse_cargo_date(r[2])
-        is_today = bool(c_date and c_date == msk_today)
+        dt_start, dt_end = parse_cargo_date_range(r[2])
+        is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
         loads.append({
             "id": r[0],
             "route": r[1] if r[1] else "Не указан",
@@ -4375,8 +4415,8 @@ async def my_loads_api(request):
 
     for r in pending_rows:
         bid_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub = r
-        c_date = parse_cargo_date(date_str)
-        is_today = bool(c_date and c_date == msk_today)
+        dt_start, dt_end = parse_cargo_date_range(date_str)
+        is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
         is_transit = False
 
         deals.append({
@@ -4407,10 +4447,10 @@ async def my_loads_api(request):
     for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num = r
 
-        c_date = parse_cargo_date(date_str)
-        is_today = bool(c_date and c_date == msk_today)
+        dt_start, dt_end = parse_cargo_date_range(date_str)
+        is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
         has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
-        is_transit = bool(c_date and msk_today > c_date and not is_unl and has_submitted_docs)
+        is_transit = bool(dt_end and msk_today > dt_end and not is_unl and has_submitted_docs)
 
         deals.append({
             "id": f"deal_{deal_id}",
