@@ -90,7 +90,7 @@ try:
 except ValueError:
     BACKUP_CHANNEL_ID = ADMIN_CHANNEL_ID
 
-    CARGO_INPUT_CHANNEL_ID_RAW = os.getenv("CARGO_INPUT_CHANNEL_ID", "")
+CARGO_INPUT_CHANNEL_ID_RAW = os.getenv("CARGO_INPUT_CHANNEL_ID", "")
 try:
     CARGO_INPUT_CHANNEL_ID = int(CARGO_INPUT_CHANNEL_ID_RAW) if CARGO_INPUT_CHANNEL_ID_RAW else None
 except ValueError:
@@ -3503,10 +3503,10 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
 
 # ==================== ПАРСИНГ ИЗ КАНАЛОВ И АДМИН-КАНАЛА ====================
 
-LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
-if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
+LISTENED_CHATS = []
+if ADMIN_CHANNEL_ID:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
-if CARGO_INPUT_CHANNEL_ID and CARGO_INPUT_CHANNEL_ID not in LISTENED_CHATS:
+if CARGO_INPUT_CHANNEL_ID:
     LISTENED_CHATS.append(CARGO_INPUT_CHANNEL_ID)
 
 @dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
