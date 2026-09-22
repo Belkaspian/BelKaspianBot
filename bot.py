@@ -157,12 +157,12 @@ def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
 
     return "image/jpeg"
 
-# ==================== БАЗА ДАННЫХ: БЭКАП И ВОССТАНОВЛЕНИЕ ====================
-
 import tempfile
 import shutil
 import signal
 import html
+
+# ==================== БАЗА ДАННЫХ: БЭКАП И ВОССТАНОВЛЕНИЕ ====================
 
 def make_safe_db_dump_bytes() -> bytes:
     """Создает консистентный срез SQLite базы с принудительной записью WAL."""
@@ -223,8 +223,8 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
             )
 
             doc_file = types.BufferedInputFile(data, filename="cargo_bot.db")
-            
-            # Отправка файла в канал с разметкой HTML
+
+            # 1. Отправка файла в канал
             try:
                 sent_msg = await bot.send_document(
                     chat_id=BACKUP_CHANNEL_ID,
@@ -239,15 +239,13 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
                     caption=f"📦 Резервная копия базы данных ({size_kb} KB)\nПричина: {reason}\nДата: {now_str}"
                 )
 
-            # Закрепление файла
+            # 2. Закрепление только одного последнего файла
             try:
-                # 1. Открепляем все старые бэкапы, чтобы не копилась лента закрепов
                 try:
                     await bot.unpin_all_chat_messages(chat_id=BACKUP_CHANNEL_ID)
                 except Exception as unpin_err:
-                    logging.warning(f"Не удалось очистить старые закрепы: {unpin_err}")
+                    logging.warning(f"Не удалось открепить старые сообщения: {unpin_err}")
 
-                # 2. Закрепляем только один актуальный свежий файл
                 await bot.pin_chat_message(
                     chat_id=BACKUP_CHANNEL_ID,
                     message_id=sent_msg.message_id,
@@ -256,9 +254,14 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
                 logging.info(f"✅ Резервная копия БД успешно выгружена и закреплена ({size_kb} KB).")
                 return True, f"Успешно выгружено и закреплено ({size_kb} KB)"
             except Exception as pin_err:
-                err_text = f"Файл выгружен, но не закреплен (включите боту право 'Изменение сообщений'): {pin_err}"
+                err_text = f"Файл выгружен, но не закреплен: {pin_err}"
                 logging.warning(f"⚠️ {err_text}")
                 return True, err_text
+
+        except Exception as e:
+            err_text = f"Ошибка отправки в канал {BACKUP_CHANNEL_ID}: {e}"
+            logging.error(f"❌ {err_text}")
+            return False, err_text
 
 
 async def restore_db_from_telegram() -> bool:
@@ -270,45 +273,67 @@ async def restore_db_from_telegram() -> bool:
 
         if not pinned or not pinned.document:
             logging.warning(
-                f"⚠️ Закрепленная копия БД не найдена в канале {BACKUP_CHANNEL_ID}!\n"
-                "Если канал новый — база создастся с нуля.\n"
-                "Если файл в канале уже есть — закрепите его вручную булавкой."
+                f"ℹ️ Закрепленная копия БД не найдена в канале {BACKUP_CHANNEL_ID}.\n"
+                "Если это первый запуск — создается новая чистая база."
             )
             return False
 
         doc = pinned.document
         if not doc.file_name or not doc.file_name.endswith(".db"):
-            logging.warning(f"⚠️ Закрепленный файл '{doc.file_name}' не является базой SQLite (.db).")
+            logging.warning(f"⚠️ Закрепленный файл '{doc.file_name}' не является файлом .db. Пропуск.")
             return False
 
-        logging.info(f"⏳ Скачивание копии: {doc.file_name} ({round(doc.file_size / 1024, 1)} KB)...")
+        logging.info(f"⏳ Скачивание резервной копии: {doc.file_name} ({round(doc.file_size / 1024, 1)} KB)...")
         file_info = await bot.get_file(doc.file_id)
 
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        await bot.download_file(file_info.file_path, destination=tmp_path)
+
+        # Проверка целостности файла
+        try:
+            check_conn = sqlite3.connect(tmp_path)
+            check_res = check_conn.execute("PRAGMA integrity_check;").fetchone()
+            check_conn.close()
+            if not check_res or check_res[0] != "ok":
+                logging.error("❌ Файл из закрепа поврежден! Восстановление отменено.")
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                return False
+        except Exception as check_err:
+            logging.error(f"❌ Ошибка проверки скачанной базы: {check_err}")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return False
+
+        # Удаляем временные файлы перед заменой
         for suffix in ["", "-wal", "-shm"]:
-            path = f"cargo_bot.db{suffix}"
-            if os.path.exists(path):
+            p = f"cargo_bot.db{suffix}"
+            if os.path.exists(p):
                 try:
-                    os.remove(path)
+                    os.remove(p)
                 except Exception:
                     pass
 
-        await bot.download_file(file_info.file_path, destination="cargo_bot.db")
-        logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
+        shutil.move(tmp_path, "cargo_bot.db")
+        logging.info("✅ База данных успешно восстановлена из закрепа Telegram-канала.")
         return True
+
     except Exception as e:
         logging.error(f"❌ Не удалось восстановить БД из канала {BACKUP_CHANNEL_ID}: {e}")
         return False
 
 
 async def auto_backup_db_loop():
-    """Фоновый цикл: первый бэкап через 5 секунд после старта, затем каждые 10 минут."""
-    await asyncio.sleep(5)  # Запуск сразу, а не через 60 сек
+    """Фоновый цикл автосохранения каждые 15 минут."""
+    await asyncio.sleep(60)
     while True:
         try:
-            await push_db_backup(reason="Плановое автосохранение (10 мин)")
+            await push_db_backup(reason="Плановое автосохранение (15 мин)")
         except Exception as e:
             logging.error(f"Ошибка в auto_backup_db_loop: {e}")
-        await asyncio.sleep(600)
+        await asyncio.sleep(900)
 
 
 # ==================== БАЗА ДАННЫХ ====================
@@ -6149,21 +6174,18 @@ async def web_server():
     await asyncio.Event().wait()
 
 async def main():
-    # 1. Скачиваем актуальную базу из Telegram-канала
+    # 1. ТОЛЬКО СКАЧИВАЕМ актуальную базу из закрепа канала бэкапов
     await restore_db_from_telegram()
     
-    # 2. Инициализируем таблицы базы
+    # 2. Проверяем таблицы и накатываем миграции
     init_db()
 
-    # 3. СРАЗУ делаем начальный бэкап после старта (не ждем 15 минут!)
-    asyncio.create_task(push_db_backup(reason="Старт сервиса"))
-
-    # 4. Перехватываем сигнал SIGTERM от Render (чтобы база не стерлась при деплое)
+    # 3. Настраиваем перехват сигнала выключения контейнера (SIGTERM)
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
     def on_shutdown_signal(sig_name):
-        logging.info(f"🛑 Получен сигнал {sig_name}! Запуск экстренного бэкапа...")
+        logging.info(f"🛑 Получен сигнал {sig_name}! Сохраняем базу перед деплоем...")
         stop_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -6172,28 +6194,28 @@ async def main():
         except (NotImplementedError, RuntimeError):
             pass
 
-    # 5. Запускаем задачи бота и веб-сервера
+    # 4. Запускаем бота и веб-сервер
     bot_task = asyncio.create_task(run_bot())
     web_task = asyncio.create_task(web_server())
 
-    logging.info("🚀 Бот и веб-сервер успешно запущены!")
+    logging.info("🚀 Бот и веб-сервер успешно запущены.")
 
-    # 6. Ожидаем сигнала остановки от Render
+    # 5. Ожидаем сигнала на перезапуск контейнера (при новом деплое)
     await stop_event.wait()
 
-    # 7. ЭКСТРЕННОЕ СОХРАНЕНИЕ перед тем, как Render удалит контейнер
-    logging.info("🛑 Сохранение финального бэкапа перед остановкой...")
+    # 6. ВЫГРУЗКА: сохраняем базу в закреп канала ПЕРЕД тем, как старый контейнер удалится
+    logging.info("🛑 Сохранение финального бэкапа в канал перед перезапуском...")
     try:
-        await push_db_backup(reason="Деплой / Остановка контейнера (SIGTERM)")
+        await push_db_backup(reason="Деплой нового релиза (SIGTERM)")
     except Exception as e:
         logging.error(f"Ошибка сохранения БД при выключении: {e}")
 
-    # Закрываем задачи
+    # Закрываем соединения
     bot_task.cancel()
     web_task.cancel()
     await asyncio.gather(bot_task, web_task, return_exceptions=True)
     await bot.session.close()
-    logging.info("✅ Завершение работы выполнено.")
+    logging.info("✅ Контейнер завершил работу, база надежно сохранена в канале.")
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True)
