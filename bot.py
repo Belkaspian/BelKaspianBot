@@ -255,8 +255,6 @@ async def restore_db_from_telegram():
 
         await bot.download_file(file_info.file_path, destination="cargo_bot.db")
         logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
-    await bot.download_file(file_info.file_path, destination="cargo_bot.db")
-        logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
     except Exception as e:
         logging.error(f"❌ Не удалось восстановить БД из канала: {e}")
 
