@@ -162,6 +162,7 @@ def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
 import tempfile
 import shutil
 import signal
+import html
 
 def make_safe_db_dump_bytes() -> bytes:
     """Создает консистентный срез SQLite базы с принудительной записью WAL."""
@@ -173,7 +174,6 @@ def make_safe_db_dump_bytes() -> bytes:
 
     try:
         src = sqlite3.connect("cargo_bot.db")
-        # Принудительно сбрасываем незаписанные данные из WAL в .db
         try:
             src.execute("PRAGMA wal_checkpoint(FULL);")
         except Exception:
@@ -201,21 +201,6 @@ def make_safe_db_dump_bytes() -> bytes:
 _backup_lock = asyncio.Lock()
 
 async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]:
-    """Выгружает срез базы в Telegram-канал и закрепляет его."""
-    async with _backup_lock:
-        try:
-            data = make_safe_db_dump_bytes()
-            if not data or len(data) < 100:
-                msg = "⚠️ База cargo_bot.db пуста или еще не создана."
-                logging.warning(msg)
-                return False, msg
-
-            now_str = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M:%S")
-            size_kb = round(len(data) / 1024, 1)
-
-            import html
-
-async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]:
     """Выгружает срез базы в Telegram-канал и закрепляет его (безопасный HTML)."""
     async with _backup_lock:
         try:
@@ -229,7 +214,6 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
             size_kb = round(len(data) / 1024, 1)
             safe_reason = html.escape(str(reason))
 
-            # Безопасная HTML-разметка, которая не ломается от знаков подчеркивания _
             caption = (
                 f"📦 <b>Резервная копия базы данных</b>\n"
                 f"• Причина: <code>{safe_reason}</code>\n"
@@ -240,7 +224,7 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
 
             doc_file = types.BufferedInputFile(data, filename="cargo_bot.db")
             
-            # Отправка файла с разметкой HTML (и фоллбэком на чистый текст при любом сбое)
+            # Отправка файла в канал с разметкой HTML
             try:
                 sent_msg = await bot.send_document(
                     chat_id=BACKUP_CHANNEL_ID,
@@ -267,25 +251,6 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
             except Exception as pin_err:
                 err_text = f"Файл выгружен, но не закреплен (включите боту право 'Изменение сообщений'): {pin_err}"
                 logging.warning(f"⚠️ {err_text}")
-                return True, err_text
-
-        except Exception as e:
-            err_text = f"Ошибка отправки в канал {BACKUP_CHANNEL_ID}: {e}"
-            logging.error(f"❌ {err_text}")
-            return False, err_text
-
-            # Закрепление файла
-            try:
-                await bot.pin_chat_message(
-                    chat_id=BACKUP_CHANNEL_ID,
-                    message_id=sent_msg.message_id,
-                    disable_notification=True
-                )
-                logging.info(f"✅ Резервная копия БД успешно выгружена и закреплена ({size_kb} KB).")
-                return True, f"Успешно выгружено и закреплено ({size_kb} KB)"
-            except Exception as pin_err:
-                err_text = f"Файл отправлен, но НЕ закреплен (нет права 'Pin messages'): {pin_err}"
-                logging.error(f"⚠️ {err_text}")
                 return True, err_text
 
         except Exception as e:
