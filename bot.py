@@ -255,12 +255,25 @@ async def restore_db_from_telegram():
 
         await bot.download_file(file_info.file_path, destination="cargo_bot.db")
         logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
+    await bot.download_file(file_info.file_path, destination="cargo_bot.db")
+        logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
     except Exception as e:
         logging.error(f"❌ Не удалось восстановить БД из канала: {e}")
 
 
+async def auto_backup_db_loop():
+    """Фоновый цикл: выгрузка базы в канал каждые 15 минут."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await push_db_backup(reason="Плановое автосохранение (15 мин)")
+        except Exception as e:
+            logging.error(f"Ошибка в auto_backup_db_loop: {e}")
+        await asyncio.sleep(900)
 
-#def init_db():
+
+# ==================== БАЗА ДАННЫХ ====================
+def init_db():
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
@@ -428,8 +441,7 @@ async def restore_db_from_telegram():
     
     conn.commit()
     conn.close()
-    
-init_db()
+
 
 def add_notification(user_id: int, title: str, text: str):
     try:
