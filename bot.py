@@ -90,6 +90,11 @@ try:
 except ValueError:
     BACKUP_CHANNEL_ID = ADMIN_CHANNEL_ID
 
+    CARGO_INPUT_CHANNEL_ID_RAW = os.getenv("CARGO_INPUT_CHANNEL_ID", "")
+try:
+    CARGO_INPUT_CHANNEL_ID = int(CARGO_INPUT_CHANNEL_ID_RAW) if CARGO_INPUT_CHANNEL_ID_RAW else None
+except ValueError:
+    CARGO_INPUT_CHANNEL_ID = None
 
 DOCS_CHANNEL_ID_RAW = os.getenv("DOCS_CHANNEL_ID", "-1003928614238")
 try:
@@ -1383,6 +1388,65 @@ async def send_cargo_to_user(user_id: int, cargo_id: int):
         pass
 
 # ==================== ИИ GEMINI МОДЕЛИ И СХЕМЫ ====================
+
+
+class ParsedCargoItem(BaseModel):
+    destination_country: str = Field(description="Строго одно из направлений: 'Казахстан 🇰🇿', 'Узбекистан 🇺🇿', 'Кыргызстан 🇰🇬', 'Грузия 🇬🇪', 'Азербайджан 🇦🇿', 'Армения 🇦🇲'")
+    date: str = Field(description="Дата погрузки или диапазон (например, '15.05', '12-15.05', 'Срочно')")
+    route: str = Field(description="Маршрут в виде: Город загрузки → Город выгрузки (например, 'Минск → Ташкент')")
+    cars_count: str = Field(default="1", description="Количество авто только цифрой (например, '1', '2')")
+    price: str = Field(default="Торги", description="Ставка с валютой (например, '2500 USD', '260 000 RUB') или 'Торги'")
+    car_type: str = Field(default="Тент/реф", description="Тип кузова (Тент, Реф, Мега, Сцепка, Изотерм)")
+    cargo_type: str = Field(default="ТНП", description="Тип груза (ТНП, Оборудование, Металл и т.д.)")
+    weight: str = Field(default="до 22т", description="Вес или объем (например, 'до 22т', '20т')")
+    details: str = Field(default="", description="Дополнительные требования через запятую (например: АДР, боковая погрузка, 2 цмр)")
+    time_limit: Optional[str] = Field(default="", description="Время окончания торгов по МСК (например, '15:00'), если указано в тексте")
+
+class CargoBatchExtraction(BaseModel):
+    cargos: list[ParsedCargoItem] = Field(description="Список всех отдельных грузов из текста")
+
+async def parse_cargos_with_ai(raw_text: str) -> list[dict]:
+    """Интеллектуальный разбор заявки или списка заявок через Gemini API."""
+    if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
+        return []
+
+    system_prompt = (
+        "Ты — старший диспетчер международной транспортной компании. "
+        "Твоя задача — извлечь структурированные данные по каждому грузу из сообщения.\n"
+        "Правила:\n"
+        "1. Сообщение может содержать как 1 груз, так и список из нескольких грузов — извлеки каждый отдельно.\n"
+        "2. Страну назначения destination_country выбери СТРОГО из списка: "
+        "['Казахстан 🇰🇿', 'Узбекистан 🇺🇿', 'Кыргызстан 🇰🇬', 'Грузия 🇬🇪', 'Азербайджан 🇦🇿', 'Армения 🇦🇲'].\n"
+        "3. Маршрут стандартизируй через стрелку: 'Город → Город'.\n"
+        "4. Если цена не указана или написано 'торги' — установи price = 'Торги'.\n"
+        "5. Если указано время окончания торгов (например 'до 15:00', 'до 16 МСК') — укажи его в time_limit."
+    )
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",
+        response_schema=CargoBatchExtraction,
+        temperature=0.0
+    )
+
+    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
+    for model_name in models_to_try:
+        try:
+            if hasattr(gemini_client, 'aio'):
+                resp = await gemini_client.aio.models.generate_content(model=model_name, contents=[raw_text], config=config)
+            else:
+                resp = await asyncio.to_thread(gemini_client.models.generate_content, model=model_name, contents=[raw_text], config=config)
+
+            if resp and resp.text:
+                clean_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", resp.text.strip(), flags=re.MULTILINE)
+                data = json.loads(clean_json)
+                parsed = CargoBatchExtraction(**data)
+                return [c.model_dump() for c in parsed.cargos]
+        except Exception as e:
+            logging.warning(f"⚠️ Ошибка разбора груза моделью {model_name}: {e}")
+
+    return []
+
 
 class VehicleDetails(BaseModel):
     brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
@@ -3442,6 +3506,8 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
 LISTENED_CHATS = list(CHANNEL_TO_DIRECTION.keys())
 if ADMIN_CHANNEL_ID not in LISTENED_CHATS:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
+if CARGO_INPUT_CHANNEL_ID and CARGO_INPUT_CHANNEL_ID not in LISTENED_CHATS:
+    LISTENED_CHATS.append(CARGO_INPUT_CHANNEL_ID)
 
 @dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
@@ -3461,7 +3527,7 @@ async def handle_admin_menu_command(message: types.Message):
         await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Ошибка отправки меню в админ-канал: {e}")
-        
+
 @dp.channel_post(F.text.startswith("!"))
 async def handle_admin_broadcast(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
@@ -3500,51 +3566,130 @@ async def handle_channel_post(message: types.Message):
 
     if not raw_text or raw_text.startswith("!") or raw_text.startswith("/"):
         return
-        
-    direction = CHANNEL_TO_DIRECTION.get(chat_id)
-    if not direction:
-        date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(raw_text)
-        direction = detect_country(route_str or raw_text)
 
-    splitted_texts = parse_multiple_cargos(raw_text)
-    
+    is_unified_channel = (CARGO_INPUT_CHANNEL_ID and chat_id == CARGO_INPUT_CHANNEL_ID)
+
+    # 1. Распознавание через ИИ
+    ai_cargos = await parse_cargos_with_ai(raw_text)
+
+    # Если ИИ временно недоступен — используем резервный старый метод
+    if not ai_cargos:
+        splitted_texts = parse_multiple_cargos(raw_text)
+        direction_fallback = CHANNEL_TO_DIRECTION.get(chat_id) or detect_country(raw_text)
+        ai_cargos = []
+        for st in splitted_texts:
+            d_date, d_route, d_price, d_cars, d_details, d_cartype, d_cargotype, d_weight, d_expires = parse_cargo_raw(st)
+            ai_cargos.append({
+                "destination_country": direction_fallback,
+                "date": d_date,
+                "route": d_route,
+                "cars_count": d_cars,
+                "price": d_price,
+                "car_type": d_cartype,
+                "cargo_type": d_cargotype,
+                "weight": d_weight,
+                "details": d_details,
+                "time_limit": ""
+            })
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    created_cargo_ids = []
-    
-    for single_text in splitted_texts:
-        date_str, route_str, price_str, cars_str, details_text, car_type, cargo_type, weight, expires_at = parse_cargo_raw(single_text)
+    cursor.execute("SELECT user_id, subscriptions, status FROM users WHERE status != 'BLOCKED'")
+    active_users = cursor.fetchall()
+
+    created_info = []
+
+    for item in ai_cargos:
+        dest_country = item.get("destination_country") or "Все"
+        # Если пост пришел из старого конкретного канала — берем точное направление канала
+        if not is_unified_channel and chat_id in CHANNEL_TO_DIRECTION:
+            dest_country = CHANNEL_TO_DIRECTION[chat_id]
+
+        c_date = item.get("date") or "Срочно"
+        c_route = item.get("route") or "Маршрут не указан"
+        c_cars = item.get("cars_count") or "1"
+        c_price = item.get("price") or "Торги"
+        c_cartype = item.get("car_type") or "Тент/реф"
+        c_cargotype = item.get("cargo_type") or "ТНП"
+        c_weight = item.get("weight") or "до 22т"
+        c_details = item.get("details") or ""
+        t_limit = item.get("time_limit") or ""
+
+        expires_at = None
+        if t_limit:
+            time_formatted, expires_at = extract_time_limit(t_limit)
+            if time_formatted and "по МСК" not in c_price:
+                c_price = f"{c_price} (до {time_formatted} по МСК)"
+
         cursor.execute("""
             INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, expires_at, status) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-        """, (direction, date_str, route_str, cars_str, price_str, single_text, details_text, car_type, cargo_type, weight, expires_at))
-        created_cargo_ids.append(cursor.lastrowid)
+        """, (dest_country, c_date, c_route, c_cars, c_price, raw_text, c_details, c_cartype, c_cargotype, c_weight, expires_at))
         
-    conn.commit()
-    cursor.execute("SELECT user_id, subscriptions, status FROM users")
-    all_users = cursor.fetchall()
-    
-    clean_dir = direction.split()[0].strip()
-    for cargo_id in created_cargo_ids:
-        cursor.execute("SELECT date, route FROM loads WHERE load_id = ?", (cargo_id,))
-        c_row = cursor.fetchone()
-        c_date = c_row[0] if c_row else "ближайшую дату"
-        c_route = c_row[1] if c_row else "маршруту"
-        
-        for u_id, subs, u_status in all_users:
-            if u_status == 'BLOCKED':
-                continue
-            user_subs_list = [s.strip() for s in (subs or "").split(",") if s.strip()]
-            if any(clean_dir.lower() in sub.lower() for sub in user_subs_list):
-                await send_cargo_to_user(u_id, cargo_id)
+        new_cargo_id = cursor.lastrowid
+        created_info.append(f"• {c_route} ({dest_country})")
+
+        clean_dir = dest_country.split()[0].strip().lower()
+
+        # 1. АВТОПУБЛИКАЦИЯ В ТЕМАТИЧЕСКИЙ КАНАЛ НАПРАВЛЕНИЯ
+        target_channel_id = None
+        for chan_name, chan_id in CHANNELS.items():
+            if clean_dir in chan_name.lower():
+                target_channel_id = chan_id
+                break
+
+        # Отправляем в канал направления, только если пост пришел из общего канала
+        if target_channel_id and target_channel_id != chat_id:
+            try:
+                bot_info = await bot.get_me()
+                bot_username = bot_info.username or ""
+
+                channel_card = (
+                    f"📍 **{c_date} | {c_route}**\n"
+                    f"💰 **{c_price}** | 🚚 {c_cars} авто\n"
+                    f"🚛 {c_cartype} | {c_cargotype} | {c_weight}"
+                )
+                if c_details:
+                    channel_card += f"\n📦 {c_details}"
+
+                chan_builder = InlineKeyboardBuilder()
+                if bot_username:
+                    chan_builder.row(types.InlineKeyboardButton(
+                        text="📱 Открыть в приложении / Забрать",
+                        url=f"https://t.me/{bot_username}?start=load_{new_cargo_id}"
+                    ))
+
+                await bot.send_message(
+                    chat_id=target_channel_id,
+                    text=channel_card,
+                    reply_markup=chan_builder.as_markup() if bot_username else None,
+                    parse_mode="Markdown"
+                )
+            except Exception as chan_err:
+                logging.error(f"Ошибка публикации в региональный канал ({dest_country}): {chan_err}")
+
+        # 2. Личная рассылка подписанным пользователям в боте
+        for u_id, subs, u_status in active_users:
+            user_subs_list = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
+            if any(clean_dir in sub for sub in user_subs_list):
+                await send_cargo_to_user(u_id, new_cargo_id)
                 add_notification(
                     u_id, 
                     "Новый груз", 
                     f"Появился груз на {c_date} по маршруту {c_route}"
                 )
-                await asyncio.sleep(0.05)
-                
+                await asyncio.sleep(0.04)
+
+    conn.commit()
     conn.close()
+
+    # Если публикация была в единый канал — бот оставит лаконичный ответ-подтверждение
+    if is_unified_channel and created_info:
+        try:
+            report_text = f"✅ **Грузы распознаны и опубликованы на Бирже ({len(created_info)} шт.):**\n" + "\n".join(created_info)
+            await message.reply(report_text, parse_mode="Markdown")
+        except Exception:
+            pass
 
 # ==================== ЛОГИКА ОБРАБОТКИ ЗАЯВОК И СТАВОК В ЧАТЕ И АДМИНКЕ ====================
 
