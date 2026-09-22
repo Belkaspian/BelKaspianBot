@@ -213,23 +213,66 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
             now_str = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M:%S")
             size_kb = round(len(data) / 1024, 1)
 
+            import html
+
+async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]:
+    """Выгружает срез базы в Telegram-канал и закрепляет его (безопасный HTML)."""
+    async with _backup_lock:
+        try:
+            data = make_safe_db_dump_bytes()
+            if not data or len(data) < 100:
+                msg = "⚠️ База cargo_bot.db пуста или еще не создана."
+                logging.warning(msg)
+                return False, msg
+
+            now_str = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M:%S")
+            size_kb = round(len(data) / 1024, 1)
+            safe_reason = html.escape(str(reason))
+
+            # Безопасная HTML-разметка, которая не ломается от знаков подчеркивания _
             caption = (
-                f"📦 **Резервная копия базы данных**\n"
-                f"• Причина: `{reason}`\n"
-                f"• Дата (МСК): `{now_str}`\n"
-                f"• Размер: `{size_kb} KB`\n"
+                f"📦 <b>Резервная копия базы данных</b>\n"
+                f"• Причина: <code>{safe_reason}</code>\n"
+                f"• Дата (МСК): <code>{now_str}</code>\n"
+                f"• Размер: <code>{size_kb} KB</code>\n"
                 f"#db_backup"
             )
 
             doc_file = types.BufferedInputFile(data, filename="cargo_bot.db")
             
-            # Отправка файла в канал
-            sent_msg = await bot.send_document(
-                chat_id=BACKUP_CHANNEL_ID,
-                document=doc_file,
-                caption=caption,
-                parse_mode="Markdown"
-            )
+            # Отправка файла с разметкой HTML (и фоллбэком на чистый текст при любом сбое)
+            try:
+                sent_msg = await bot.send_document(
+                    chat_id=BACKUP_CHANNEL_ID,
+                    document=doc_file,
+                    caption=caption,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                sent_msg = await bot.send_document(
+                    chat_id=BACKUP_CHANNEL_ID,
+                    document=doc_file,
+                    caption=f"📦 Резервная копия базы данных ({size_kb} KB)\nПричина: {reason}\nДата: {now_str}"
+                )
+
+            # Закрепление файла
+            try:
+                await bot.pin_chat_message(
+                    chat_id=BACKUP_CHANNEL_ID,
+                    message_id=sent_msg.message_id,
+                    disable_notification=True
+                )
+                logging.info(f"✅ Резервная копия БД успешно выгружена и закреплена ({size_kb} KB).")
+                return True, f"Успешно выгружено и закреплено ({size_kb} KB)"
+            except Exception as pin_err:
+                err_text = f"Файл выгружен, но не закреплен (включите боту право 'Изменение сообщений'): {pin_err}"
+                logging.warning(f"⚠️ {err_text}")
+                return True, err_text
+
+        except Exception as e:
+            err_text = f"Ошибка отправки в канал {BACKUP_CHANNEL_ID}: {e}"
+            logging.error(f"❌ {err_text}")
+            return False, err_text
 
             # Закрепление файла
             try:
@@ -2472,30 +2515,6 @@ async def auto_clean_expired_cargos():
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
-@dp.message(Command("test_backup"))
-async def cmd_test_backup(message: types.Message):
-    """Тест выгрузки базы: сразу покажет в чате, работает канал или нет."""
-    status_msg = await message.answer(f"⏳ Пробую отправить бэкап в канал `{BACKUP_CHANNEL_ID}`...", parse_mode="Markdown")
-    
-    success, result_text = await push_db_backup(reason=f"Ручной тест от @{message.from_user.username}")
-    
-    if success:
-        await status_msg.edit_text(
-            f"✅ **Бэкап успешно отправлен в канал!**\n\n"
-            f"• Канал ID: `{BACKUP_CHANNEL_ID}`\n"
-            f"• Результат: `{result_text}`",
-            parse_mode="Markdown"
-        )
-    else:
-        await status_msg.edit_text(
-            f"❌ **Не удалось отправить бэкап!**\n\n"
-            f"• Канал ID: `{BACKUP_CHANNEL_ID}`\n"
-            f"• **Причина ошибки:**\n`{result_text}`\n\n"
-            f"**Что нужно исправить:**\n"
-            f"1. Добавьте бота в канал как **Администратора**\n"
-            f"2. Дайте ему права: *Публикация сообщений* и *Закрепление сообщений*",
-            parse_mode="Markdown"
-        )
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -3574,6 +3593,39 @@ if ADMIN_CHANNEL_ID:
     LISTENED_CHATS.append(ADMIN_CHANNEL_ID)
 if CARGO_INPUT_CHANNEL_ID:
     LISTENED_CHATS.append(CARGO_INPUT_CHANNEL_ID)
+
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/test_backup', 'test_backup'))))
+@dp.message(F.chat.id == ADMIN_CHANNEL_ID, Command("test_backup"))
+async def handle_admin_test_backup(message: types.Message):
+    """
+    Запуск теста выгрузки базы ИСКЛЮЧИТЕЛЬНО из админ-канала.
+    В личных сообщениях бот на эту команду больше не реагирует!
+    """
+    status_msg = await message.reply(
+        f"⏳ Пробую выгрузить базу в канал <code>{BACKUP_CHANNEL_ID}</code>...", 
+        parse_mode="HTML"
+    )
+    
+    success, result_text = await push_db_backup(reason="Ручной тест из Админ-канала")
+    safe_result = html.escape(str(result_text))
+
+    if success:
+        await status_msg.edit_text(
+            f"✅ <b>Бэкап успешно отправлен!</b>\n\n"
+            f"• Канал бэкапов: <code>{BACKUP_CHANNEL_ID}</code>\n"
+            f"• Результат: <code>{safe_result}</code>",
+            parse_mode="HTML"
+        )
+    else:
+        await status_msg.edit_text(
+            f"❌ <b>Ошибка отправки бэкапа!</b>\n\n"
+            f"• Канал бэкапов: <code>{BACKUP_CHANNEL_ID}</code>\n"
+            f"• Причина ошибки:\n<code>{safe_result}</code>",
+            parse_mode="HTML"
+        )
+
+
 
 @dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
