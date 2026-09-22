@@ -241,6 +241,13 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
 
             # Закрепление файла
             try:
+                # 1. Открепляем все старые бэкапы, чтобы не копилась лента закрепов
+                try:
+                    await bot.unpin_all_chat_messages(chat_id=BACKUP_CHANNEL_ID)
+                except Exception as unpin_err:
+                    logging.warning(f"Не удалось очистить старые закрепы: {unpin_err}")
+
+                # 2. Закрепляем только один актуальный свежий файл
                 await bot.pin_chat_message(
                     chat_id=BACKUP_CHANNEL_ID,
                     message_id=sent_msg.message_id,
@@ -252,11 +259,6 @@ async def push_db_backup(reason: str = "Автобэкап") -> tuple[bool, str]
                 err_text = f"Файл выгружен, но не закреплен (включите боту право 'Изменение сообщений'): {pin_err}"
                 logging.warning(f"⚠️ {err_text}")
                 return True, err_text
-
-        except Exception as e:
-            err_text = f"Ошибка отправки в канал {BACKUP_CHANNEL_ID}: {e}"
-            logging.error(f"❌ {err_text}")
-            return False, err_text
 
 
 async def restore_db_from_telegram() -> bool:
