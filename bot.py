@@ -110,7 +110,7 @@ except ValueError:
 
 from aiogram.client.session.aiohttp import AiohttpSession
 
-# Задаем базовой HTTP-сессии бота лимит ожидания в 5 минут (300 сек)
+# Задаем базовой HTTP-сессии бота лимит ожидания в 5 минут  (300 сек)
 session = AiohttpSession(timeout=300.0)
 bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher(storage=MemoryStorage())
