@@ -8,6 +8,7 @@ import json
 import base64
 import io
 import traceback
+import tempfile
 from typing import Optional
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps, ImageEnhance
@@ -83,6 +84,13 @@ def add_business_days(start_date: date, num_days: int) -> date:
     return cur_date
 
 
+BACKUP_CHANNEL_ID_RAW = os.getenv("BACKUP_CHANNEL_ID", str(ADMIN_CHANNEL_ID))
+try:
+    BACKUP_CHANNEL_ID = int(BACKUP_CHANNEL_ID_RAW)
+except ValueError:
+    BACKUP_CHANNEL_ID = ADMIN_CHANNEL_ID
+
+
 DOCS_CHANNEL_ID_RAW = os.getenv("DOCS_CHANNEL_ID", "-1003928614238")
 try:
     DOCS_CHANNEL_ID = int(DOCS_CHANNEL_ID_RAW)
@@ -145,7 +153,109 @@ def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
     return "image/jpeg"
 
 # ==================== БАЗА ДАННЫХ ====================
-def init_db():
+
+
+import tempfile
+import shutil
+
+def make_safe_db_dump_bytes() -> bytes:
+    """Создает консистентный срез SQLite базы через Backup API."""
+    if not os.path.exists("cargo_bot.db"):
+        return b""
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_name = tmp.name
+
+    try:
+        src = sqlite3.connect("cargo_bot.db")
+        dst = sqlite3.connect(tmp_name)
+        src.backup(dst)
+        dst.close()
+        src.close()
+
+        with open(tmp_name, "rb") as f:
+            data = f.read()
+        return data
+    finally:
+        if os.path.exists(tmp_name):
+            try:
+                os.remove(tmp_name)
+            except Exception:
+                pass
+
+
+async def push_db_backup(reason: str = "Регулярный автобэкап"):
+    """Выгружает срез базы в Telegram-канал и закрепляет его."""
+    try:
+        data = make_safe_db_dump_bytes()
+        if not data:
+            return
+
+        now_str = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M:%S")
+        size_kb = round(len(data) / 1024, 1)
+
+        caption = (
+            f"📦 **Резервная копия базы данных**\n"
+            f"• Причина: `{reason}`\n"
+            f"• Дата (МСК): `{now_str}`\n"
+            f"• Размер: `{size_kb} KB`\n"
+            f"#db_backup"
+        )
+
+        doc_file = types.BufferedInputFile(data, filename="cargo_bot.db")
+        msg = await bot.send_document(
+            chat_id=BACKUP_CHANNEL_ID,
+            document=doc_file,
+            caption=caption,
+            parse_mode="Markdown"
+        )
+        # Закрепляем последнее актуальное состояние
+        await bot.pin_chat_message(
+            chat_id=BACKUP_CHANNEL_ID,
+            message_id=msg.message_id,
+            disable_notification=True
+        )
+        logging.info(f"✅ Резервная копия БД успешно выгружена ({size_kb} KB).")
+    except Exception as e:
+        logging.error(f"❌ Ошибка выгрузки резервной копии БД: {e}")
+
+
+async def restore_db_from_telegram():
+    """Скачивает последнюю актуальную БД из закрепленного сообщения канала."""
+    logging.info("🔍 Проверка наличия резервной копии БД в канале...")
+    try:
+        chat = await bot.get_chat(BACKUP_CHANNEL_ID)
+        pinned = chat.pinned_message
+
+        if not pinned or not pinned.document:
+            logging.info("ℹ️ Закрепленная копия БД не найдена. Будет инициализирована новая база.")
+            return
+
+        doc = pinned.document
+        if not doc.file_name.endswith(".db"):
+            logging.warning("⚠️ Закрепленный файл не является базой данных SQLite (.db). Пропуск.")
+            return
+
+        logging.info(f"⏳ Скачивание резервной копии: {doc.file_name} ({round(doc.file_size / 1024, 1)} KB)...")
+        file_info = await bot.get_file(doc.file_id)
+
+        # Удаляем старые файлы БД и WAL перед заменой
+        for suffix in ["", "-wal", "-shm"]:
+            path = f"cargo_bot.db{suffix}"
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+        await bot.download_file(file_info.file_path, destination="cargo_bot.db")
+        logging.info("✅ База данных успешно восстановлена из Telegram-канала.")
+    except Exception as e:
+        logging.error(f"❌ Не удалось восстановить БД из канала: {e}")
+
+
+
+#def init_db():
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     
@@ -1892,9 +2002,6 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
                     f"Паспорт (серия, №, когда и кем выдан): {p_num} выдан {p_date}г. {p_auth}\n"
                     f"Дата рождения: {b_date_str}"
                 )
-
-            # Безопасная очистка символов подчёркивания для предотвращения сбоя Markdown Telegram
-            formatted_output = formatted_output.replace('_', ' ')
             elif "боржоми" in route_check_str or "borjomi" in route_check_str:
                 formatted_output = (
                     f"Машина: {truck_brand_only}, гос. номер: {truck_plate}/{trailer_plate}\n"
@@ -1924,6 +2031,8 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
                     f"Прицеп: {trailer_full_brand}, VIN: {trailer_vin}"
                 )
 
+            # Безопасная очистка символов подчёркивания (перенесена в конец)
+            formatted_output = formatted_output.replace('_', ' ')
             return formatted_output, raw_json
         except Exception as e:
             logging.error(f"Error parsing Gemini JSON: {e}")
@@ -5760,6 +5869,7 @@ async def webserver_on_startup(app):
     asyncio.create_task(self_ping())
     asyncio.create_task(auto_clean_expired_cargos())
     asyncio.create_task(auto_promote_payment_docs_status())
+    asyncio.create_task(auto_backup_db_loop())
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
@@ -5809,7 +5919,20 @@ async def web_server():
     await asyncio.Event().wait()
 
 async def main():
-    await asyncio.gather(run_bot(), web_server())
+    # 1. Сначала скачиваем сохраненную базу из Telegram-канала
+    await restore_db_from_telegram()
+    
+    # 2. Создаем таблицы и проверяем миграции
+    init_db()
+
+    try:
+        # 3. Запускаем работу бота и веб-сервера
+        await asyncio.gather(run_bot(), web_server())
+    finally:
+        # 4. При любом перезапуске или остановке выгружаем финальный свежий бэкап
+        logging.info("🛑 Остановка сервиса: отправляем финальную копию базы в канал...")
+        await push_db_backup(reason="Перезапуск сервиса (Shutdown)")
+        await bot.session.close()
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True)
