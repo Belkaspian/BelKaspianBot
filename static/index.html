@@ -2162,10 +2162,11 @@
                     return;
                 }
 
-                let cData = await cRes.json();
-                let dData = await dRes.json();
-                let lData = await lRes.json();
-                let kData = await kRes.json();
+                // Безопасное чтение данных: даже если один из разделов временно пуст, админка не зависнет
+                let cData = cRes.ok ? await cRes.json() : {};
+                let dData = dRes.ok ? await dRes.json() : {};
+                let lData = lRes.ok ? await lRes.json() : {};
+                let kData = kRes.ok ? await kRes.json() : {};
                 
                 allAdminCarriersArray = cData.carriers || [];
                 allAdminDeals = dData.deals || [];
