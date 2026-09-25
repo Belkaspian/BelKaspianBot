@@ -1203,6 +1203,56 @@
                 grid-template-columns: repeat(3, 1fr); 
             }
         }
+
+        /* Удобная адаптация админ-панели для телефонов */
+        @media (max-width: 639px) {
+            #adminPanelModal {
+                padding: 4px !important;
+            }
+            #adminPanelModal .modal-card {
+                max-width: 100% !important;
+                width: 100% !important;
+                height: 96vh !important;
+                max-height: 96vh !important;
+                padding: 12px 8px !important;
+                border-radius: var(--radius-md) !important;
+            }
+            #adminPanelModal .sub-nav {
+                overflow-x: auto !important;
+                white-space: nowrap !important;
+                flex-wrap: nowrap !important;
+                gap: 5px !important;
+                padding-bottom: 6px !important;
+                margin-bottom: 8px !important;
+                -webkit-overflow-scrolling: touch;
+            }
+            #adminPanelModal .sub-nav-btn {
+                flex: 0 0 auto !important;
+                padding: 7px 11px !important;
+                font-size: 11px !important;
+            }
+            #adminPanelModal .sort-search-bar {
+                flex-wrap: wrap !important;
+                gap: 4px !important;
+            }
+            #adminPanelModal .sort-container {
+                flex: 1 1 calc(50% - 4px) !important;
+                height: 36px !important;
+                padding: 2px 6px !important;
+            }
+            #adminPanelModal .expandable-search {
+                flex: 1 1 100% !important;
+                max-width: 100% !important;
+                height: 36px !important;
+            }
+            #adminPanelModal .expandable-search input {
+                display: block !important;
+            }
+            #adminPanelModal .t-head, #adminPanelModal .t-row {
+                padding: 8px 6px !important;
+                font-size: 10px !important;
+            }
+        }
     </style>
 </head>
 <body>
