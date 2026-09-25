@@ -1342,6 +1342,19 @@
 
             <!-- Динамический блок кнопок верификации -->
             <div id="verificationActionArea" style="margin-top: 14px;"></div>
+
+            <!-- Блок привязки ключа доступа -->
+            <div id="keyLinkBox" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">
+                    Есть ключ доступа от логиста?
+                </div>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="linkKeyInput" placeholder="XXX-XXX" style="text-transform: uppercase; font-weight: 700; letter-spacing: 1px; font-size: 12px; text-align: center; max-width: 140px;" />
+                    <button class="btn btn-secondary" onclick="submitLinkCarrierKey()" style="font-size: 11px;">
+                        Привязать ключ
+                    </button>
+                </div>
+            </div>
         </div>
 
         <div class="profile-card">
@@ -2093,6 +2106,36 @@
                 }
             } catch(e) {
                 showToast('Ошибка подключения к серверу', 'error');
+            }
+        }
+
+        /* Привязка ключа к Telegram-аккаунту из Личного кабинета */
+        async function submitLinkCarrierKey() {
+            let keyInput = document.getElementById('linkKeyInput');
+            let key = keyInput ? keyInput.value.trim() : '';
+            if (!key) return showToast('Введите ключ (XXX-XXX)', 'error');
+            let uid = getUserId();
+            if (!uid) return showToast('Ошибка определения пользователя', 'error');
+
+            try {
+                let res = await fetch('/api/carrier/link_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: uid, key_code: key })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(data.message || 'Ключ успешно привязан!', 'success');
+                    localStorage.setItem('carrier_key', key.toUpperCase());
+                    userVerificationStatus = 'VERIFIED';
+                    if (keyInput) keyInput.value = '';
+                    loadProfile();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка привязки ключа', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети при привязке ключа', 'error');
             }
         }
 
