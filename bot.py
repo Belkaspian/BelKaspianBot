@@ -477,6 +477,30 @@ def init_db():
         )
     """)
     
+    # Таблица создается сразу со всеми нужными полями, а небезопасный дефолтный пароль 123456 удален
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS carrier_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_code TEXT UNIQUE,
+            user_id INTEGER DEFAULT 0,
+            company TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            status TEXT DEFAULT 'UNUSED',
+            max_users INTEGER DEFAULT 5,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_excel_payments (
+            order_number TEXT PRIMARY KEY,
+            paid_amount TEXT,
+            paid_date TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     migrations = [
         "ALTER TABLE confirmed_deals ADD COLUMN load_id INTEGER",
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
@@ -520,31 +544,7 @@ def init_db():
         try:
             cursor.execute(migration)
         except sqlite3.OperationalError:
-            pass 
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS processed_excel_payments (
-            order_number TEXT PRIMARY KEY,
-            paid_amount TEXT,
-            paid_date TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS carrier_keys (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key_code TEXT UNIQUE,
-            user_id INTEGER DEFAULT 0,
-            company TEXT DEFAULT '',
-            name TEXT DEFAULT '',
-            phone TEXT DEFAULT '',
-            status TEXT DEFAULT 'UNUSED',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
+            pass
     
     conn.commit()
     conn.close()
@@ -2626,6 +2626,20 @@ async def send_welcome_message(message: types.Message):
     await message.answer(
         "Используйте кнопку ниже для доступа к меню:",
         reply_markup=get_main_reply_markup(message.from_user)
+    )
+
+@dp.message(Command("admin"))
+@dp.message(F.text.lower().in_(["/admin", "admin", "админ", "/админ"]))
+async def cmd_admin_private(message: types.Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    builder = InlineKeyboardBuilder()
+    admin_web_url = f"{RENDER_URL}/webapp?tab=admin&user_id={user_id}"
+    builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", web_app=WebAppInfo(url=admin_web_url)))
+    await message.answer(
+        "⚙️ **Панель управления администратора**\n\nНажмите кнопку ниже для перехода:",
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
     )
 
 @dp.message(F.text == "📱 Вызвать меню")
