@@ -485,6 +485,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN pending_name TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN pending_phone TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN company_key TEXT DEFAULT ''",
+        "ALTER TABLE carrier_keys ADD COLUMN max_users INTEGER DEFAULT 5",
         "ALTER TABLE pending_counters ADD COLUMN action_type TEXT DEFAULT 'COUNTER'",
         "ALTER TABLE loads ADD COLUMN cargo_type TEXT",
         "ALTER TABLE loads ADD COLUMN weight TEXT",
@@ -2573,6 +2574,16 @@ async def cmd_activate_key_in_chat(message: types.Message):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
+
+    # Проверка перехода по персональной ссылке-приглашению (Deep Link вида /start key_XXX-XXX)
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    if args and args[0].startswith("key_"):
+        raw_key = args[0].replace("key_", "").strip()
+        success, link_msg = link_key_to_user_profile(user_id, raw_key)
+        if success:
+            await message.answer(f"✅ {link_msg}")
+        else:
+            await message.answer(f"⚠️ {link_msg}")
     
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
@@ -4827,9 +4838,12 @@ async def my_loads_api(request):
                    COALESCE(cd.driver_phone, ''),
                    COALESCE(cd.unload_date, ''),
                    COALESCE(cd.is_unloaded, 0),
-                   COALESCE(cd.order_number, '')
+                   COALESCE(cd.order_number, ''),
+                   COALESCE(u_book.name, 'Сотрудник'),
+                   COALESCE(u_book.phone, '')
             FROM confirmed_deals cd
             LEFT JOIN loads l ON cd.load_id = l.load_id
+            LEFT JOIN users u_book ON cd.user_id = u_book.user_id
             WHERE {user_filter_sql}
             ORDER BY cd.id DESC
         """, user_filter_params)
@@ -4891,7 +4905,7 @@ async def my_loads_api(request):
         })
 
     for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num = r
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone = r
 
         dt_start, dt_end = parse_cargo_date_range(date_str)
         is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
@@ -4921,7 +4935,9 @@ async def my_loads_api(request):
             "driver_name": drv_name or "",
             "driver_phone": drv_phone or "",
             "unload_date": unl_date or "",
-            "order_number": ord_num or ""
+            "order_number": ord_num or "",
+            "booked_by_name": b_name or "Сотрудник",
+            "booked_by_phone": b_phone or ""
         })
             
     return web.json_response({"deals": deals})
@@ -5986,7 +6002,7 @@ def generate_carrier_code() -> str:
     return f"{part1}-{part2}"
 
 async def activate_carrier_key_api(request):
-    """Активация ключа сотрудником через веб-браузер (к 1 ключу компании может подключаться N сотрудников)."""
+    """Активация ключа сотрудником через веб-браузер с проверкой лимита."""
     try:
         data = await request.json()
         raw_key = data.get('key_code', '').strip().upper()
@@ -6005,33 +6021,36 @@ async def activate_carrier_key_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT id, status, company FROM carrier_keys WHERE key_code = ?", (formatted_key,))
+        cursor.execute("SELECT id, status, company, COALESCE(max_users, 5) FROM carrier_keys WHERE key_code = ?", (formatted_key,))
         row = cursor.fetchone()
 
         if not row:
             conn.close()
             return web.json_response({"error": "Ключ не найден. Проверьте правильность ввода."}, status=404)
 
-        key_id, k_status, saved_comp = row
+        key_id, k_status, saved_comp, max_users = row
 
         if k_status == 'BLOCKED':
             conn.close()
             return web.json_response({"error": "Ключ этой компании заблокирован администратором."}, status=403)
 
-        # Если у ключа уже сохранено название компании — используем его, иначе берем введенное первым сотрудником
+        # Проверка лимита сотрудников компании
+        cursor.execute("SELECT COUNT(*) FROM users WHERE company_key = ? AND status != 'BLOCKED'", (formatted_key,))
+        active_count = cursor.fetchone()[0]
+        if active_count >= max_users:
+            conn.close()
+            return web.json_response({"error": f"Достигнут лимит сотрудников компании (макс. {max_users} чел.)."}, status=400)
+
         final_company = saved_comp if saved_comp and saved_comp != '—' else (company_input or "Компания")
 
-        # Генерируем уникальный Web ID для ЭТОГО конкретного сотрудника
         import random
         new_employee_id = 80000000 + random.randint(10000, 999999)
 
-        # Создаем сотрудника в таблице users с привязкой к ключу компании
         cursor.execute("""
             INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status, company_key)
             VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED', ?)
         """, (new_employee_id, final_company, employee_name, employee_phone, formatted_key))
 
-        # Обновляем название компании у ключа
         cursor.execute("""
             UPDATE carrier_keys 
             SET status = 'ACTIVE', company = ?
@@ -6041,7 +6060,6 @@ async def activate_carrier_key_api(request):
         conn.commit()
         conn.close()
 
-        # Уведомляем администратора в админ-канале о подключении конкретного сотрудника
         try:
             msg_text = (
                 f"🔑 **ПОДКЛЮЧЕН СОТРУДНИК К КЛЮЧУ**\n\n"
@@ -6068,29 +6086,35 @@ async def activate_carrier_key_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 def link_key_to_user_profile(target_user_id: int, key_code: str) -> tuple[bool, str]:
-    """Привязывает Telegram-аккаунт сотрудника к ключу компании (не стирая других коллег)."""
+    """Привязывает Telegram-аккаунт сотрудника к ключу компании с проверкой лимита."""
     raw_key = key_code.strip().upper()
     clean = re.sub(r'[^A-Z0-9]', '', raw_key)
     formatted = f"{clean[:3]}-{clean[3:]}" if len(clean) == 6 else raw_key
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, company, status FROM carrier_keys WHERE key_code = ?", (formatted,))
+    cursor.execute("SELECT id, company, status, COALESCE(max_users, 5) FROM carrier_keys WHERE key_code = ?", (formatted,))
     row = cursor.fetchone()
 
     if not row:
         conn.close()
         return False, "Ключ не найден. Проверьте правильность ввода."
 
-    k_id, comp, k_status = row
+    k_id, comp, k_status, max_users = row
 
     if k_status == 'BLOCKED':
         conn.close()
         return False, "Данный ключ доступа заблокирован администратором."
 
+    # Проверка лимита сотрудников (если пользователь еще не был привязан к этому ключу)
+    cursor.execute("SELECT COUNT(*) FROM users WHERE company_key = ? AND status != 'BLOCKED' AND user_id != ?", (formatted, target_user_id))
+    active_count = cursor.fetchone()[0]
+    if active_count >= max_users:
+        conn.close()
+        return False, f"Достигнут лимит сотрудников компании (максимум {max_users} чел.)."
+
     final_comp = comp if comp and comp != '—' else "Компания"
 
-    # Привязываем Telegram-аккаунт к ключу компании, делаем его верифицированным
     cursor.execute("""
         INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status, company_key)
         VALUES (?, ?, 'Сотрудник', '', 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED', ?)
@@ -6101,14 +6125,8 @@ def link_key_to_user_profile(target_user_id: int, key_code: str) -> tuple[bool, 
             verification_status = 'VERIFIED'
     """, (target_user_id, final_comp, formatted))
 
-    # Ключ теперь активен
     cursor.execute("UPDATE carrier_keys SET status = 'ACTIVE' WHERE id = ?", (k_id,))
     conn.commit()
-
-    # Считываем имя сотрудника для подтверждения
-    cursor.execute("SELECT name, phone FROM users WHERE user_id = ?", (target_user_id,))
-    u_row = cursor.fetchone()
-    emp_name = u_row[0] if u_row and u_row[0] else "Сотрудник"
     conn.close()
 
     return True, f"Вы успешно подключены к компании «{final_comp}»! Все грузы компании теперь доступны."
@@ -6130,42 +6148,81 @@ async def link_carrier_key_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 async def admin_get_keys_api(request):
-    """Список всех ключей для панели администратора."""
+    """Список всех ключей со списком привязанных сотрудников для админки."""
     if not is_admin_authorized(request):
         return web.json_response({"error": "Доступ запрещен."}, status=403)
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, key_code, user_id, company, name, phone, status, created_at
+        SELECT id, key_code, company, status, COALESCE(max_users, 5), created_at
         FROM carrier_keys
         ORDER BY id DESC
     """)
     rows = cursor.fetchall()
+
+    keys = []
+    for r in rows:
+        k_id, k_code, comp, status, max_u, created_at = r
+        cursor.execute("""
+            SELECT user_id, name, phone, status
+            FROM users
+            WHERE company_key = ?
+            ORDER BY user_id DESC
+        """, (k_code,))
+        emp_rows = cursor.fetchall()
+        employees = [{
+            "user_id": er[0],
+            "name": er[1] or "Сотрудник",
+            "phone": er[2] or "Не указан",
+            "status": er[3] or "ACTIVE"
+        } for er in emp_rows]
+
+        keys.append({
+            "id": k_id,
+            "key_code": k_code,
+            "company": comp or "—",
+            "status": status or "UNUSED",
+            "max_users": max_u,
+            "employees_count": len(employees),
+            "employees": employees,
+            "created_at": created_at or ""
+        })
+
     conn.close()
 
-    keys = [{
-        "id": r[0],
-        "key_code": r[1],
-        "user_id": r[2],
-        "company": r[3] or "—",
-        "name": r[4] or "—",
-        "phone": r[5] or "—",
-        "status": r[6] or "UNUSED",
-        "created_at": r[7] or ""
-    } for r in rows]
+    bot_username = ""
+    try:
+        b_info = await bot.get_me()
+        bot_username = b_info.username or ""
+    except Exception:
+        pass
 
-    return web.json_response({"keys": keys})
+    return web.json_response({
+        "keys": keys,
+        "bot_username": bot_username,
+        "render_url": RENDER_URL.rstrip('/')
+    })
 
 async def admin_generate_key_api(request):
-    """Генерация нового ключа администратором."""
-    if not is_admin_authorized(request):
+    """Генерация нового ключа с возможностью сразу задать компанию и лимит."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
         return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    company = data.get('company', '').strip()
+    try:
+        max_users = int(data.get('max_users', 5))
+    except (ValueError, TypeError):
+        max_users = 5
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
 
-    # Генерируем уникальный код
     new_code = ""
     for _ in range(10):
         code_candidate = generate_carrier_code()
@@ -6176,16 +6233,47 @@ async def admin_generate_key_api(request):
 
     if not new_code:
         conn.close()
-        return web.json_response({"error": "Не удалось сгенерировать уникальный код"}, status=500)
+        return web.json_response({"error": "Не удалось сгенерировать код"}, status=500)
 
-    cursor.execute("INSERT INTO carrier_keys (key_code, status) VALUES (?, 'UNUSED')", (new_code,))
+    cursor.execute("""
+        INSERT INTO carrier_keys (key_code, company, status, max_users) 
+        VALUES (?, ?, 'UNUSED', ?)
+    """, (new_code, company, max_users))
     conn.commit()
     conn.close()
 
     return web.json_response({"status": "success", "key_code": new_code})
 
+async def admin_unlink_employee_api(request):
+    """Отвязка конкретного уволенного сотрудника от компании без блокировки ключа."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    u_id = int(data.get('user_id', 0))
+    if not u_id:
+        return web.json_response({"error": "ID пользователя не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET company_key = '', verification_status = 'UNVERIFIED' WHERE user_id = ?", (u_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(u_id, "Доступ отключен", "Вы были отвязаны от профиля компании администратором.")
+    try:
+        await bot.send_message(chat_id=u_id, text="⚠️ Вы были отвязаны от корпоративного профиля компании администратором. Доступ закрыт.")
+    except Exception:
+        pass
+
+    return web.json_response({"status": "success"})
+
 async def admin_toggle_key_status_api(request):
-    """Блокировка или разблокировка ключа и привязанного пользователя."""
+    """Блокировка или разблокировка ключа и всех его сотрудников."""
     try:
         data = await request.json()
     except Exception:
@@ -6200,19 +6288,18 @@ async def admin_toggle_key_status_api(request):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT status, user_id, key_code FROM carrier_keys WHERE id = ?", (key_id,))
+    cursor.execute("SELECT status, key_code FROM carrier_keys WHERE id = ?", (key_id,))
     row = cursor.fetchone()
 
     if not row:
         conn.close()
         return web.json_response({"error": "Ключ не найден"}, status=404)
 
-    current_status, linked_uid, key_code = row
+    current_status, key_code = row
     new_status = 'BLOCKED' if current_status != 'BLOCKED' else 'ACTIVE'
 
     cursor.execute("UPDATE carrier_keys SET status = ? WHERE id = ?", (new_status, key_id))
 
-    # Блокируем или разблокируем ВСЕХ сотрудников, привязанных к этому ключу компании!
     user_status = 'BLOCKED' if new_status == 'BLOCKED' else 'ACTIVE'
     cursor.execute("UPDATE users SET status = ? WHERE company_key = ?", (user_status, key_code))
 
@@ -6566,6 +6653,7 @@ async def web_server():
     app.router.add_get("/api/admin/keys", admin_get_keys_api)
     app.router.add_post("/api/admin/generate_key", admin_generate_key_api)
     app.router.add_post("/api/admin/toggle_key_status", admin_toggle_key_status_api)
+    app.router.add_post("/api/admin/unlink_employee", admin_unlink_employee_api)
     
     app.on_startup.append(webserver_on_startup)
     runner = web.AppRunner(app)
