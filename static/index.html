@@ -1737,6 +1737,15 @@
                 <label>Номер телефона</label>
                 <input type="text" id="editCarrierPhone" placeholder="+375 / +7..." />
             </div>
+            <div class="form-group">
+                <label>Корпоративный ключ (на 5 сотрудников)</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="editCarrierKey" placeholder="XXX-XXX" style="font-weight:700; text-transform:uppercase; letter-spacing:1px; text-align:center; font-size:13px;" />
+                    <button type="button" class="btn btn-secondary" style="font-size:10.5px; padding:0 10px; white-space:nowrap; height:36px;" onclick="generateRandomCarrierKeyInput()">
+                        🎲 Новый ключ
+                    </button>
+                </div>
+            </div>
             <div class="form-group" id="editCarrierSubsGroup">
                 <label>Подписки на направления (через запятую)</label>
                 <input type="text" id="editCarrierSubs" placeholder="Казахстан, Узбекистан..." />
@@ -2925,7 +2934,10 @@
                             </div>
                             <div class="col-route">
                                 <span style="font-weight:700; color:var(--text); text-overflow:ellipsis; overflow:hidden;">${c.company}</span>
-                                <span style="font-size:9.5px; color:var(--text-muted); text-overflow:ellipsis; overflow:hidden;">${c.name} • ${c.phone}</span>
+                                <span style="font-size:9.5px; color:var(--text-muted); text-overflow:ellipsis; overflow:hidden;">
+                                    ${c.name} • ${c.phone} 
+                                    ${c.company_key ? ` • <b style="color:var(--primary); font-size:10px; letter-spacing:0.5px;">🔑 ${c.company_key}</b>` : ''}
+                                </span>
                             </div>
                             <div class="col-truck">
                                 <span class="badge" style="font-size:8.5px; padding:2px 5px; ${isBlocked ? 'background:#fee2e2; color:#b91c1c;' : 'background:#dcfce7; color:#15803d;'}">
@@ -3004,6 +3016,14 @@
         }
 
         /* 4. МОДАЛКИ РЕДАКТИРОВАНИЯ И ДОБАВЛЕНИЯ ГРУЗОВ */
+        function generateRandomCarrierKeyInput() {
+            const chars = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+            let p1 = "", p2 = "";
+            for (let i = 0; i < 3; i++) p1 += chars.charAt(Math.floor(Math.random() * chars.length));
+            for (let i = 0; i < 3; i++) p2 += chars.charAt(Math.floor(Math.random() * chars.length));
+            document.getElementById('editCarrierKey').value = `${p1}-${p2}`;
+        }
+
         function openEditCarrierModal(userId, isEmployee = false) {
             let user = allAdminCarriersArray.find(c => String(c.user_id) === String(userId));
             if (!user) {
@@ -3011,7 +3031,7 @@
                 allAdminKeysArray.forEach(k => {
                     if (k.employees) {
                         let emp = k.employees.find(e => String(e.user_id) === String(userId));
-                        if (emp) user = { user_id: emp.user_id, company: k.company, name: emp.name, phone: emp.phone, subscriptions: '', verification_status: 'VERIFIED' };
+                        if (emp) user = { user_id: emp.user_id, company: k.company, name: emp.name, phone: emp.phone, subscriptions: '', verification_status: 'VERIFIED', company_key: k.key_code };
                     }
                 });
             }
@@ -3021,6 +3041,7 @@
             document.getElementById('editCarrierCompany').value = user ? (user.company || '') : '';
             document.getElementById('editCarrierName').value = user ? (user.name || '') : '';
             document.getElementById('editCarrierPhone').value = user ? (user.phone || '') : '';
+            document.getElementById('editCarrierKey').value = user ? (user.company_key || '') : '';
             document.getElementById('editCarrierSubs').value = user ? (user.subscriptions || '') : '';
             document.getElementById('editCarrierVerify').value = user ? (user.verification_status || 'VERIFIED') : 'VERIFIED';
 
@@ -3032,6 +3053,7 @@
             let comp = document.getElementById('editCarrierCompany').value.trim();
             let name = document.getElementById('editCarrierName').value.trim();
             let phone = document.getElementById('editCarrierPhone').value.trim();
+            let key = document.getElementById('editCarrierKey').value.trim();
             let subs = document.getElementById('editCarrierSubs').value.trim();
             let vStat = document.getElementById('editCarrierVerify').value;
 
@@ -3046,13 +3068,14 @@
                         company: comp,
                         name: name,
                         phone: phone,
+                        company_key: key,
                         subscriptions: subs,
                         verification_status: vStat
                     })
                 });
                 let data = await res.json();
                 if (res.ok) {
-                    showToast('Данные успешно сохранены!', 'success');
+                    showToast('Данные и ключ успешно сохранены!', 'success');
                     closeModal('adminEditCarrierModal');
                     loadAdminData(false);
                 } else {
@@ -4021,9 +4044,9 @@
                 let waDigits = (d.driver_phone || '').replace(/\D/g, '');
                 let phoneBtnsHTML = '';
                 if (cleanPhone && cleanPhone.length >= 7) {
-                    phoneBtnsHTML = '<div style="display:flex; gap:6px; margin-top:5px;" onclick="event.stopPropagation()">' +
-                        '<a href="tel:' + cleanPhone + '" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-weight:700;">📞 Набрать</a>' +
-                        '<a href="https://wa.me/' + waDigits + '" target="_blank" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; gap:4px; font-weight:700;">💬 WhatsApp</a>' +
+                    phoneBtnsHTML = '<div style="display:flex; gap:4px; margin-top:6px; width:100%;" onclick="event.stopPropagation()">' +
+                        '<a href="tel:' + cleanPhone + '" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:3px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">📞 Набрать</a>' +
+                        '<a href="https://wa.me/' + waDigits + '" target="_blank" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; justify-content:center; gap:3px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">💬 WhatsApp</a>' +
                         '</div>';
                 }
 
