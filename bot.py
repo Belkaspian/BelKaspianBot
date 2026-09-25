@@ -6104,13 +6104,21 @@ async def activate_carrier_key_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 def link_key_to_user_profile(target_user_id: int, key_code: str) -> tuple[bool, str]:
-    """Привязывает Telegram-аккаунт сотрудника к ключу компании с проверкой лимита."""
+    """Привязывает Telegram-аккаунт сотрудника к ключу компании с проверкой лимита и статуса блокировки."""
     raw_key = key_code.strip().upper()
     clean = re.sub(r'[^A-Z0-9]', '', raw_key)
     formatted = f"{clean[:3]}-{clean[3:]}" if len(clean) == 6 else raw_key
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+
+    # Проверяем, не заблокирован ли сам пользователь (например, уволен ранее)
+    cursor.execute("SELECT status FROM users WHERE user_id = ?", (target_user_id,))
+    u_row = cursor.fetchone()
+    if u_row and u_row[0] == 'BLOCKED':
+        conn.close()
+        return False, "Ваш профиль заблокирован. Доступ к корпоративным ключам закрыт."
+
     cursor.execute("SELECT id, company, status, COALESCE(max_users, 5) FROM carrier_keys WHERE key_code = ?", (formatted,))
     row = cursor.fetchone()
 
@@ -6263,7 +6271,7 @@ async def admin_generate_key_api(request):
     return web.json_response({"status": "success", "key_code": new_code})
 
 async def admin_unlink_employee_api(request):
-    """Отвязка конкретного уволенного сотрудника от компании без блокировки ключа."""
+    """Отвязка конкретного сотрудника с блокировкой его аккаунта от повторного входа."""
     try:
         data = await request.json()
     except Exception:
@@ -6278,17 +6286,65 @@ async def admin_unlink_employee_api(request):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET company_key = '', verification_status = 'UNVERIFIED' WHERE user_id = ?", (u_id,))
+    # Блокируем профиль уволенного сотрудника, чтобы он не смог использовать ключ повторно
+    cursor.execute("UPDATE users SET company_key = '', verification_status = 'UNVERIFIED', status = 'BLOCKED' WHERE user_id = ?", (u_id,))
     conn.commit()
     conn.close()
 
     add_notification(u_id, "Доступ отключен", "Вы были отвязаны от профиля компании администратором.")
     try:
-        await bot.send_message(chat_id=u_id, text="⚠️ Вы были отвязаны от корпоративного профиля компании администратором. Доступ закрыт.")
+        await bot.send_message(chat_id=u_id, text="⚠️ Вы были отвязаны от профиля компании администратором. Доступ закрыт.")
     except Exception:
         pass
 
     return web.json_response({"status": "success"})
+
+async def admin_rotate_company_key_api(request):
+    """Смена ключа для компании: старый ключ сгорает, текущие сотрудники остаются в системе."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    key_id = int(data.get('id', 0))
+    if not key_id:
+        return web.json_response({"error": "ID ключа не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT key_code, company FROM carrier_keys WHERE id = ?", (key_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return web.json_response({"error": "Ключ не найден"}, status=404)
+
+    old_code, company_name = row
+
+    # Генерируем новый уникальный ключ
+    new_code = ""
+    for _ in range(10):
+        cand = generate_carrier_code()
+        cursor.execute("SELECT id FROM carrier_keys WHERE key_code = ?", (cand,))
+        if not cursor.fetchone():
+            new_code = cand
+            break
+
+    if not new_code:
+        conn.close()
+        return web.json_response({"error": "Ошибка генерации кода"}, status=500)
+
+    # 1. Заменяем ключ у компании
+    cursor.execute("UPDATE carrier_keys SET key_code = ? WHERE id = ?", (new_code, key_id))
+    # 2. Обновляем привязку у всех текущих работающих сотрудников этой компании
+    cursor.execute("UPDATE users SET company_key = ? WHERE company_key = ?", (new_code, old_code))
+
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success", "new_key": new_code, "company": company_name})
 
 async def admin_toggle_key_status_api(request):
     """Блокировка или разблокировка ключа и всех его сотрудников."""
@@ -6672,6 +6728,7 @@ async def web_server():
     app.router.add_post("/api/admin/generate_key", admin_generate_key_api)
     app.router.add_post("/api/admin/toggle_key_status", admin_toggle_key_status_api)
     app.router.add_post("/api/admin/unlink_employee", admin_unlink_employee_api)
+    app.router.add_post("/api/admin/rotate_company_key", admin_rotate_company_key_api)
     
     app.on_startup.append(webserver_on_startup)
     runner = web.AppRunner(app)
