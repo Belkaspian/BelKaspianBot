@@ -529,6 +529,19 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS carrier_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_code TEXT UNIQUE,
+            user_id INTEGER DEFAULT 0,
+            company TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            status TEXT DEFAULT 'UNUSED',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
     
     conn.commit()
@@ -5925,6 +5938,206 @@ async def admin_cancel_deal_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
+import secrets
+
+def generate_carrier_code() -> str:
+    """Генерирует ключ формата XXX-XXX без путающихся символов (0/O, 1/I)."""
+    alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+    part1 = "".join(secrets.choice(alphabet) for _ in range(3))
+    part2 = "".join(secrets.choice(alphabet) for _ in range(3))
+    return f"{part1}-{part2}"
+
+async def activate_carrier_key_api(request):
+    """Активация ключа перевозчиком при входе через браузер без Telegram."""
+    try:
+        data = await request.json()
+        raw_key = data.get('key_code', '').strip().upper()
+        clean_key = re.sub(r'[^A-Z0-9]', '', raw_key)
+        if len(clean_key) == 6:
+            formatted_key = f"{clean_key[:3]}-{clean_key[3:]}"
+        else:
+            formatted_key = raw_key
+
+        company = data.get('company', '').strip()
+        name = data.get('name', '').strip()
+        phone = data.get('phone', '').strip()
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, user_id, status, company, name, phone FROM carrier_keys WHERE key_code = ?", (formatted_key,))
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return web.json_response({"error": "Ключ не найден. Проверьте правильность ввода."}, status=404)
+
+        key_id, u_id, k_status, saved_comp, saved_name, saved_phone = row
+
+        if k_status == 'BLOCKED':
+            conn.close()
+            return web.json_response({"error": "Этот ключ заблокирован администратором."}, status=403)
+
+        # Если ключ уже был активирован ранее — просто авторизуем перевозчика повторно
+        if k_status == 'ACTIVE' and u_id:
+            conn.close()
+            return web.json_response({
+                "status": "success",
+                "user_id": u_id,
+                "company": saved_comp,
+                "name": saved_name,
+                "phone": saved_phone,
+                "key_code": formatted_key
+            })
+
+        # Если ключ новый (UNUSED) — регистрируем компанию
+        if not company or not name or not phone:
+            conn.close()
+            return web.json_response({"error": "Заполните все поля: Компания, ФИО и Телефон."}, status=400)
+
+        # Генерируем уникальный ID для веб-перевозчика (от 80000000+)
+        new_web_user_id = 80000000 + key_id
+
+        # Создаем верифицированного пользователя в таблице users
+        cursor.execute("""
+            INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status)
+            VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED')
+            ON CONFLICT(user_id) DO UPDATE SET
+                company = excluded.company,
+                name = excluded.name,
+                phone = excluded.phone,
+                status = 'ACTIVE',
+                verification_status = 'VERIFIED'
+        """, (new_web_user_id, company, name, phone))
+
+        # Обновляем статус ключа
+        cursor.execute("""
+            UPDATE carrier_keys 
+            SET status = 'ACTIVE', user_id = ?, company = ?, name = ?, phone = ?
+            WHERE id = ?
+        """, (new_web_user_id, company, name, phone, key_id))
+
+        conn.commit()
+        conn.close()
+
+        # Уведомляем администратора в админ-канале
+        try:
+            msg_text = (
+                f"🔑 **АКТИВИРОВАН НОВЫЙ КЛЮЧ ДОСТУПА**\n\n"
+                f"• Ключ: `{formatted_key}`\n"
+                f"• Компания: {company}\n"
+                f"• Контакт: {name}\n"
+                f"• Телефон: {phone}\n"
+                f"• Назначен Web-ID: `{new_web_user_id}`"
+            )
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+        return web.json_response({
+            "status": "success",
+            "user_id": new_web_user_id,
+            "company": company,
+            "name": name,
+            "phone": phone,
+            "key_code": formatted_key
+        })
+
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+async def admin_get_keys_api(request):
+    """Список всех ключей для панели администратора."""
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, key_code, user_id, company, name, phone, status, created_at
+        FROM carrier_keys
+        ORDER BY id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    keys = [{
+        "id": r[0],
+        "key_code": r[1],
+        "user_id": r[2],
+        "company": r[3] or "—",
+        "name": r[4] or "—",
+        "phone": r[5] or "—",
+        "status": r[6] or "UNUSED",
+        "created_at": r[7] or ""
+    } for r in rows]
+
+    return web.json_response({"keys": keys})
+
+async def admin_generate_key_api(request):
+    """Генерация нового ключа администратором."""
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+
+    # Генерируем уникальный код
+    new_code = ""
+    for _ in range(10):
+        code_candidate = generate_carrier_code()
+        cursor.execute("SELECT id FROM carrier_keys WHERE key_code = ?", (code_candidate,))
+        if not cursor.fetchone():
+            new_code = code_candidate
+            break
+
+    if not new_code:
+        conn.close()
+        return web.json_response({"error": "Не удалось сгенерировать уникальный код"}, status=500)
+
+    cursor.execute("INSERT INTO carrier_keys (key_code, status) VALUES (?, 'UNUSED')", (new_code,))
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success", "key_code": new_code})
+
+async def admin_toggle_key_status_api(request):
+    """Блокировка или разблокировка ключа и привязанного пользователя."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    key_id = int(data.get('id', 0))
+    if not key_id:
+        return web.json_response({"error": "ID ключа не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, user_id, key_code FROM carrier_keys WHERE id = ?", (key_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return web.json_response({"error": "Ключ не найден"}, status=404)
+
+    current_status, linked_uid, key_code = row
+    new_status = 'BLOCKED' if current_status != 'BLOCKED' else 'ACTIVE'
+
+    cursor.execute("UPDATE carrier_keys SET status = ? WHERE id = ?", (new_status, key_id))
+
+    # Если ключ привязан к перевозчику — синхронно блокируем/разблокируем его аккаунт
+    if linked_uid:
+        user_status = 'BLOCKED' if new_status == 'BLOCKED' else 'ACTIVE'
+        cursor.execute("UPDATE users SET status = ? WHERE user_id = ?", (user_status, linked_uid))
+
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success", "new_status": new_status})
+
 async def serve_index(request):
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -6265,6 +6478,10 @@ async def web_server():
     app.router.add_get("/api/admin/confirmed_deals", admin_get_confirmed_deals_api)
     app.router.add_post("/api/admin/edit_deal", admin_edit_deal_api)
     app.router.add_post("/api/admin/cancel_deal", admin_cancel_deal_api)
+    app.router.add_post("/api/carrier/activate_key", activate_carrier_key_api)
+    app.router.add_get("/api/admin/keys", admin_get_keys_api)
+    app.router.add_post("/api/admin/generate_key", admin_generate_key_api)
+    app.router.add_post("/api/admin/toggle_key_status", admin_toggle_key_status_api)
     
     app.on_startup.append(webserver_on_startup)
     runner = web.AppRunner(app)
