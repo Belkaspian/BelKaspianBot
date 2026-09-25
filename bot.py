@@ -144,7 +144,7 @@ CHANNELS = {
     "Казахстан 🇰🇿": -1004309918435,
     "Узбекистан 🇺🇿": -1003470705929,
     "Кыргызстан 🇰🇬": -1004470387295,
-    "Азербайджан 🇦зербайджан": -1004483200216,
+    "Азербайджан 🇦🇿": -1004483200216,
     "Грузия 🇬🇪": -1004340496095,
     "Армения 🇦🇲": -1004335138909
 }
@@ -4010,7 +4010,7 @@ async def handle_admin_cargo_command(message: types.Message):
             report_html, 
             parse_mode="HTML", 
             disable_web_page_preview=True,
-            reply_markup=builder.as_markup() if all_cards else None
+            reply_markup=builder.as_markup() if parsed_all_cards else None
         )
     except Exception as e:
         logging.error(f"Ошибка вывода грузов Kaiten: {e}")
@@ -4081,30 +4081,6 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
         if any(clean_dir in s for s in u_subs):
             await send_cargo_to_user(u_id, new_cargo_id)
 
-        clean_dir = dest_country.split()[0].strip().lower()
-        target_channel_id = None
-        for chan_name, chan_id in CHANNELS.items():
-            if clean_dir in chan_name.lower():
-                target_channel_id = chan_id
-                break
-
-        if target_channel_id:
-            try:
-                bot_info = await bot.get_me()
-                b_username = bot_info.username or ""
-                chan_card = f"📍 **{c_date} | {c_route}**\n💰 **{c_price}** | 🚚 {c_cars} авто\n🚛 {c_cartype} | {c_cargotype} | {c_weight}"
-                b_builder = InlineKeyboardBuilder()
-                if b_username:
-                    b_builder.row(types.InlineKeyboardButton(text="📱 Открыть в приложении", url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"))
-                await bot.send_message(chat_id=target_channel_id, text=chan_card, reply_markup=b_builder.as_markup() if b_username else None, parse_mode="Markdown")
-            except Exception:
-                pass
-
-        for u_id, subs, _ in active_users:
-            u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
-            if any(clean_dir in s for s in u_subs):
-                await send_cargo_to_user(u_id, new_cargo_id)
-
     conn.commit()
     conn.close()
 
@@ -4143,7 +4119,7 @@ async def handle_admin_find_command(message: types.Message):
     conn.close()
 
     if not rows:
-        await message.reply(f"🔍 По запросу `{query}` совпадений не найдено.", parse_mode="Markdown")
+        await message.reply(f"🔍 По запросу `{raw_q}` совпадений не найдено.", parse_mode="Markdown")
         return
 
     cards = []
@@ -4159,7 +4135,7 @@ async def handle_admin_find_command(message: types.Message):
             f"• **Статус:** {status_text} | 💰 {d_price}"
         )
 
-    await message.reply(f"🔍 **Результаты поиска по `{query}`:**\n\n" + "\n\n".join(cards), parse_mode="Markdown")
+    await message.reply(f"🔍 **Результаты поиска по `{raw_q}`:**\n\n" + "\n\n".join(cards), parse_mode="Markdown")
 
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/blacklist_del', 'blacklist_del'))))
@@ -4940,7 +4916,7 @@ async def process_deal_quantity(message: types.Message, state: FSMContext):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=None, parse_mode="HTML")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Error sending admin confirm notification: {e}")
 
@@ -6349,6 +6325,18 @@ def check_stoplist_matches(truck_plate: str, trailer_plate: str, driver_name: st
 
     return warnings
 
+def get_db_admin_password() -> str:
+    """Безопасное получение пароля администратора из базы данных."""
+    try:
+        conn = sqlite3.connect("cargo_bot.db", timeout=5)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = 'admin_password'")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else ""
+    except Exception:
+        return ""
+
 def is_admin_authorized(request, data: dict = None) -> bool:
     token = request.headers.get("X-Admin-Key")
     # Проверяем ключ не только в заголовках, но и в параметрах ссылки скачивания Excel
@@ -6585,28 +6573,7 @@ async def admin_get_confirmed_deals_api(request):
     if not is_admin_authorized(request):
         return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
 
-    conn = sqlite3.connect("cargo_bot.db", timeout=15)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, cd.details, cd.user_id,
-               COALESCE(u.company, 'Не указана'), COALESCE(u.name, 'Пользователь'), COALESCE(u.phone, 'Не указан'),
-               COALESCE(u.status, 'ACTIVE'),
-               COALESCE(l.destination_country, '')
-        FROM confirmed_deals cd
-        LEFT JOIN users u ON cd.user_id = u.user_id
-        LEFT JOIN loads l ON cd.load_id = l.load_id
-        ORDER BY cd.id DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-
-    deals = [{
-        "deal_id": r[0], "load_id": r[1], "date": r[2], "route": r[3], "cars": r[4], 
-        "price": r[5], "details": r[6], "user_id": r[7], "company": r[8], 
-        "name": r[9], "phone": r[10], "carrier_status": r[11], "destination_country": r[12]
-    } for r in rows]
-    return web.json_response({"deals": deals})
-
+    
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
