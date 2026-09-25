@@ -1916,7 +1916,16 @@
         function downloadAdminExcel() {
             let uid = getUserId();
             let key = localStorage.getItem('admin_key') || '';
-            window.open(`/api/admin/export_excel?user_id=${uid}&admin_key=${encodeURIComponent(key)}`, '_blank');
+            let downloadUrl = `/api/admin/export_excel?user_id=${uid}&admin_key=${encodeURIComponent(key)}`;
+
+            // Скачивание файла напрямую без открытия пустых окон в браузере
+            let a = document.createElement('a');
+            a.href = downloadUrl;
+            a.setAttribute('download', `deals_report_${Date.now()}.xlsx`);
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast('Скачивание отчёта Excel...', 'info');
         }
 
         function setTheme(theme) {
