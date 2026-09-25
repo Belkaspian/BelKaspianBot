@@ -5552,22 +5552,6 @@ async def my_loads_api(request):
         })
 
     for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay = r
-
-        # Если груз оплачен и прошло больше 5 дней — скрываем его из текущего экрана
-        if is_paid and paid_date:
-            try:
-                p_dt = datetime.strptime(paid_date[:10], "%d.%m.%Y").date()
-                if (msk_today - p_dt).days > 5:
-                    continue
-            except Exception:
-                pass
-
-        dt_start, dt_end = parse_cargo_date_range(date_str)
-        is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
-        has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
-        is_transit = bool(dt_end and msk_today > dt_end and not is_unl and has_submitted_docs)
-
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay, pay_d_stat, pay_d_err, p_amount = r
 
         # Если груз оплачен и прошло больше 5 дней — скрываем его из текущего экрана
