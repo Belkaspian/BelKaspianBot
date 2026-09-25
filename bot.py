@@ -541,6 +541,8 @@ def init_db():
     migrations = [
         "ALTER TABLE confirmed_deals ADD COLUMN load_id INTEGER",
         "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_reminded INTEGER DEFAULT 0",
+        "ALTER TABLE loads ADD COLUMN channel_id INTEGER",
+        "ALTER TABLE loads ADD COLUMN channel_message_id INTEGER",
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
         "ALTER TABLE users ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED'",
         "ALTER TABLE users ADD COLUMN pending_company TEXT DEFAULT ''",
@@ -1143,19 +1145,31 @@ def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text
     return card
 
 async def update_cargo_messages_for_all_users(cargo_id: int):
-    conn = sqlite3.connect("cargo_bot.db")
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
-    cursor.execute("SELECT date, route, price, cars_count, details, status, admin_comment FROM loads WHERE load_id = ?", (cargo_id,))
+    cursor.execute("SELECT date, route, price, cars_count, details, status, admin_comment, channel_id, channel_message_id FROM loads WHERE load_id = ?", (cargo_id,))
     row = cursor.fetchone()
     
     if not row:
         conn.close()
         return
         
-    date_str, route_str, price_str, cars_str, details_text, status, admin_comment = row
+    date_str, route_str, price_str, cars_str, details_text, status, admin_comment, chan_id, chan_msg_id = row
     is_closed = (status in ['CLOSED', 'EXPIRED'])
     new_text = build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment=admin_comment, is_closed=is_closed)
     
+    # Если груз закрыт/разобран — обновляем пост в региональном канале и убираем кнопку
+    if is_closed and chan_id and chan_msg_id:
+        try:
+            closed_chan_post = (
+                f"🚫 **[ГРУЗ ЗАКРЫТ / ЗАБРАН]**\n\n"
+                f"📍 {date_str} | {route_str}\n"
+                f"💰 {price_str} | 🚚 0 авто"
+            )
+            await bot.edit_message_text(chat_id=chan_id, message_id=chan_msg_id, text=closed_chan_post, reply_markup=None)
+        except Exception:
+            pass
+
     cursor.execute("SELECT user_id, message_id FROM user_messages WHERE cargo_id = ?", (cargo_id,))
     messages_to_edit = cursor.fetchall()
 
@@ -4005,7 +4019,7 @@ async def handle_admin_cargo_command(message: types.Message):
 
 @dp.callback_query(F.data.startswith("pub_kaiten_"))
 async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
-    """Публикация груза из Kaiten на Биржу в 1 клик."""
+    """Публикация груза из Kaiten на Биржу в 1 клик с точной подстановкой подсказок."""
     card_id = int(callback.data.replace("pub_kaiten_", ""))
     await callback.answer("⏳ Загружаю данные карточки из Kaiten...")
 
@@ -4018,39 +4032,54 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
     desc = card_data.get("description") or ""
     full_text = f"{title}\n{desc}".strip()
 
-    # Парсим через ИИ
-    ai_cargos = await parse_cargos_with_ai(full_text)
-    if not ai_cargos:
-        # Резервный парсинг
-        d_date, d_route, d_price, d_cars, d_details, d_cartype, d_cargotype, d_weight, d_expires = parse_cargo_raw(full_text)
-        ai_cargos = [{
-            "destination_country": detect_country(full_text),
-            "date": d_date, "route": d_route, "cars_count": d_cars, "price": d_price,
-            "car_type": d_cartype, "cargo_type": d_cargotype, "weight": d_weight,
-            "details": d_details, "time_limit": ""
-        }]
+    # Точный разбор чистого маршрута, даты и триггера клиента
+    card_date, clean_route, trigger = parse_kaiten_card_title(title, card_data.get("due_date", ""))
+    hint_text = get_cargo_hint(f"{title} {desc} {trigger}")
+
+    # Извлекаем кузов, груз и тоннаж из вашей подсказки
+    hint_lines = [h.strip() for h in hint_text.split('\n') if h.strip()]
+    c_cartype = hint_lines[0] if len(hint_lines) > 0 else "Тент/реф"
+    c_cargo_and_weight = hint_lines[1] if len(hint_lines) > 1 else (hint_text if len(hint_lines) == 1 else "ТНП до 22т")
+
+    dest_country = detect_country(f"{clean_route} {full_text}")
+    price_str = extract_price(full_text)
 
     conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, subscriptions, status FROM users WHERE status != 'BLOCKED'")
     active_users = cursor.fetchall()
 
-    for item in ai_cargos:
-        dest_country = item.get("destination_country") or "Все"
-        c_date = item.get("date") or "Срочно"
-        c_route = item.get("route") or title
-        c_cars = item.get("cars_count") or "1"
-        c_price = item.get("price") or "Торги"
-        c_cartype = item.get("car_type") or "Тент/реф"
-        c_cargotype = item.get("cargo_type") or "ТНП"
-        c_weight = item.get("weight") or "до 22т"
-        c_details = item.get("details") or ""
+    cursor.execute("""
+        INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status)
+        VALUES (?, ?, ?, '1', ?, ?, ?, ?, ?, '', 'ACTIVE')
+    """, (dest_country, card_date, clean_route, price_str, full_text, hint_text, c_cartype, c_cargo_and_weight))
+    new_cargo_id = cursor.lastrowid
 
-        cursor.execute("""
-            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-        """, (dest_country, c_date, c_route, c_cars, c_price, full_text, c_details, c_cartype, c_cargotype, c_weight))
-        new_cargo_id = cursor.lastrowid
+    clean_dir = dest_country.split()[0].strip().lower()
+    target_channel_id = None
+    for chan_name, chan_id in CHANNELS.items():
+        if clean_dir in chan_name.lower():
+            target_channel_id = chan_id
+            break
+
+    if target_channel_id:
+        try:
+            bot_info = await bot.get_me()
+            b_username = bot_info.username or ""
+            chan_card = f"📍 **{card_date} | {clean_route}**\n💰 **{price_str}** | 🚚 1 авто\n🚛 {hint_text}"
+            b_builder = InlineKeyboardBuilder()
+            if b_username:
+                b_builder.row(types.InlineKeyboardButton(text="📱 Открыть в приложении", url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"))
+            sent_ch_msg = await bot.send_message(chat_id=target_channel_id, text=chan_card, reply_markup=b_builder.as_markup() if b_username else None, parse_mode="Markdown")
+            if sent_ch_msg:
+                cursor.execute("UPDATE loads SET channel_id = ?, channel_message_id = ? WHERE load_id = ?", (target_channel_id, sent_ch_msg.message_id, new_cargo_id))
+        except Exception:
+            pass
+
+    for u_id, subs, _ in active_users:
+        u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
+        if any(clean_dir in s for s in u_subs):
+            await send_cargo_to_user(u_id, new_cargo_id)
 
         clean_dir = dest_country.split()[0].strip().lower()
         target_channel_id = None
@@ -4085,14 +4114,14 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/find', 'find', '/поиск', 'поиск'))))
 async def handle_admin_find_command(message: types.Message):
-    """Мгновенный поиск машины или водителя по номеру/фамилии."""
+    """Мгновенный поиск машины, водителя или номера заявки/Kaiten ID."""
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2:
-        await message.reply("ℹ️ Укажите номер авто или фамилию для поиска:\nНапример: `/find 1234` или `/find Иванов`", parse_mode="Markdown")
+        await message.reply("ℹ️ Укажите номер авто, фамилию или номер заявки:\nНапример: `/find 1234`, `/find Иванов` или `/find 931234`", parse_mode="Markdown")
         return
 
-    query = parts[1].strip()
-    clean_q = re.sub(r'[\s\W_]', '', query).upper()
+    raw_q = parts[1].strip()
+    clean_digits = re.sub(r'\D', '', raw_q)
 
     conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
@@ -4101,14 +4130,15 @@ async def handle_admin_find_command(message: types.Message):
                COALESCE(cd.last_truck_plate, ''), COALESCE(cd.last_trailer_plate, ''),
                COALESCE(cd.last_driver_name, ''), COALESCE(cd.driver_phone, ''),
                COALESCE(u.company, 'Не указана'), COALESCE(cd.unload_date, ''),
-               cd.is_unloaded, cd.status
+               cd.is_unloaded, cd.status, COALESCE(cd.kaiten_card_id, '')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
         WHERE cd.last_truck_plate LIKE ? OR cd.last_trailer_plate LIKE ?
            OR cd.last_driver_name LIKE ? OR cd.driver_phone LIKE ?
            OR cd.order_number LIKE ?
+           OR (length(?) > 3 AND cd.kaiten_card_id LIKE ?)
         ORDER BY cd.id DESC LIMIT 5
-    """, (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
+    """, (f"%{raw_q}%", f"%{raw_q}%", f"%{raw_q}%", f"%{raw_q}%", f"%{raw_q}%", clean_digits, f"%{clean_digits}%"))
     rows = cursor.fetchall()
     conn.close()
 
@@ -4189,13 +4219,47 @@ async def handle_admin_blacklist_command(message: types.Message):
     await message.reply("\n".join(lines), parse_mode="Markdown")
 
 
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/stats', 'stats', '/сводка', 'сводка', '/итоги'))))
+async def handle_admin_stats_command(message: types.Message):
+    """Мгновенная оперативная сводка для руководства и логистов."""
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM loads WHERE status = 'ACTIVE'")
+    active_loads = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM confirmed_deals WHERE is_unloaded = 0")
+    in_transit = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM confirmed_deals WHERE is_unloaded = 1 AND (is_paid = 0 OR is_paid IS NULL)")
+    awaiting_pay = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM blacklist WHERE item_type = 'VEHICLE'")
+    bl_veh = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM blacklist WHERE item_type = 'DRIVER'")
+    bl_drv = cursor.fetchone()[0]
+
+    conn.close()
+
+    stats_msg = (
+        "📊 **ОПЕРАТИВНАЯ СВОДКА БЕЛКАСПИАН**\n\n"
+        f"• 📦 Активных грузов на Бирже: **{active_loads}**\n"
+        f"• 🚚 Машин в рейсе (едут / погрузка): **{in_transit}**\n"
+        f"• ⏳ Выгружены и ждут оплаты: **{awaiting_pay}**\n"
+        f"• 🚫 В стоп-листе (ЧС): **{bl_veh} авто / {bl_drv} водителей**"
+    )
+    await message.reply(stats_msg, parse_mode="Markdown")
+
+
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/help', 'help', '/помощь', 'помощь', '/команды'))))
 async def handle_admin_help_command(message: types.Message):
     """Справка по командам, работающая только в админ-канале."""
     help_text = (
         "📖 **Шпаргалка команд Админ-канала:**\n\n"
-        "• **`/cargo`** (или **`грузы`**) — Актуальные грузы из первой колонки Kaiten с кнопками моментальной публикации\n\n"
-        "• **`/find 1234`** (или **`поиск Иванов`**) — Мгновенный поиск машины/водителя/рейса\n\n"
+        "• **`/stats`** (или **`сводка`**) — Мгновенная сводка по грузам, рейсам и оплатам\n\n"
+        "• **`/cargo`** (или **`грузы`**) — Актуальные грузы из Kaiten с кнопками моментальной публикации\n\n"
+        "• **`/find 1234`** (или **`поиск 931234`**) — Мгновенный поиск машины, водителя или номера заявки\n\n"
         "• **`/blacklist`** — Управление вечным чёрным списком (авто и водители)\n"
         "  *(Пример: `/blacklist авто 1234 АВ-7 Срыв погрузки`)*\n\n"
         "• **`/menu`** (или **`меню`**) — Вход в веб-панель управления (Биржа, Заказы, Ключи)\n\n"
@@ -4370,12 +4434,14 @@ async def handle_channel_post(message: types.Message):
                         url=f"https://t.me/{bot_username}?start=load_{new_cargo_id}"
                     ))
 
-                await bot.send_message(
+                chan_msg = await bot.send_message(
                     chat_id=target_channel_id,
                     text=channel_card,
                     reply_markup=chan_builder.as_markup() if bot_username else None,
                     parse_mode="Markdown"
                 )
+                if chan_msg:
+                    cursor.execute("UPDATE loads SET channel_id = ?, channel_message_id = ? WHERE load_id = ?", (target_channel_id, chan_msg.message_id, new_cargo_id))
             except Exception as chan_err:
                 logging.error(f"Ошибка публикации в региональный канал ({dest_country}): {chan_err}")
 
