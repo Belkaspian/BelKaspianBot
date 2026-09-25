@@ -366,10 +366,11 @@ async def auto_backup_db_loop():
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
-    conn = sqlite3.connect("cargo_bot.db")
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
     
     cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA busy_timeout = 5000;")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -2496,7 +2497,7 @@ async def auto_promote_payment_docs_status():
                     target_acc_date = add_business_days(sub_dt, 2)
 
                     if today_dt >= target_acc_date:
-                        planned_pay = add_business_days(today_dt, 11).strftime("%d.%m.%Y")
+                        planned_pay = add_business_days(today_dt, 10).strftime("%d.%m.%Y")
                         cursor.execute("""
                             UPDATE confirmed_deals 
                             SET pay_docs_status = 'ACCEPTED', planned_payment_date = ? 
@@ -3971,6 +3972,32 @@ async def handle_accept_bid(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("decline_bid_"))
 async def handle_decline_bid(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("decline_bid_", ""))
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="💸 Слишком дорого", callback_data=f"bid_reason_{bid_id}_expensive"),
+        types.InlineKeyboardButton(text="📦 Груз уже отдан", callback_data=f"bid_reason_{bid_id}_taken")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🚛 Не подходит ТС", callback_data=f"bid_reason_{bid_id}_wrong_truck"),
+        types.InlineKeyboardButton(text="❌ Без причины", callback_data=f"bid_reason_{bid_id}_none")
+    )
+    await callback.message.edit_text(callback.message.text + "\n\n❓ **Укажите причину отказа перевозчику:**", reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("bid_reason_"))
+async def handle_bid_reason_selected(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    bid_id = int(parts[2])
+    reason_code = parts[3]
+
+    reasons_map = {
+        "expensive": "Ставка слишком высокая",
+        "taken": "Груз уже отдан другому перевозчику",
+        "wrong_truck": "Не подходит тип транспортного средства",
+        "none": "Ставка отклонена логистом"
+    }
+    reason_text = reasons_map.get(reason_code, "Ставка отклонена")
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT load_id, user_id, rate FROM bids WHERE bid_id = ?", (bid_id,))
@@ -3986,13 +4013,13 @@ async def handle_decline_bid(callback: types.CallbackQuery):
         conn.commit()
         conn.close()
 
-        add_notification(user_id, "Ставка отклонена", f"Ваша ставка {rate} по грузу {route_str} была отклонена.")
+        add_notification(user_id, "Ставка отклонена", f"Ставка {rate} ({route_str}) отклонена. Причина: {reason_text}")
         try:
-            await bot.send_message(chat_id=user_id, text=f"Ваша ставка **{rate}** по грузу **{route_str}** была отклонена логистом.")
+            await bot.send_message(chat_id=user_id, text=f"❌ Ваша ставка **{rate}** по грузу **{route_str}** отклонена.\n**Причина:** {reason_text}")
         except Exception:
             pass
 
-        await callback.message.edit_text(callback.message.text + "\n\n• **СТАВКА ОТКЛОНЕНА**")
+        await callback.message.edit_text(callback.message.text + f"\n\n• **ОТКЛОНЕНО ({reason_text})**")
     else:
         conn.close()
         await callback.answer("Ставка не найдена.", show_alert=True)
@@ -4865,6 +4892,7 @@ async def my_loads_api(request):
             bid_filter_sql = "b.user_id = ? AND b.status IN ('PENDING', 'COUNTER')"
             bid_filter_params = (user_id,)
 
+        # Добавлено получение полей оплаты и скрытие грузов, оплаченных более 5 дней назад
         cursor.execute(f"""
             SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, 
                    COALESCE(cd.details, ''), COALESCE(cd.status, 'CONFIRMED'),
@@ -4882,7 +4910,10 @@ async def my_loads_api(request):
                    COALESCE(cd.is_unloaded, 0),
                    COALESCE(cd.order_number, ''),
                    COALESCE(u_book.name, 'Сотрудник'),
-                   COALESCE(u_book.phone, '')
+                   COALESCE(u_book.phone, ''),
+                   COALESCE(cd.is_paid, 0),
+                   COALESCE(cd.paid_date, ''),
+                   COALESCE(cd.planned_payment_date, '')
             FROM confirmed_deals cd
             LEFT JOIN loads l ON cd.load_id = l.load_id
             LEFT JOIN users u_book ON cd.user_id = u_book.user_id
@@ -4947,7 +4978,17 @@ async def my_loads_api(request):
         })
 
     for r in confirmed_rows:
-        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone = r
+        for r in confirmed_rows:
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay = r
+
+        # Если груз оплачен и прошло больше 5 дней — скрываем его из текущего экрана
+        if is_paid and paid_date:
+            try:
+                p_dt = datetime.strptime(paid_date[:10], "%d.%m.%Y").date()
+                if (msk_today - p_dt).days > 5:
+                    continue
+            except Exception:
+                pass
 
         dt_start, dt_end = parse_cargo_date_range(date_str)
         is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
@@ -5910,6 +5951,45 @@ async def admin_hard_delete_load_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
+async def admin_export_excel_api(request):
+    if not is_admin_authorized(request):
+        return web.Response(text="Доступ запрещен", status=403)
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cd.id, cd.order_number, cd.date, cd.route, cd.price, 
+               COALESCE(u.company, 'Не указана'), COALESCE(u.name, ''), COALESCE(u.phone, ''),
+               COALESCE(cd.last_truck_plate, ''), COALESCE(cd.last_driver_name, ''),
+               COALESCE(cd.driver_phone, ''), COALESCE(cd.planned_payment_date, ''),
+               CASE WHEN cd.is_paid = 1 THEN 'Оплачен' ELSE 'Ожидает' END,
+               COALESCE(cd.paid_amount, ''), COALESCE(cd.paid_date, '')
+        FROM confirmed_deals cd
+        LEFT JOIN users u ON cd.user_id = u.user_id
+        ORDER BY cd.id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    import pandas as pd
+    columns = [
+        "ID сделки", "Номер заявки", "Дата", "Маршрут", "Ставка",
+        "Компания", "Контакт логиста", "Тел. логиста", "Госномер ТС",
+        "Водитель", "Тел. водителя", "План. дата оплаты", "Статус оплаты", "Сумма оплаты", "Дата оплаты"
+    ]
+    df = pd.DataFrame(rows, columns=columns)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl' if 'openpyxl' in sys.modules else None) as writer:
+        df.to_excel(writer, index=False, sheet_name="Рейсы")
+    output.seek(0)
+
+    filename = f"deals_report_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
+    return web.Response(
+        body=output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 async def admin_get_confirmed_deals_api(request):
     if not is_admin_authorized(request):
         return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
@@ -6744,6 +6824,7 @@ async def web_server():
     app.router.add_post("/api/admin/toggle_load_active", admin_toggle_load_active_api)
     app.router.add_post("/api/admin/hard_delete_load", admin_hard_delete_load_api)
     app.router.add_get("/api/admin/confirmed_deals", admin_get_confirmed_deals_api)
+    app.router.add_get("/api/admin/export_excel", admin_export_excel_api)
     app.router.add_post("/api/admin/edit_deal", admin_edit_deal_api)
     app.router.add_post("/api/admin/cancel_deal", admin_cancel_deal_api)
     app.router.add_post("/api/carrier/activate_key", activate_carrier_key_api)
