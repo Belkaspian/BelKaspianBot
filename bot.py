@@ -4019,9 +4019,9 @@ async def handle_admin_cargo_command(message: types.Message):
 
 @dp.callback_query(F.data.startswith("pub_kaiten_"))
 async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
-    """Публикация груза из Kaiten на Биржу в 1 клик с точной подстановкой подсказок."""
+    """Публикация груза из Kaiten на Биржу с обязательным прогоном через ИИ Gemini."""
     card_id = int(callback.data.replace("pub_kaiten_", ""))
-    await callback.answer("⏳ Загружаю данные карточки из Kaiten...")
+    await callback.answer("⏳ Анализирую карточку Kaiten через ИИ...")
 
     card_data = await kaiten_api_request("GET", f"/cards/{card_id}")
     if not card_data or not isinstance(card_data, dict):
@@ -4032,29 +4032,49 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
     desc = card_data.get("description") or ""
     full_text = f"{title}\n{desc}".strip()
 
-    # Точный разбор чистого маршрута, даты и триггера клиента
-    card_date, clean_route, trigger = parse_kaiten_card_title(title, card_data.get("due_date", ""))
-    hint_text = get_cargo_hint(f"{title} {desc} {trigger}")
+    # Запасной разбор на случай отсутствия связи с ИИ
+    fallback_date, fallback_route, trigger = parse_kaiten_card_title(title, card_data.get("due_date", ""))
+    fallback_hint = get_cargo_hint(f"{title} {desc} {trigger}")
+    hint_lines = [h.strip() for h in fallback_hint.split('\n') if h.strip()]
+    fallback_cartype = hint_lines[0] if len(hint_lines) > 0 else "Тент/реф"
+    fallback_cargo = hint_lines[1] if len(hint_lines) > 1 else "ТНП до 22т"
+    fallback_country = detect_country(f"{fallback_route} {full_text}")
+    fallback_price = extract_price(full_text)
 
-    # Извлекаем кузов, груз и тоннаж из вашей подсказки
-    hint_lines = [h.strip() for h in hint_text.split('\n') if h.strip()]
-    c_cartype = hint_lines[0] if len(hint_lines) > 0 else "Тент/реф"
-    c_cargo_and_weight = hint_lines[1] if len(hint_lines) > 1 else (hint_text if len(hint_lines) == 1 else "ТНП до 22т")
+    # 1. Прогоняем текст карточки через ИИ Gemini
+    ai_cargos = await parse_cargos_with_ai(f"Заявка из Kaiten #{card_id}:\n{full_text}\nПодсказка: {fallback_hint}")
 
-    dest_country = detect_country(f"{clean_route} {full_text}")
-    price_str = extract_price(full_text)
+    if ai_cargos and len(ai_cargos) > 0:
+        item = ai_cargos[0]
+        dest_country = item.get("destination_country") or fallback_country
+        c_date = item.get("date") or fallback_date
+        c_route = item.get("route") or fallback_route
+        c_cars = str(item.get("cars_count") or "1")
+        c_price = item.get("price") or fallback_price
+        c_cartype = item.get("car_type") or fallback_cartype
+        c_cargotype = item.get("cargo_type") or fallback_cargo
+        c_weight = item.get("weight") or "до 22т"
+        c_details = item.get("details") or fallback_hint
+    else:
+        dest_country = fallback_country
+        c_date = fallback_date
+        c_route = fallback_route
+        c_cars = "1"
+        c_price = fallback_price
+        c_cartype = fallback_cartype
+        c_cargotype = fallback_cargo
+        c_weight = "до 22т"
+        c_details = fallback_hint
 
     conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, subscriptions, status FROM users WHERE status != 'BLOCKED'")
-    active_users = cursor.fetchall()
-
     cursor.execute("""
         INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status)
-        VALUES (?, ?, ?, '1', ?, ?, ?, ?, ?, '', 'ACTIVE')
-    """, (dest_country, card_date, clean_route, price_str, full_text, hint_text, c_cartype, c_cargo_and_weight))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+    """, (dest_country, c_date, c_route, c_cars, c_price, full_text, c_details, c_cartype, c_cargotype, c_weight))
     new_cargo_id = cursor.lastrowid
 
+    # 2. Отправка в соответствующий тематический канал по направлению
     clean_dir = dest_country.split()[0].strip().lower()
     target_channel_id = None
     for chan_name, chan_id in CHANNELS.items():
@@ -4066,26 +4086,52 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
         try:
             bot_info = await bot.get_me()
             b_username = bot_info.username or ""
-            chan_card = f"📍 **{card_date} | {clean_route}**\n💰 **{price_str}** | 🚚 1 авто\n🚛 {hint_text}"
+            chan_card = (
+                f"📍 **{c_date} | {c_route}**\n"
+                f"💰 **{c_price}** | 🚚 {c_cars} авто\n"
+                f"🚛 {c_cartype} | {c_cargotype} | {c_weight}"
+            )
+            if c_details:
+                chan_card += f"\n📦 {c_details}"
+
             b_builder = InlineKeyboardBuilder()
             if b_username:
-                b_builder.row(types.InlineKeyboardButton(text="📱 Открыть в приложении", url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"))
-            sent_ch_msg = await bot.send_message(chat_id=target_channel_id, text=chan_card, reply_markup=b_builder.as_markup() if b_username else None, parse_mode="Markdown")
+                b_builder.row(types.InlineKeyboardButton(
+                    text="📱 Открыть в приложении", 
+                    url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"
+                ))
+
+            sent_ch_msg = await bot.send_message(
+                chat_id=target_channel_id, 
+                text=chan_card, 
+                reply_markup=b_builder.as_markup() if b_username else None, 
+                parse_mode="Markdown"
+            )
             if sent_ch_msg:
                 cursor.execute("UPDATE loads SET channel_id = ?, channel_message_id = ? WHERE load_id = ?", (target_channel_id, sent_ch_msg.message_id, new_cargo_id))
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка публикации груза Kaiten в канал: {e}")
 
-    for u_id, subs, _ in active_users:
-        u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
-        if any(clean_dir in s for s in u_subs):
-            await send_cargo_to_user(u_id, new_cargo_id)
-
+    # 3. Личная рассылка всем подписанным перевозчикам
+    cursor.execute("SELECT user_id, subscriptions FROM users WHERE status != 'BLOCKED'")
+    active_users = cursor.fetchall()
     conn.commit()
     conn.close()
 
-    card_date, clean_route, _ = parse_kaiten_card_title(title, card_data.get("due_date", ""))
-    await callback.message.reply(f"✅ Груз **{card_date} {clean_route}** (#{card_id}) успешно опубликован на Бирже!", parse_mode="Markdown")
+    sent_count = 0
+    for u_id, subs in active_users:
+        u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
+        if any(clean_dir in s for s in u_subs):
+            await send_cargo_to_user(u_id, new_cargo_id)
+            add_notification(u_id, "Новый груз", f"Появился груз на {c_date} по маршруту {c_route}")
+            sent_count += 1
+
+    await callback.message.reply(
+        f"✅ Груз **{c_date} {c_route}** (#{card_id}) распознан ИИ и опубликован!\n"
+        f"• Направление: {dest_country}\n"
+        f"• Отправлено перевозчикам: {sent_count} чел.", 
+        parse_mode="Markdown"
+    )
 
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/find', 'find', '/поиск', 'поиск'))))
@@ -6483,6 +6529,96 @@ async def admin_get_loads_api(request):
     } for r in rows]
     return web.json_response({"loads": loads})
 
+async def admin_add_load_api(request):
+    """Ручное добавление груза администратором прямо из Web App админки."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
+        route_str = (data.get('route') or '').strip()
+        date_str = (data.get('date') or '').strip() or 'Срочно'
+        price_str = format_custom_rate((data.get('price') or '').strip()) or 'Торги'
+        cars_str = str(data.get('cars') or '1')
+        dest_country = (data.get('destination_country') or '').strip() or 'Все'
+        car_type = (data.get('car_type') or 'Тент/реф').strip()
+        cargo_type = (data.get('cargo_type') or 'ТНП').strip()
+        weight = (data.get('weight') or 'до 22т').strip()
+        admin_comment = (data.get('admin_comment') or '').strip()
+        details = (data.get('details') or '').strip()
+
+        if not route_str:
+            return web.json_response({"error": "Укажите маршрут груза"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db", timeout=15)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, admin_comment, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        """, (dest_country, date_str, route_str, cars_str, price_str, f"{route_str} {price_str}", details, car_type, cargo_type, weight, admin_comment))
+        new_cargo_id = cursor.lastrowid
+
+        # Публикуем в соответствующий канал направления
+        clean_dir = dest_country.split()[0].strip().lower()
+        target_channel_id = None
+        for chan_name, chan_id in CHANNELS.items():
+            if clean_dir in chan_name.lower():
+                target_channel_id = chan_id
+                break
+
+        if target_channel_id:
+            try:
+                bot_info = await bot.get_me()
+                b_username = bot_info.username or ""
+                chan_card = (
+                    f"📍 **{date_str} | {route_str}**\n"
+                    f"💰 **{price_str}** | 🚚 {cars_str} авто\n"
+                    f"🚛 {car_type} | {cargo_type} | {weight}"
+                )
+                if details:
+                    chan_card += f"\n📦 {details}"
+                if admin_comment:
+                    chan_card += f"\n💬 {admin_comment}"
+
+                chan_builder = InlineKeyboardBuilder()
+                if b_username:
+                    chan_builder.row(types.InlineKeyboardButton(
+                        text="📱 Открыть в приложении", 
+                        url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"
+                    ))
+
+                sent_ch_msg = await bot.send_message(
+                    chat_id=target_channel_id,
+                    text=chan_card,
+                    reply_markup=chan_builder.as_markup() if b_username else None,
+                    parse_mode="Markdown"
+                )
+                if sent_ch_msg:
+                    cursor.execute("UPDATE loads SET channel_id = ?, channel_message_id = ? WHERE load_id = ?", (target_channel_id, sent_ch_msg.message_id, new_cargo_id))
+            except Exception as e:
+                logging.error(f"Ошибка публикации добавленного вручную груза: {e}")
+
+        # Рассылаем груз перевозчикам с этим направлением
+        cursor.execute("SELECT user_id, subscriptions FROM users WHERE status != 'BLOCKED'")
+        active_users = cursor.fetchall()
+        conn.commit()
+        conn.close()
+
+        for u_id, subs in active_users:
+            u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
+            if any(clean_dir in s for s in u_subs):
+                await send_cargo_to_user(u_id, new_cargo_id)
+                add_notification(u_id, "Новый груз", f"Появился груз на {date_str} по маршруту {route_str}")
+
+        return web.json_response({"status": "success", "load_id": new_cargo_id})
+    except Exception as e:
+        logging.error(f"Ошибка в admin_add_load_api: {e}")
+        return web.json_response({"error": str(e)}, status=400)
+
 async def admin_edit_load_api(request):
     try:
         data = await request.json()
@@ -7503,6 +7639,7 @@ async def web_server():
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
     app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
     app.router.add_get("/api/admin/loads", admin_get_loads_api)
+    app.router.add_post("/api/admin/add_load", admin_add_load_api)
     app.router.add_post("/api/admin/edit_load", admin_edit_load_api)
     app.router.add_post("/api/admin/toggle_load_active", admin_toggle_load_active_api)
     app.router.add_post("/api/admin/hard_delete_load", admin_hard_delete_load_api)
