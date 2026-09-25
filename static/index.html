@@ -1355,6 +1355,13 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Кнопка выхода из аккаунта компании -->
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
+                <button class="btn btn-secondary" style="width: 100%; color: var(--error); border-color: var(--border); font-size: 11px;" onclick="carrierLogout()">
+                    🚪 Выйти из профиля компании / Сменить ключ
+                </button>
+            </div>
         </div>
 
         <div class="profile-card">
@@ -2073,7 +2080,7 @@
                                     </div>
                                 </div>
 
-                                <div style="display:flex; gap:6px; margin:6px 0;">
+                                <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0;">
                                     <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${k.key_code}')">
                                         📋 Код
                                     </button>
@@ -2084,6 +2091,9 @@
                                     ` : ''}
                                     <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${webLink}')">
                                         🌐 Web ссылка
+                                    </button>
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="rotateCompanyKey(${k.id}, '${k.company}')" title="Аннулировать старый ключ и выдать новый">
+                                        🔄 Сменить ключ
                                     </button>
                                 </div>
 
@@ -2159,10 +2169,68 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
+        /* Надежное копирование на любых смартфонах iPhone и Android */
         function copyTextToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showToast(`Ключ ${text} скопирован в буфер!`, 'info');
-            }).catch(() => {});
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast(`Скопировано: ${text}`, 'info');
+                }).catch(() => fallbackCopyText(text));
+            } else {
+                fallbackCopyText(text);
+            }
+        }
+
+        function fallbackCopyText(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            textArea.style.top = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showToast(`Скопировано: ${text}`, 'info');
+            } catch (err) {
+                prompt("Скопируйте вручную:", text);
+            }
+            textArea.remove();
+        }
+
+        /* Выход перевозчика из компании */
+        function carrierLogout() {
+            askConfirm('Выйти из профиля компании на этом устройстве?', (confirmed) => {
+                if (confirmed) {
+                    localStorage.removeItem('tg_user_id');
+                    localStorage.removeItem('carrier_key');
+                    showToast('Вы вышли из профиля', 'info');
+                    setTimeout(() => { location.reload(); }, 400);
+                }
+            });
+        }
+
+        /* Смена ключа для конкретной компании (старый сгорает, текущие сотрудники остаются) */
+        async function rotateCompanyKey(keyId, companyName) {
+            askConfirm(`Сгенерировать новый ключ для «${companyName}»?\nСтарый ключ сгорит, но все работающие сейчас сотрудники останутся в системе.`, async (confirmed) => {
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/admin/rotate_company_key', {
+                            method: 'POST',
+                            headers: getAdminHeaders(),
+                            body: JSON.stringify({ id: keyId })
+                        });
+                        let data = await res.json();
+                        if (res.ok) {
+                            showToast(`Новый ключ: ${data.new_key}`, 'success');
+                            copyTextToClipboard(data.new_key);
+                            loadAdminData();
+                        } else {
+                            showToast(data.error || 'Ошибка смены ключа', 'error');
+                        }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
+            });
         }
 
         /* Активация ключа перевозчиком */
@@ -3899,10 +3967,23 @@
             let isAuthed = localStorage.getItem('admin_key') || localStorage.getItem('admin_authed') === 'true';
             if (isAuthed) {
                 openAdminPanel();
+                switchTab('catalog');
             } else {
+                // Полная изоляция: скрываем интерфейс сайта, оставляем только чистый экран входа
+                const mainTable = document.getElementById('main-table');
+                const mainNav = document.querySelector('.main-nav');
+                const headerTop = document.querySelector('.header-top');
+                const searchBar = document.getElementById('sort-search-container');
+                const passCloseBtn = document.querySelector('#adminPassModal .modal-close');
+
+                if (mainTable) mainTable.style.display = 'none';
+                if (mainNav) mainNav.style.display = 'none';
+                if (headerTop) headerTop.style.display = 'none';
+                if (searchBar) searchBar.style.display = 'none';
+                if (passCloseBtn) passCloseBtn.style.display = 'none'; // Убираем крестик
+
                 document.getElementById('adminPassModal').classList.add('active');
             }
-            switchTab('catalog');
         } else {
             let keyFromUrl = urlParams.get('key');
             if (keyFromUrl) {
