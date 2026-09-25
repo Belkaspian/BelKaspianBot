@@ -1464,17 +1464,17 @@
     <div class="modal-overlay" id="adminPassModal">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Панель администратора</div>
+                <div class="modal-title">Вход для администратора</div>
                 <div class="modal-close" onclick="closeModal('adminPassModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
             </div>
             <div class="form-group">
-                <label>Пароль доступа</label>
-                <input type="password" id="adminPassInput" placeholder="Введите ключ..." />
+                <label>Ключ администратора (ADMIN_KEY)</label>
+                <input type="password" id="adminPassInput" placeholder="Введите секретный ключ..." onkeydown="if(event.key==='Enter') submitAdminPassword();" />
             </div>
             <div class="buttons">
-                <button class="btn btn-primary" onclick="submitAdminPassword()">Войти</button>
+                <button class="btn btn-primary" onclick="submitAdminPassword()">Активировать доступ</button>
             </div>
         </div>
     </div>
@@ -1482,7 +1482,12 @@
     <div class="modal-overlay" id="adminPanelModal">
         <div class="modal-card" style="max-width: 680px;">
             <div class="modal-header">
-                <div class="modal-title">Панель администратора</div>
+                <div class="modal-title" style="display:flex; align-items:center; gap:8px;">
+                    <span>Панель администратора</span>
+                    <button class="btn btn-secondary" style="padding:2px 8px; font-size:10px; height:24px;" onclick="adminLogout()" title="Сбросить ключ на этом устройстве">
+                        Выйти
+                    </button>
+                </div>
                 <div class="modal-close" onclick="closeModal('adminPanelModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
@@ -1850,9 +1855,27 @@
             // Скрытый вход по кликам отключен для безопасности
         }
 
+        function getAdminHeaders() {
+            let key = localStorage.getItem('admin_key') || '';
+            return {
+                'Content-Type': 'application/json',
+                'X-Admin-Key': key
+            };
+        }
+
+        function adminLogout() {
+            localStorage.removeItem('admin_key');
+            localStorage.removeItem('admin_authed');
+            closeModal('adminPanelModal');
+            showToast('Вы вышли из режима администратора', 'info');
+            setTimeout(() => {
+                window.location.href = '/webapp?tab=catalog';
+            }, 400);
+        }
+
         async function submitAdminPassword() {
             let pass = document.getElementById('adminPassInput').value.trim();
-            if (!pass) return;
+            if (!pass) return showToast('Введите ключ', 'error');
             let userId = getUserId();
             try {
                 let res = await fetch('/api/admin/verify_pass', {
@@ -1860,19 +1883,18 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({password: pass, user_id: userId})
                 });
+                let data = await res.json();
                 if (res.ok) {
+                    localStorage.setItem('admin_key', data.admin_key || pass);
                     localStorage.setItem('admin_authed', 'true');
-                    if (userId) {
-                        localStorage.setItem('admin_authed_' + userId, 'true');
-                    }
                     closeModal('adminPassModal');
                     openAdminPanel();
-                    showToast('Вход в админ-панель выполнен', 'success');
+                    showToast('Доступ подтвержден!', 'success');
                 } else {
-                    showToast('Неверный пароль', 'error');
+                    showToast(data.error || 'Неверный ключ', 'error');
                 }
             } catch(e) {
-                showToast('Ошибка авторизации', 'error');
+                showToast('Ошибка проверки ключа', 'error');
             }
         }
 
@@ -1883,11 +1905,21 @@
 
         async function loadAdminData() {
             try {
+                let uid = getUserId();
+                let headers = getAdminHeaders();
                 let [cRes, dRes, lRes] = await Promise.all([
-                    fetch('/api/admin/carriers?t=' + Date.now()),
-                    fetch('/api/admin/confirmed_deals?t=' + Date.now()),
-                    fetch('/api/admin/loads?t=' + Date.now())
+                    fetch(`/api/admin/carriers?user_id=${uid}&t=` + Date.now(), { headers }),
+                    fetch(`/api/admin/confirmed_deals?user_id=${uid}&t=` + Date.now(), { headers }),
+                    fetch(`/api/admin/loads?user_id=${uid}&t=` + Date.now(), { headers })
                 ]);
+
+                if (cRes.status === 403 || dRes.status === 403 || lRes.status === 403) {
+                    closeModal('adminPanelModal');
+                    document.getElementById('adminPassModal').classList.add('active');
+                    showToast('Требуется админ-ключ', 'error');
+                    return;
+                }
+
                 let cData = await cRes.json();
                 let dData = await dRes.json();
                 let lData = await lRes.json();
@@ -2199,7 +2231,7 @@
             try {
                 let res = await fetch('/api/admin/carrier_status', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: getAdminHeaders(),
                     body: JSON.stringify({user_id: uId, reason: reason})
                 });
                 if (res.ok) {
@@ -2234,7 +2266,7 @@
             try {
                 let res = await fetch('/api/admin/edit_load', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: getAdminHeaders(),
                     body: JSON.stringify({
                         id: loadId,
                         route: document.getElementById('editLoadRoute').value.trim(),
@@ -2285,7 +2317,7 @@
             try {
                 let res = await fetch('/api/admin/edit_deal', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: getAdminHeaders(),
                     body: JSON.stringify({
                         deal_id: dealId,
                         route: route,
@@ -2323,7 +2355,7 @@
         async function toggleAdminLoadStatus(id) {
             await fetch('/api/admin/toggle_load_active', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: getAdminHeaders(),
                 body: JSON.stringify({id: id})
             });
             showToast('Статус изменён', 'success');
@@ -2336,7 +2368,7 @@
                 if (confirmed) {
                     await fetch('/api/admin/hard_delete_load', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
+                        headers: getAdminHeaders(),
                         body: JSON.stringify({id: id})
                     });
                     showToast('Груз удалён', 'success');
@@ -2364,7 +2396,7 @@
                 if (confirmed) {
                     await fetch('/api/admin/cancel_deal', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
+                        headers: getAdminHeaders(),
                         body: JSON.stringify({deal_id: dealId})
                     });
                     showToast('Сделка отменена', 'success');
