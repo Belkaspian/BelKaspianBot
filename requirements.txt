@@ -7,3 +7,5 @@ Pillow
 pypdf
 opencv-python-headless
 numpy
+pandas
+openpyxl
