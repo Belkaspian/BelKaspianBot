@@ -2093,41 +2093,43 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
 ==================================================
 ФОРМАТ ВЫВОДА (СТРОГО)
 ==================================================
-Выводи ответ только внутри двух тегов: сначала <analysis>, затем <json>. Никакого дополнительного текста, пояснений или markdown‑блоков внутри <json>. НЕ использовать бэктики (```) внутри тега <json>.
-
-<analysis>
-Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=краткое перечисление визуально прочитанных данных
-</analysis>
-
-<json>
+Выводи строго валидный JSON без тегов <analysis>, markdown-разметки или пояснений:
 { 
-  "image_roles":[{"page":1,"category":"PASSPORT_FRONT","quality":"EXCELLENT"}],
+  "image_roles":[{"image_index":0,"category":"truck_front"}],
   "driver":{
-    "full_name":null,
-    "country":null,
+    "full_name": "ФИО водителя строго из паспорта",
+    "birth_date": "ДД.ММ.ГГГГ",
+    "phones": "номер телефона если есть",
     "passport":{
-      "series_number":null,
-      "expiry_date":null,
-      "date_of_birth":null,
-      "issue_date":null,
-      "issuing_authority":null
+      "full_name": "ФИО владельца",
+      "number": "серия и номер паспорта",
+      "issue_date": "ДД.ММ.ГГГГ",
+      "expiry_date": "ДД.ММ.ГГГГ",
+      "authority": "орган выдачи",
+      "country": "страна выдачи"
     },
-    "license":{"number":null,"expiry_date":null},
-    "phones":[]
-  },
-  "vehicles":[
-    {
-      "type":"TRUCK",
-      "brand":"VOLVO",
-      "model":"FH16",
-      "plate_number":"А123АА77",
-      "vin":"YV2A4X0C1DB123456",
-      "country":"Россия"
+    "license":{
+      "number": "номер В/У",
+      "issue_date": "ДД.ММ.ГГГГ",
+      "expiry_date": "ДД.ММ.ГГГГ",
+      "country": "страна выдачи"
     }
-  ],
-  "verification_flags":{"needs_human_review":false,"review_reasons":[]}
+  },
+  "truck":{
+    "brand": "марка тягача (например FAW / VOLVO)",
+    "model": "модель тягача",
+    "plate": "госномер тягача (например 10467QCA)",
+    "vin": "VIN тягача 17 знаков",
+    "country": "страна регистрации тягача"
+  },
+  "trailer":{
+    "brand": "марка прицепа (например SCHMITZ)",
+    "model": "модель прицепа",
+    "plate": "госномер прицепа (например 105198BA)",
+    "vin": "VIN прицепа",
+    "country": "страна регистрации прицепа"
+  }
 }
-</json>
 """
 
     config = genai_types.GenerateContentConfig(
@@ -2177,6 +2179,16 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
             
             t = raw_json.get("truck") or {}
             tr = raw_json.get("trailer") or {}
+            
+            # Если ИИ вернул машины в общем массиве vehicles — распределяем их по типу
+            vehicles_list = raw_json.get("vehicles") or []
+            for v in vehicles_list:
+                v_type = str(v.get("type") or "").upper()
+                if ("TRUCK" in v_type or "ТЯГАЧ" in v_type or "TORTUVCHI" in v_type) and not t:
+                    t = v
+                elif ("TRAILER" in v_type or "ПРИЦЕП" in v_type or "TIRKAMA" in v_type) and not tr:
+                    tr = v
+
             d = raw_json.get("driver") or {}
             p = d.get("passport") or {}
             l = d.get("license") or {}
@@ -2192,12 +2204,14 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
                 if show_model and m and m.lower() not in b.lower(): return f"{b} {m}"
                 return b
 
-            # ФИО берется СТРОГО с паспорта (без фоллбека на В/У)
-            p_full_name = (p.get("full_name") or "").strip()
-            if p.get("number") in ["Не распознан", None, ""] or not p_full_name:
+            # Ищем ФИО и в блоке водителя, и в блоке паспорта
+            driver_cand_name = (d.get("full_name") or p.get("full_name") or "").strip()
+            p_num = p.get('number') or p.get('series_number') or 'Не распознан'
+
+            if p_num in ["Не распознан", None, ""] and not driver_cand_name:
                 driver_full_name = "Не распознан"
             else:
-                driver_full_name = p_full_name
+                driver_full_name = driver_cand_name or "Не распознан"
 
             # Жесткая отсечка названий областей/районов из наименования органа выдачи
             p_auth = (p.get('authority') or 'Не распознан').strip()
@@ -2207,15 +2221,15 @@ Page N: Category=КАТЕГОРИЯ | Quality=КАЧЕСТВО | Fields=крат
 
             truck_brand_only = (t.get('brand') or 'Не распознан').strip()
             truck_full_brand = build_brand_str(t, show_model=True)
-            truck_plate = (t.get('plate') or 'Не распознан').strip()
+            truck_plate = (t.get('plate') or t.get('plate_number') or 'Не распознан').strip()
             truck_vin = (t.get('vin') or 'Не распознан').strip()
 
             trailer_brand_only = (tr.get('brand') or 'Не распознан').strip()
             trailer_full_brand = build_brand_str(tr, show_model=True)
-            trailer_plate = (tr.get('plate') or 'Не распознан').strip()
+            trailer_plate = (tr.get('plate') or tr.get('plate_number') or 'Не распознан').strip()
             trailer_vin = (tr.get('vin') or 'Не распознан').strip()
 
-            p_num = p.get('number') or 'Не распознан'
+            p_num = p.get('number') or p.get('series_number') or 'Не распознан'
             p_date = p.get('issue_date') or 'Не распознана'
 
             l_num = l.get('number') or 'Не распознан'
@@ -2400,57 +2414,35 @@ def extract_images_from_pdf_bytes(pdf_bytes: bytes) -> list[bytes]:
 
 async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=None) -> bytes:
     """
-    Сопоставляет каждую вырезанную карточку с приоритетами категорий ИИ (1..9+)
-    и склеивает их в 1 единый многостраничный PDF.
+    Чистое и качественное объединение страниц документов в один общий PDF.
+    Если передан готовый PDF — страницы добавляются напрямую без искажений.
+    Если переданы фотографии — они аккуратно преобразуются в PDF-страницы.
     """
     from pypdf import PdfReader, PdfWriter
+    final_writer = PdfWriter()
 
-    # Распаковываем файлы и нарезаем карточки в том же порядке, что передавался в ИИ
-    flat_images = []
     for fname, content in raw_files:
         mime = detect_mime_type(content, fname)
         if mime == "application/pdf":
-            extracted = extract_images_from_pdf_bytes(content)
-            raw_imgs = extracted if extracted else [content]
+            try:
+                pdf_reader = PdfReader(io.BytesIO(content))
+                for page in pdf_reader.pages:
+                    final_writer.add_page(page)
+            except Exception as e:
+                logging.error(f"Error appending PDF pages: {e}")
         else:
-            raw_imgs = [content]
-
-        for raw_b in raw_imgs:
-            flat_images.extend(split_and_crop_documents(raw_b))
-
-    page_priorities = {}
-    image_roles = raw_json.get("image_roles") if isinstance(raw_json, dict) else []
-    for role in (image_roles or []):
-        if isinstance(role, dict):
-            idx = role.get("image_index")
-            cat = role.get("category", "other")
-            if idx is not None:
-                page_priorities[idx] = get_category_priority(cat)
-
-    processed_pages = []
-
-    for idx, cropped_img in enumerate(flat_images):
-        priority = page_priorities.get(idx, 90)
-        try:
-            if cropped_img:
-                cropped_img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            try:
+                img = Image.open(io.BytesIO(content))
+                img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
                 img_buf = io.BytesIO()
-                cropped_img.save(img_buf, format="PDF", quality=82)
-                processed_pages.append((priority, img_buf.getvalue()))
-        except Exception as e:
-            logging.error(f"Error processing page {idx}: {e}")
-
-    # Сортировка страниц строго по вашему порядку (1..9+)
-    processed_pages.sort(key=lambda x: x[0])
-
-    final_writer = PdfWriter()
-    for _, page_bytes in processed_pages:
-        try:
-            reader = PdfReader(io.BytesIO(page_bytes))
-            for page in reader.pages:
-                final_writer.add_page(page)
-        except Exception as e:
-            logging.error(f"Error adding page to final PDF: {e}")
+                img.save(img_buf, format="PDF", quality=85)
+                img_pdf = PdfReader(img_buf)
+                for page in img_pdf.pages:
+                    final_writer.add_page(page)
+            except Exception as e:
+                logging.error(f"Error converting photo to PDF page: {e}")
 
     out_buf = io.BytesIO()
     final_writer.write(out_buf)
@@ -2711,6 +2703,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
         
     conn.close()
+
+    # Автоматически создаем и закрепляем корпоративный ключ на 5 сотрудников
+    ensure_carrier_key_for_user(user_id, name=message.from_user.full_name or "")
+
     await send_welcome_message(message)
 
 async def send_welcome_message(message: types.Message):
@@ -3372,13 +3368,21 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
     # Замена / слияние данных: если в новом файле элемент не распознан, сохраняем старый
-    new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
-    if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_truck_plate:
-        new_truck_plate = prev_truck_plate
+    raw_truck = (t_data.get("plate") or "").strip()
+            if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+                new_truck_plate = raw_truck.upper()
+            elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
+                new_truck_plate = prev_truck_plate
+            else:
+                new_truck_plate = "Не указан"
 
-    new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
-    if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_trailer_plate:
-        new_trailer_plate = prev_trailer_plate
+            raw_trailer = (tr_data.get("plate") or "").strip()
+            if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+                new_trailer_plate = raw_trailer.upper()
+            elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
+                new_trailer_plate = prev_trailer_plate
+            else:
+                new_trailer_plate = "Не указан"
 
     p_full_name = (p_data.get("full_name") or "").strip()
     if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
@@ -5680,13 +5684,21 @@ async def direct_upload_docs_api(request):
             p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
             l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
-            new_truck_plate = (t_data.get("plate") or "Не распознан").strip().upper()
-            if new_truck_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_truck_plate:
+            raw_truck = (t_data.get("plate") or "").strip()
+            if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+                new_truck_plate = raw_truck.upper()
+            elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
                 new_truck_plate = prev_truck_plate
+            else:
+                new_truck_plate = "Не указан"
 
-            new_trailer_plate = (tr_data.get("plate") or "Не распознан").strip().upper()
-            if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"] and prev_trailer_plate:
+            raw_trailer = (tr_data.get("plate") or "").strip()
+            if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+                new_trailer_plate = raw_trailer.upper()
+            elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
                 new_trailer_plate = prev_trailer_plate
+            else:
+                new_trailer_plate = "Не указан"
 
             p_full_name = (p_data.get("full_name") or "").strip()
             if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
@@ -6480,6 +6492,7 @@ async def admin_edit_carrier_api(request):
         phone = (data.get('phone') or '').strip()
         subscriptions = (data.get('subscriptions') or '').strip()
         v_status = (data.get('verification_status') or '').strip()
+        assigned_key = (data.get('company_key') or '').strip().upper()
 
         conn = sqlite3.connect("cargo_bot.db", timeout=15)
         cursor = conn.cursor()
@@ -6501,6 +6514,25 @@ async def admin_edit_carrier_api(request):
         if 'verification_status' in data and v_status:
             updates.append("verification_status = ?")
             params.append(v_status)
+
+        # Ручное назначение / смена ключа логистом в админке
+        if 'company_key' in data:
+            if assigned_key:
+                clean_k = re.sub(r'[^A-Z0-9]', '', assigned_key)
+                fmt_key = f"{clean_k[:3]}-{clean_k[3:]}" if len(clean_k) == 6 else assigned_key
+                cursor.execute("SELECT id FROM carrier_keys WHERE key_code = ?", (fmt_key,))
+                k_row = cursor.fetchone()
+                if not k_row:
+                    cursor.execute("""
+                        INSERT INTO carrier_keys (key_code, user_id, company, status, max_users)
+                        VALUES (?, ?, ?, 'ACTIVE', 5)
+                    """, (fmt_key, u_id, company or "Компания"))
+                else:
+                    cursor.execute("UPDATE carrier_keys SET company = ?, status = 'ACTIVE' WHERE key_code = ?", (company or "Компания", fmt_key))
+                updates.append("company_key = ?")
+                params.append(fmt_key)
+            else:
+                updates.append("company_key = ''")
 
         if updates:
             params.append(u_id)
@@ -6915,6 +6947,48 @@ def generate_carrier_code() -> str:
     part2 = "".join(secrets.choice(alphabet) for _ in range(3))
     return f"{part1}-{part2}"
 
+
+def ensure_carrier_key_for_user(user_id: int, company_name: str = "", name: str = "", phone: str = "") -> str:
+    """Проверяет наличие ключа у пользователя: если нет — автоматически генерирует и закрепляет ключ на 5 сотрудников."""
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT company_key, company, name, phone FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return ""
+
+    existing_key = (row[0] or "").strip()
+    comp = company_name or (row[1] or "").strip() or "Компания"
+    n = name or (row[2] or "").strip()
+    ph = phone or (row[3] or "").strip()
+
+    if existing_key:
+        cursor.execute("SELECT id FROM carrier_keys WHERE key_code = ?", (existing_key,))
+        if cursor.fetchone():
+            conn.close()
+            return existing_key
+
+    # Генерируем новый уникальный ключ (лимит 5 сотрудников)
+    new_code = ""
+    for _ in range(10):
+        cand = generate_carrier_code()
+        cursor.execute("SELECT id FROM carrier_keys WHERE key_code = ?", (cand,))
+        if not cursor.fetchone():
+            new_code = cand
+            break
+
+    if new_code:
+        cursor.execute("""
+            INSERT INTO carrier_keys (key_code, user_id, company, name, phone, status, max_users)
+            VALUES (?, ?, ?, ?, ?, 'ACTIVE', 5)
+            ON CONFLICT(key_code) DO NOTHING
+        """, (new_code, user_id, comp, n, ph))
+        cursor.execute("UPDATE users SET company_key = ? WHERE user_id = ?", (new_code, user_id))
+        conn.commit()
+
+    conn.close()
+    return new_code
 async def activate_carrier_key_api(request):
     """Активация ключа сотрудником через веб-браузер с проверкой лимита."""
     try:
