@@ -1818,6 +1818,69 @@
         </div>
     </div>
 
+    <!-- Модальное окно ручного добавления груза на Биржу -->
+    <div class="modal-overlay" id="adminAddLoadModal" style="z-index: 2600 !important;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Добавить груз на Биржу</div>
+                <div class="modal-close" onclick="closeModal('adminAddLoadModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Направление (Страна назначения):</label>
+                <select id="addLoadCountry">
+                    <option value="Казахстан 🇰🇿">Казахстан 🇰🇿</option>
+                    <option value="Узбекистан 🇺🇿">Узбекистан 🇺🇿</option>
+                    <option value="Кыргызстан 🇰🇬">Кыргызстан 🇰🇬</option>
+                    <option value="Грузия 🇬🇪">Грузия 🇬🇪</option>
+                    <option value="Азербайджан 🇦🇿">Азербайджан 🇦🇿</option>
+                    <option value="Армения 🇦🇲">Армения 🇦🇲</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Маршрут (Город загрузки → Город выгрузки)</label>
+                <input type="text" id="addLoadRoute" placeholder="Минск → Ташкент" />
+            </div>
+            <div class="form-group">
+                <label>Дата погрузки</label>
+                <input type="text" id="addLoadDate" placeholder="15.10 или Срочно" />
+            </div>
+            <div class="form-group">
+                <label>Ставка</label>
+                <input type="text" id="addLoadPrice" placeholder="2500 USD или Торги" />
+            </div>
+            <div class="form-group">
+                <label>Количество авто</label>
+                <input type="number" id="addLoadCars" value="1" min="1" />
+            </div>
+            <div class="form-group">
+                <label>Тип ТС</label>
+                <input type="text" id="addLoadCarType" value="Тент/реф" />
+            </div>
+            <div class="form-group">
+                <label>Тип груза</label>
+                <input type="text" id="addLoadCargoType" value="ТНП" />
+            </div>
+            <div class="form-group">
+                <label>Вес / Объем</label>
+                <input type="text" id="addLoadWeight" value="до 22т" />
+            </div>
+            <div class="form-group">
+                <label>Особые требования (детали через запятую)</label>
+                <input type="text" id="addLoadDetails" placeholder="Бок погрузка, АДР..." />
+            </div>
+            <div class="form-group">
+                <label>Комментарий логиста</label>
+                <textarea id="addLoadComment" placeholder="Дополнительная информация для перевозчика..."></textarea>
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitAdminAddLoad()">Опубликовать на Бирже</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminAddLoadModal')">Отмена</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast-уведомления -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -1901,6 +1964,7 @@
         let headerClicks = 0;
         let headerTimer = null;
         let adminSubTab = 'exchange';
+        let adminCarrierSubTab = 'active'; // 'active' или 'archive'
 
         let allAdminCarriersArray = [];
         let allAdminLoadsArray = [];
@@ -2579,6 +2643,12 @@
             }
 
             body.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <div style="font-weight:700; font-size:12px; color:var(--text-muted); text-transform:uppercase;">Грузы на бирже (${list.length})</div>
+                    <button class="btn btn-primary" style="width:auto; padding:6px 12px; font-size:11px;" onclick="openAdminAddLoadModal()">
+                        ➕ Добавить груз
+                    </button>
+                </div>
                 <div class="table-container">
                     <div class="t-head">
                         <div>Дата</div>
@@ -2720,13 +2790,26 @@
             updateMarquees();
         }
 
-        /* 3. ОТРИСОВКА ВКЛАДКИ "ПЕРЕВОЗЧИКИ" */
+        /* 3. ОТРИСОВКА ВКЛАДКИ "ПЕРЕВОЗЧИКИ" С ПОДРАЗДЕЛАМИ АКТИВ / АРХИВ */
+        function switchCarrierSubTab(sub) {
+            adminCarrierSubTab = sub;
+            renderAdminCarriers();
+        }
+
         function renderAdminCarriers() {
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
 
-            let list = [...allAdminCarriersArray];
+            // Подсчет количества для бейджей
+            let activeCount = allAdminCarriersArray.filter(c => c.status === 'ACTIVE').length;
+            let archiveCount = allAdminCarriersArray.filter(c => c.status === 'BLOCKED' || c.status === 'ARCHIVED').length;
+
+            // Фильтрация по выбранной подвкладке
+            let list = allAdminCarriersArray.filter(c => {
+                let isBlockedOrArchived = (c.status === 'BLOCKED' || c.status === 'ARCHIVED');
+                return adminCarrierSubTab === 'archive' ? isBlockedOrArchived : !isBlockedOrArchived;
+            });
 
             if (selectedDirection !== 'ALL') {
                 let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
@@ -2737,19 +2820,69 @@
                 list = list.filter(c => `${c.company} ${c.name} ${c.phone} ${c.user_id}`.toLowerCase().includes(searchQuery));
             }
 
+            let subNavHTML = `
+                <div class="sub-nav" style="margin-bottom: 8px;">
+                    <div class="sub-nav-btn ${adminCarrierSubTab === 'active' ? 'active' : ''}" onclick="switchCarrierSubTab('active')">
+                        👥 Действующие (${activeCount})
+                    </div>
+                    <div class="sub-nav-btn ${adminCarrierSubTab === 'archive' ? 'active' : ''}" onclick="switchCarrierSubTab('archive')">
+                        🗄 Архив / ЧС (${archiveCount})
+                    </div>
+                </div>
+            `;
+
             if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Перевозчики не найдены</div>';
+                body.innerHTML = subNavHTML + `<div class="loader">${adminCarrierSubTab === 'archive' ? 'В архиве пока нет перевозчиков' : 'Действующих перевозчиков не найдено'}</div>`;
                 return;
             }
 
-            body.innerHTML = `
+            body.innerHTML = subNavHTML + `
                 <div class="table-container">
-                    <div class="t-head" style="grid-template-columns: 80px 1fr 70px 95px;">
+                    <div class="t-head" style="grid-template-columns: 80px 1fr 70px 105px;">
                         <div>ID</div>
                         <div>Компания / Имя</div>
                         <div style="text-align: center;">Статус</div>
                         <div style="text-align: right;">Действия</div>
                     </div>
+                    ${list.map(c => {
+                        let isBlocked = (c.status === 'BLOCKED' || c.status === 'ARCHIVED');
+                        return `
+                        <div class="t-row" id="row-carrier-${c.user_id}" style="grid-template-columns: 80px 1fr 70px 105px;" onclick="toggleRow('carrier-${c.user_id}')">
+                            <div class="col-date" style="font-size:10px; color:var(--text-muted); font-weight:700;">
+                                #${c.user_id}
+                            </div>
+                            <div class="col-route">
+                                <span style="font-weight:700; color:var(--text); text-overflow:ellipsis; overflow:hidden;">${c.company}</span>
+                                <span style="font-size:9.5px; color:var(--text-muted); text-overflow:ellipsis; overflow:hidden;">${c.name} • ${c.phone}</span>
+                            </div>
+                            <div class="col-truck">
+                                <span class="badge" style="font-size:8.5px; padding:2px 5px; ${isBlocked ? 'background:#fee2e2; color:#b91c1c;' : 'background:#dcfce7; color:#15803d;'}">
+                                    ${isBlocked ? 'В архиве' : 'Активен'}
+                                </span>
+                            </div>
+                            <div style="display:flex; gap:4px; align-items:center; justify-content:flex-end;" onclick="event.stopPropagation()">
+                                <button class="qty-btn" style="width:26px; height:26px; min-width:26px; min-height:26px; font-size:11px; font-weight:700;" onclick="toggleRow('carrier-${c.user_id}'); event.stopPropagation();" title="Информация">
+                                    i
+                                </button>
+                                <button class="btn ${isBlocked ? 'btn-success' : 'btn-danger'}" style="padding:2px 6px; font-size:10px; height:26px; min-height:26px;" onclick="toggleCarrierStatus(${c.user_id})">
+                                    ${isBlocked ? 'Вернуть' : 'В архив'}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="t-details" id="details-carrier-${c.user_id}">
+                            <div class="info-grid">
+                                <div class="info-item"><span>Компания</span><b>${c.company}</b></div>
+                                <div class="info-item"><span>Контактное лицо</span><b>${c.name}</b></div>
+                                <div class="info-item"><span>Телефон</span><b>${c.phone}</b></div>
+                                <div class="info-item"><span>Telegram ID</span><b>${c.user_id}</b></div>
+                                <div class="info-item" style="grid-column: span 2;"><span>Подписки</span><b>${c.subscriptions || 'Нет подписок'}</b></div>
+                            </div>
+                        </div>
+                    `}).join('')}
+                </div>
+            `;
+            updateMarquees();
+        }
                     ${list.map(c => {
                         let isBlocked = (c.status === 'BLOCKED');
                         return `
@@ -2827,7 +2960,60 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
-        /* 4. МОДАЛКИ РЕДАКТИРОВАНИЯ */
+        /* 4. МОДАЛКИ РЕДАКТИРОВАНИЯ И ДОБАВЛЕНИЯ ГРУЗОВ */
+        function openAdminAddLoadModal() {
+            document.getElementById('addLoadRoute').value = '';
+            document.getElementById('addLoadDate').value = '';
+            document.getElementById('addLoadPrice').value = '';
+            document.getElementById('addLoadCars').value = '1';
+            document.getElementById('addLoadCarType').value = 'Тент/реф';
+            document.getElementById('addLoadCargoType').value = 'ТНП';
+            document.getElementById('addLoadWeight').value = 'до 22т';
+            document.getElementById('addLoadDetails').value = '';
+            document.getElementById('addLoadComment').value = '';
+            document.getElementById('adminAddLoadModal').classList.add('active');
+        }
+
+        async function submitAdminAddLoad() {
+            let route = document.getElementById('addLoadRoute').value.trim();
+            let date = document.getElementById('addLoadDate').value.trim() || 'Срочно';
+            let price = document.getElementById('addLoadPrice').value.trim() || 'Торги';
+            let cars = document.getElementById('addLoadCars').value || '1';
+            let country = document.getElementById('addLoadCountry').value;
+            let car_type = document.getElementById('addLoadCarType').value.trim();
+            let cargo_type = document.getElementById('addLoadCargoType').value.trim();
+            let weight = document.getElementById('addLoadWeight').value.trim();
+            let details = document.getElementById('addLoadDetails').value.trim();
+            let admin_comment = document.getElementById('addLoadComment').value.trim();
+
+            if (!route) {
+                return showToast('Укажите маршрут груза', 'error');
+            }
+
+            try {
+                let res = await fetch('/api/admin/add_load', {
+                    method: 'POST',
+                    headers: typeof getAdminHeaders === 'function' ? getAdminHeaders() : {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        route, date, price, cars,
+                        destination_country: country,
+                        car_type, cargo_type, weight, details, admin_comment
+                    })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Груз успешно опубликован на Бирже!', 'success');
+                    closeModal('adminAddLoadModal');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка добавления груза', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети при добавлении груза', 'error');
+            }
+        }
+
         function openAdminEditLoadModal(loadId) {
             let load = allAdminLoadsArray.find(l => String(l.id) === String(loadId));
             if (!load) return;
