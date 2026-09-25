@@ -2549,6 +2549,21 @@ async def auto_clean_expired_cargos():
 # ==================== ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ И МЕНЮ ====================
 
 
+@dp.message(Command("key"))
+async def cmd_activate_key_in_chat(message: types.Message):
+    """Привязка ключа доступа прямо из переписки с ботом."""
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("ℹ️ Чтобы привязать ключ доступа, отправьте команду с ключом:\nНапример: `/key 7B9-K2M`", parse_mode="Markdown")
+        return
+
+    key_input = parts[1]
+    success, result_msg = link_key_to_user_profile(message.from_user.id, key_input)
+    if success:
+        await message.answer(f"✅ {result_msg}", reply_markup=get_main_reply_markup(message.from_user))
+    else:
+        await message.answer(f"❌ {result_msg}")
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -6045,6 +6060,70 @@ async def activate_carrier_key_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
+def link_key_to_user_profile(target_user_id: int, key_code: str) -> tuple[bool, str]:
+    """Объединяет Telegram-аккаунт и ключ доступа в единый профиль компании."""
+    raw_key = key_code.strip().upper()
+    clean = re.sub(r'[^A-Z0-9]', '', raw_key)
+    formatted = f"{clean[:3]}-{clean[3:]}" if len(clean) == 6 else raw_key
+
+    conn = sqlite3.connect("cargo_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, user_id, company, name, phone, status FROM carrier_keys WHERE key_code = ?", (formatted,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return False, "Ключ не найден. Проверьте правильность ввода."
+
+    k_id, old_uid, comp, contact_name, phone, k_status = row
+
+    if k_status == 'BLOCKED':
+        conn.close()
+        return False, "Данный ключ доступа заблокирован администратором."
+
+    # Если ключ уже был активирован через браузер (под временным ID 80000000+),
+    # переносим все забранные им грузы, заявки и ставки на его реальный Telegram ID!
+    if old_uid and old_uid != target_user_id:
+        cursor.execute("UPDATE confirmed_deals SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
+        cursor.execute("UPDATE bids SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
+        cursor.execute("UPDATE notifications SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
+        cursor.execute("DELETE FROM users WHERE user_id = ?", (old_uid,))
+
+    # Обновляем профиль пользователя Telegram
+    cursor.execute("""
+        INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status)
+        VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED')
+        ON CONFLICT(user_id) DO UPDATE SET
+            company = CASE WHEN excluded.company != '' THEN excluded.company ELSE users.company END,
+            name = CASE WHEN excluded.name != '' THEN excluded.name ELSE users.name END,
+            phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE users.phone END,
+            status = 'ACTIVE',
+            verification_status = 'VERIFIED'
+    """, (target_user_id, comp, contact_name, phone))
+
+    # Закрепляем ключ за реальным Telegram ID
+    cursor.execute("UPDATE carrier_keys SET user_id = ?, status = 'ACTIVE' WHERE id = ?", (target_user_id, k_id))
+    conn.commit()
+    conn.close()
+
+    return True, f"Аккаунт успешно привязан к компании «{comp}»! Доступ открыт."
+
+async def link_carrier_key_api(request):
+    """API для привязки ключа прямо из WebApp в Личном кабинете."""
+    try:
+        data = await request.json()
+        uid = int(data.get('user_id', 0))
+        key = data.get('key_code', '').strip()
+        if not uid or not key:
+            return web.json_response({"error": "Укажите ID пользователя и ключ"}, status=400)
+
+        success, msg = link_key_to_user_profile(uid, key)
+        if success:
+            return web.json_response({"status": "success", "message": msg})
+        return web.json_response({"error": msg}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
 async def admin_get_keys_api(request):
     """Список всех ключей для панели администратора."""
     if not is_admin_authorized(request):
@@ -6479,6 +6558,7 @@ async def web_server():
     app.router.add_post("/api/admin/edit_deal", admin_edit_deal_api)
     app.router.add_post("/api/admin/cancel_deal", admin_cancel_deal_api)
     app.router.add_post("/api/carrier/activate_key", activate_carrier_key_api)
+    app.router.add_post("/api/carrier/link_key", link_carrier_key_api)
     app.router.add_get("/api/admin/keys", admin_get_keys_api)
     app.router.add_post("/api/admin/generate_key", admin_generate_key_api)
     app.router.add_post("/api/admin/toggle_key_status", admin_toggle_key_status_api)
