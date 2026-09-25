@@ -6714,7 +6714,7 @@ async def run_bot():
 
 async def web_server():
     app = web.Application()
-    app.router.add_get("/", handle_ping)
+    app.router.add_get("/", serve_index)
     app.router.add_get("/ping", handle_ping)
     app.router.add_get("/webapp", serve_index)
     app.router.add_get("/admin", serve_index)
