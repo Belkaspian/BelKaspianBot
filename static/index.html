@@ -2706,13 +2706,14 @@
 
         async function loadAdminLoads() {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+            body.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
             try {
-                let res = await fetch('/api/admin/loads?t=' + Date.now());
+                let uid = getUserId();
+                let res = await fetch(`/api/admin/loads?user_id=${uid}&t=` + Date.now(), { headers: getAdminHeaders() });
                 let data = await res.json();
                 allAdminLoadsArray = data.loads || [];
                 renderAdminLoads();
-            } catch(e) { body.innerHTML = 'Ошибка загрузки'; }
+            } catch(e) { body.innerHTML = '<div class="loader">Ошибка загрузки грузов</div>'; }
         }
 
 
@@ -2744,13 +2745,14 @@
 
         async function loadAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+            body.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
             try {
-                let res = await fetch('/api/admin/confirmed_deals?t=' + Date.now());
+                let uid = getUserId();
+                let res = await fetch(`/api/admin/confirmed_deals?user_id=${uid}&t=` + Date.now(), { headers: getAdminHeaders() });
                 let data = await res.json();
                 allAdminDeals = data.deals || [];
                 renderAdminConfirmedDeals();
-            } catch(e) { body.innerHTML = 'Ошибка загрузки сделок'; }
+            } catch(e) { body.innerHTML = '<div class="loader">Ошибка загрузки сделок</div>'; }
         }
 
         
@@ -3966,10 +3968,9 @@
         let isInsideTelegram = Boolean(tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
 
         if (requestedTab === 'admin') {
-            let isAuthed = localStorage.getItem('admin_key') || localStorage.getItem('admin_authed') === 'true';
+            let isAuthed = localStorage.getItem('admin_key') || localStorage.getItem('admin_authed') === 'true' || isInsideTelegram;
             if (isAuthed) {
                 openAdminPanel();
-                switchTab('catalog');
             } else {
                 // Полная изоляция: скрываем интерфейс сайта, оставляем только чистый экран входа
                 const mainTable = document.getElementById('main-table');
@@ -3982,7 +3983,7 @@
                 if (mainNav) mainNav.style.display = 'none';
                 if (headerTop) headerTop.style.display = 'none';
                 if (searchBar) searchBar.style.display = 'none';
-                if (passCloseBtn) passCloseBtn.style.display = 'none'; // Убираем крестик
+                if (passCloseBtn) passCloseBtn.style.display = 'none';
 
                 document.getElementById('adminPassModal').classList.add('active');
             }
