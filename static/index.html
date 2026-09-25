@@ -1565,6 +1565,9 @@
             <div class="modal-header">
                 <div class="modal-title" style="display:flex; align-items:center; gap:8px;">
                     <span>Панель администратора</span>
+                    <button class="btn btn-secondary" style="padding:2px 8px; font-size:10px; height:24px;" onclick="loadAdminData(false)" title="Обновить сейчас">
+                        🔄 Обновить
+                    </button>
                     <button class="btn btn-secondary" style="padding:2px 8px; font-size:10px; height:24px;" onclick="adminLogout()" title="Сбросить ключ на этом устройстве">
                         Выйти
                     </button>
@@ -1574,22 +1577,22 @@
                 </div>
             </div>
 
-            <!-- Главная навигация админки (Порядок: Биржа -> Все заказы -> Перевозчики) -->
+            <!-- Главная навигация админки с живыми счётчиками -->
             <div class="sub-nav" style="margin-bottom: 12px;">
                 <div class="sub-nav-btn active" id="admTabExchange" onclick="switchAdminSubTab('exchange')">
-                    <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg> Биржа
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg> Биржа <span id="badgeAdmLoadsCount" style="opacity:0.75; font-size:9.5px; margin-left:3px;"></span>
                 </div>
                 <div class="sub-nav-btn" id="admTabDeals" onclick="switchAdminSubTab('deals')">
-                    <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> Все заказы
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> Заказы <span id="badgeAdmDealsCount" style="opacity:0.75; font-size:9.5px; margin-left:3px;"></span>
                 </div>
                 <div class="sub-nav-btn" id="admTabCarriers" onclick="switchAdminSubTab('carriers')">
-                    <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg> Перевозчики
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg> Перевозчики <span id="badgeAdmCarriersCount" style="opacity:0.75; font-size:9.5px; margin-left:3px;"></span>
                 </div>
                 <div class="sub-nav-btn" id="admTabKeys" onclick="switchAdminSubTab('keys')">
-                    <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Ключи доступа
+                    <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Ключи <span id="badgeAdmKeysCount" style="opacity:0.75; font-size:9.5px; margin-left:3px;"></span>
                 </div>
                 <div class="sub-nav-btn" style="background: var(--card-success-bg); color: var(--success); border-color: var(--card-success-border);" onclick="downloadAdminExcel()">
-                    📊 Экспорт Excel
+                    📊 Excel
                 </div>
             </div>
 
@@ -1712,6 +1715,47 @@
         </div>
     </div>
 
+    <!-- Модальное окно редактирования перевозчика / сотрудника -->
+    <div class="modal-overlay" id="adminEditCarrierModal" style="z-index: 3500 !important;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title" id="editCarrierModalTitle">Редактирование профиля</div>
+                <div class="modal-close" onclick="closeModal('adminEditCarrierModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="editCarrierUserId" />
+            <div class="form-group">
+                <label>Компания</label>
+                <input type="text" id="editCarrierCompany" placeholder="ООО / ИП / Компания..." />
+            </div>
+            <div class="form-group">
+                <label>ФИО Контактного лица / Сотрудника</label>
+                <input type="text" id="editCarrierName" placeholder="Иван Иванов" />
+            </div>
+            <div class="form-group">
+                <label>Номер телефона</label>
+                <input type="text" id="editCarrierPhone" placeholder="+375 / +7..." />
+            </div>
+            <div class="form-group" id="editCarrierSubsGroup">
+                <label>Подписки на направления (через запятую)</label>
+                <input type="text" id="editCarrierSubs" placeholder="Казахстан, Узбекистан..." />
+            </div>
+            <div class="form-group">
+                <label>Статус верификации</label>
+                <select id="editCarrierVerify">
+                    <option value="VERIFIED">ВЕРИФИЦИРОВАН (доступны ставки и бронь)</option>
+                    <option value="PENDING">НА РАССМОТРЕНИИ</option>
+                    <option value="UNVERIFIED">НЕ ВЕРИФИЦИРОВАН (цены скрыты)</option>
+                    <option value="REJECTED">ОТКЛОНЁН</option>
+                </select>
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitAdminEditCarrier()">Сохранить</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminEditCarrierModal')">Отмена</button>
+            </div>
+        </div>
+    </div>
     
     <!-- Модальное окно причин блокировки перевозчика -->
     <div class="modal-overlay" id="adminBlockReasonModal" style="z-index: 3000 !important;">
@@ -2208,7 +2252,7 @@
             loadAdminData();
         }
 
-        async function loadAdminData() {
+        async function loadAdminData(isSilent = false) {
             try {
                 let uid = getUserId();
                 let headers = getAdminHeaders();
@@ -2220,29 +2264,52 @@
                 ]);
 
                 if (cRes.status === 403 || dRes.status === 403 || lRes.status === 403 || kRes.status === 403) {
-                    closeModal('adminPanelModal');
-                    document.getElementById('adminPassModal').classList.add('active');
-                    showToast('Требуется админ-ключ', 'error');
+                    if (!isSilent) {
+                        closeModal('adminPanelModal');
+                        document.getElementById('adminPassModal').classList.add('active');
+                        showToast('Требуется админ-ключ', 'error');
+                    }
                     return;
                 }
 
-                // Безопасное чтение данных: даже если один из разделов временно пуст, админка не зависнет
                 let cData = cRes.ok ? await cRes.json() : {};
                 let dData = dRes.ok ? await dRes.json() : {};
                 let lData = lRes.ok ? await lRes.json() : {};
                 let kData = kRes.ok ? await kRes.json() : {};
-                
-                allAdminCarriersArray = cData.carriers || [];
-                allAdminDeals = dData.deals || [];
-                allAdminLoadsArray = lData.loads || [];
-                allAdminKeysArray = kData.keys || [];
+
+                let newAdminCarriers = cData.carriers || [];
+                let newAdminDeals = dData.deals || [];
+                let newAdminLoads = lData.loads || [];
+                let newAdminKeys = kData.keys || [];
+
+                // Сравниваем данные, чтобы не перерисовывать экран впустую, если ничего не изменилось
+                let newAdminHash = JSON.stringify([newAdminCarriers, newAdminDeals, newAdminLoads, newAdminKeys]);
+                if (isSilent && newAdminHash === window._lastAdminHash) {
+                    return;
+                }
+                window._lastAdminHash = newAdminHash;
+
+                allAdminCarriersArray = newAdminCarriers;
+                allAdminDeals = newAdminDeals;
+                allAdminLoadsArray = newAdminLoads;
+                allAdminKeysArray = newAdminKeys;
                 adminBotUsername = kData.bot_username || '';
                 adminRenderUrl = kData.render_url || '';
 
+                // Обновляем бейджи с количеством
+                const bLoads = document.getElementById('badgeAdmLoadsCount');
+                const bDeals = document.getElementById('badgeAdmDealsCount');
+                const bCarriers = document.getElementById('badgeAdmCarriersCount');
+                const bKeys = document.getElementById('badgeAdmKeysCount');
+                if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
+                if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
+                if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
+                if (bKeys) bKeys.textContent = `(${allAdminKeysArray.length})`;
+
                 populateAdminCarrierFilter();
-                switchAdminSubTab(adminSubTab);
+                applyAdminFilters();
             } catch(e) {
-                showToast('Ошибка загрузки данных админки', 'error');
+                if (!isSilent) showToast('Ошибка загрузки данных админки', 'error');
             }
         }
 
@@ -2279,11 +2346,16 @@
                             <div style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--border); font-size:10.5px;">
                                 <div style="font-weight:700; color:var(--text-muted); margin-bottom:4px;">Сотрудники компании (${k.employees.length} из ${k.max_users || 5}):</div>
                                 ${k.employees.map(emp => `
-                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; background:var(--bg); padding:3px 6px; border-radius:4px;">
-                                        <span>👤 <b>${emp.name}</b> (${emp.phone || 'без тел.'}) [ID: ${emp.user_id}]</span>
-                                        <button class="btn btn-danger" style="padding:1px 5px; font-size:9.5px; height:20px;" onclick="unlinkEmployee(${emp.user_id})">
-                                            Отвязать ✕
-                                        </button>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; background:var(--bg); padding:3px 6px; border-radius:4px; gap:4px;">
+                                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">👤 <b>${emp.name}</b> (${emp.phone || 'без тел.'}) <small style="color:var(--text-muted);">#${emp.user_id}</small></span>
+                                        <div style="display:flex; gap:4px; flex-shrink:0;">
+                                            <button class="btn btn-secondary" style="padding:1px 6px; font-size:9.5px; height:22px;" onclick="openEditCarrierModal(${emp.user_id}, true)">
+                                                ✏️ Ред.
+                                            </button>
+                                            <button class="btn btn-danger" style="padding:1px 5px; font-size:9.5px; height:22px;" onclick="unlinkEmployee(${emp.user_id})">
+                                                ✕
+                                            </button>
+                                        </div>
                                     </div>
                                 `).join('')}
                             </div>
@@ -2861,6 +2933,9 @@
                                 </span>
                             </div>
                             <div style="display:flex; gap:4px; align-items:center; justify-content:flex-end;" onclick="event.stopPropagation()">
+                                <button class="btn btn-secondary" style="padding:2px 6px; font-size:10px; height:26px; min-height:26px;" onclick="openEditCarrierModal(${c.user_id}, false); event.stopPropagation();" title="Редактировать">
+                                    ✏️
+                                </button>
                                 <button class="qty-btn" style="width:26px; height:26px; min-width:26px; min-height:26px; font-size:11px; font-weight:700;" onclick="toggleRow('carrier-${c.user_id}'); event.stopPropagation();" title="Информация">
                                     i
                                 </button>
@@ -2875,7 +2950,14 @@
                                 <div class="info-item"><span>Контактное лицо</span><b>${c.name}</b></div>
                                 <div class="info-item"><span>Телефон</span><b>${c.phone}</b></div>
                                 <div class="info-item"><span>Telegram ID</span><b>${c.user_id}</b></div>
+                                <div class="info-item"><span>Верификация</span><b>${c.verification_status || 'UNVERIFIED'}</b></div>
+                                <div class="info-item"><span>Ключ компании</span><b>${c.company_key || '—'}</b></div>
                                 <div class="info-item" style="grid-column: span 2;"><span>Подписки</span><b>${c.subscriptions || 'Нет подписок'}</b></div>
+                            </div>
+                            <div class="buttons" style="margin-top:10px;">
+                                <button class="btn btn-primary" style="padding:6px 10px;" onclick="openEditCarrierModal(${c.user_id}, false)">
+                                    ✏️ Редактировать данные
+                                </button>
                             </div>
                         </div>
                     `}).join('')}
@@ -2922,6 +3004,65 @@
         }
 
         /* 4. МОДАЛКИ РЕДАКТИРОВАНИЯ И ДОБАВЛЕНИЯ ГРУЗОВ */
+        function openEditCarrierModal(userId, isEmployee = false) {
+            let user = allAdminCarriersArray.find(c => String(c.user_id) === String(userId));
+            if (!user) {
+                // Если редактируем сотрудника из вкладки ключей
+                allAdminKeysArray.forEach(k => {
+                    if (k.employees) {
+                        let emp = k.employees.find(e => String(e.user_id) === String(userId));
+                        if (emp) user = { user_id: emp.user_id, company: k.company, name: emp.name, phone: emp.phone, subscriptions: '', verification_status: 'VERIFIED' };
+                    }
+                });
+            }
+
+            document.getElementById('editCarrierModalTitle').textContent = isEmployee ? 'Редактирование сотрудника' : 'Редактирование перевозчика';
+            document.getElementById('editCarrierUserId').value = userId;
+            document.getElementById('editCarrierCompany').value = user ? (user.company || '') : '';
+            document.getElementById('editCarrierName').value = user ? (user.name || '') : '';
+            document.getElementById('editCarrierPhone').value = user ? (user.phone || '') : '';
+            document.getElementById('editCarrierSubs').value = user ? (user.subscriptions || '') : '';
+            document.getElementById('editCarrierVerify').value = user ? (user.verification_status || 'VERIFIED') : 'VERIFIED';
+
+            document.getElementById('adminEditCarrierModal').classList.add('active');
+        }
+
+        async function submitAdminEditCarrier() {
+            let uId = document.getElementById('editCarrierUserId').value;
+            let comp = document.getElementById('editCarrierCompany').value.trim();
+            let name = document.getElementById('editCarrierName').value.trim();
+            let phone = document.getElementById('editCarrierPhone').value.trim();
+            let subs = document.getElementById('editCarrierSubs').value.trim();
+            let vStat = document.getElementById('editCarrierVerify').value;
+
+            if (!name) return showToast('Укажите ФИО контактного лица', 'error');
+
+            try {
+                let res = await fetch('/api/admin/edit_carrier', {
+                    method: 'POST',
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({
+                        user_id: uId,
+                        company: comp,
+                        name: name,
+                        phone: phone,
+                        subscriptions: subs,
+                        verification_status: vStat
+                    })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Данные успешно сохранены!', 'success');
+                    closeModal('adminEditCarrierModal');
+                    loadAdminData(false);
+                } else {
+                    showToast(data.error || 'Ошибка сохранения', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
+
         function openAdminAddLoadModal() {
             document.getElementById('addLoadRoute').value = '';
             document.getElementById('addLoadDate').value = '';
@@ -4459,6 +4600,13 @@
             let intervalTime = document.hidden ? 12000 : 4000;
             pollingTimer = setInterval(() => {
                 checkNotifications();
+
+                // Автообновление админ-панели в реальном времени, когда она открыта
+                const adminModal = document.getElementById('adminPanelModal');
+                if (adminModal && adminModal.classList.contains('active')) {
+                    loadAdminData(true);
+                }
+
                 if (currentTab === 'catalog' || currentTab === 'my') {
                     loadData(true);
                 } else if (currentTab === 'profile') {
