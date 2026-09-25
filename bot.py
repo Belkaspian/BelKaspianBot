@@ -6440,11 +6440,78 @@ async def admin_get_carriers_api(request):
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, company, name, phone, status, subscriptions FROM users ORDER BY user_id DESC")
+    cursor.execute("""
+        SELECT user_id, company, name, phone, status, subscriptions, 
+               COALESCE(verification_status, 'UNVERIFIED'), COALESCE(company_key, '')
+        FROM users ORDER BY user_id DESC
+    """)
     rows = cursor.fetchall()
     conn.close()
-    carriers = [{"user_id": r[0], "company": r[1] or "Не указана", "name": r[2] or "Не указано", "phone": r[3] or "Не указан", "status": r[4] or "ACTIVE", "subscriptions": r[5] or ""} for r in rows]
+    carriers = [{
+        "user_id": r[0], 
+        "company": r[1] or "Не указана", 
+        "name": r[2] or "Не указано", 
+        "phone": r[3] or "Не указан", 
+        "status": r[4] or "ACTIVE", 
+        "subscriptions": r[5] or "",
+        "verification_status": r[6] or "UNVERIFIED",
+        "company_key": r[7] or ""
+    } for r in rows]
     return web.json_response({"carriers": carriers})
+
+
+async def admin_edit_carrier_api(request):
+    """Редактирование перевозчика или конкретного сотрудника из админки."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
+        u_id = int(data.get('user_id', 0))
+        if not u_id:
+            return web.json_response({"error": "ID пользователя не указан"}, status=400)
+
+        company = (data.get('company') or '').strip()
+        name = (data.get('name') or '').strip()
+        phone = (data.get('phone') or '').strip()
+        subscriptions = (data.get('subscriptions') or '').strip()
+        v_status = (data.get('verification_status') or '').strip()
+
+        conn = sqlite3.connect("cargo_bot.db", timeout=15)
+        cursor = conn.cursor()
+
+        updates = []
+        params = []
+        if 'company' in data:
+            updates.append("company = ?")
+            params.append(company)
+        if 'name' in data:
+            updates.append("name = ?")
+            params.append(name)
+        if 'phone' in data:
+            updates.append("phone = ?")
+            params.append(phone)
+        if 'subscriptions' in data:
+            updates.append("subscriptions = ?")
+            params.append(subscriptions)
+        if 'verification_status' in data and v_status:
+            updates.append("verification_status = ?")
+            params.append(v_status)
+
+        if updates:
+            params.append(u_id)
+            cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?", params)
+            conn.commit()
+
+        conn.close()
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        logging.error(f"Error in admin_edit_carrier_api: {e}")
+        return web.json_response({"error": str(e)}, status=400)
 
 async def admin_toggle_carrier_status_api(request):
     try:
@@ -7622,6 +7689,7 @@ async def web_server():
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
     app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
+    app.router.add_post("/api/admin/edit_carrier", admin_edit_carrier_api)
     app.router.add_get("/api/admin/loads", admin_get_loads_api)
     app.router.add_post("/api/admin/add_load", admin_add_load_api)
     app.router.add_post("/api/admin/edit_load", admin_edit_load_api)
