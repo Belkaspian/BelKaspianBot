@@ -3368,21 +3368,21 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
     # Замена / слияние данных: если в новом файле элемент не распознан, сохраняем старый
-            raw_truck = (t_data.get("plate") or "").strip()
-            if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
-                new_truck_plate = raw_truck.upper()
-            elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
-                new_truck_plate = prev_truck_plate
-            else:
-                new_truck_plate = "Не указан"
+    raw_truck = (t_data.get("plate") or "").strip()
+    if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+        new_truck_plate = raw_truck.upper()
+    elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
+        new_truck_plate = prev_truck_plate
+    else:
+        new_truck_plate = "Не указан"
 
-            raw_trailer = (tr_data.get("plate") or "").strip()
-            if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
-                new_trailer_plate = raw_trailer.upper()
-            elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
-                new_trailer_plate = prev_trailer_plate
-            else:
-                new_trailer_plate = "Не указан"
+    raw_trailer = (tr_data.get("plate") or "").strip()
+    if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
+        new_trailer_plate = raw_trailer.upper()
+    elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
+        new_trailer_plate = prev_trailer_plate
+    else:
+        new_trailer_plate = "Не указан"
 
     p_full_name = (p_data.get("full_name") or "").strip()
     if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
