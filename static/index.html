@@ -1245,6 +1245,10 @@
             <svg class="icon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
             <span>Мои грузы</span>
         </div>
+        <div class="nav-btn" id="tab-profile" onclick="switchTab('profile')">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg>
+            <span>Профиль</span>
+        </div>
     </div>
 
     <!-- Подстатусы для "Моих Грузов" -->
@@ -2414,10 +2418,18 @@
             currentDataHash = '';
             document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog');
             document.getElementById('tab-my').classList.toggle('active', tab === 'my');
+            const tabProf = document.getElementById('tab-profile');
+            if (tabProf) tabProf.classList.toggle('active', tab === 'profile');
             document.getElementById('header-profile-btn').classList.toggle('active', tab === 'profile');
 
+            // Обновляем ссылку в строке браузера без перезагрузки страницы
+            try {
+                const url = new URL(window.location.href);
+                url.searchParams.set('tab', tab);
+                window.history.replaceState({}, '', url.toString());
+            } catch(e) {}
+
             document.getElementById('sort-search-container').style.display = (tab === 'catalog' || tab === 'my') ? 'flex' : 'none';
-            document.getElementById('my-sub-nav').style.display = (tab === 'my') ? 'flex' : 'none';
             document.getElementById('archive-sub-nav').style.display = (tab === 'my' && mySubTab === 'archive') ? 'flex' : 'none';
 
             const tableHeader = document.getElementById('tableHeader');
@@ -3559,7 +3571,37 @@
             saveProfileTimer = setTimeout(() => { saveProfile(); }, 400);
         }
 
-        loadData(false);
+        // Определяем нужную вкладку из ссылки
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlPath = window.location.pathname;
+        let requestedTab = urlParams.get('tab') || urlParams.get('page');
+
+        if (!requestedTab) {
+            if (urlPath.includes('admin')) requestedTab = 'admin';
+            else if (urlPath.includes('profile')) requestedTab = 'profile';
+            else if (urlPath.includes('my')) requestedTab = 'my';
+            else requestedTab = 'catalog';
+        }
+
+        // Если открыли ссылку на админку
+        if (requestedTab === 'admin') {
+            let userId = getUserId();
+            let isAuthed = localStorage.getItem('admin_authed') === 'true' || 
+                           (userId && localStorage.getItem('admin_authed_' + userId) === 'true');
+            if (isAuthed) {
+                openAdminPanel();
+            } else {
+                document.getElementById('adminPassModal').classList.add('active');
+            }
+            switchTab('catalog');
+        } else if (requestedTab === 'profile') {
+            switchTab('profile');
+        } else if (requestedTab === 'my') {
+            switchTab('my');
+        } else {
+            switchTab('catalog');
+        }
+
         setInterval(() => {
             checkNotifications();
             if (currentTab === 'catalog' || currentTab === 'my') {
