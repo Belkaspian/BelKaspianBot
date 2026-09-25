@@ -1775,27 +1775,33 @@
         const tg = window.Telegram?.WebApp || {};
         try { tg.expand(); tg.ready(); } catch(e) {}
 
-        // Встроенный легкий звук клика с возможностью отключения в профиле + вибрация Telegram
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Безопасный запуск звука без зависаний
+        let audioCtx = null;
         function playTapSound(freq = 600, duration = 0.04) {
-            // Если звук отключен пользователем в профиле — не воспроизводим
             if (localStorage.getItem('sound_enabled') === 'false') return;
-
             try {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start();
-                osc.stop(audioCtx.currentTime + duration);
+                if (!audioCtx) {
+                    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+                    if (AudioCtxClass) audioCtx = new AudioCtxClass();
+                }
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                if (audioCtx) {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + duration);
+                }
             } catch(e) {}
             try {
-                if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+                if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
             } catch(e) {}
         }
 
@@ -3083,22 +3089,56 @@
             } catch(e) { showToast('Ошибка подключения', 'error'); }
         }
 
-        function handleDirectFileSelect(event) {
-            const files = Array.from(event.target.files);
-            files.forEach(f => {
-                if (f.type.startsWith('image/') && f.size < 40 * 1024) {
-                    showToast(`⚠️ Файл "${f.name}" слишком маленький или нечёткий. Проверьте читаемость.`, 'warning', 3500);
-                }
+        // Быстрое сжатие фото в браузере телефона без потери читаемости документов
+        async function compressImageFile(file, maxSide = 1600, quality = 0.82) {
+            if (!file.type.startsWith('image/')) return file;
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        let w = img.width, h = img.height;
+                        if (w > maxSide || h > maxSide) {
+                            if (w > h) { h = Math.round((h * maxSide) / w); w = maxSide; }
+                            else { w = Math.round((w * maxSide) / h); h = maxSide; }
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        canvas.toBlob((blob) => {
+                            if (blob && blob.size < file.size) {
+                                resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+                            } else { resolve(file); }
+                        }, 'image/jpeg', quality);
+                    };
+                    img.onerror = () => resolve(file);
+                    img.src = e.target.result;
+                };
+                reader.onerror = () => resolve(file);
+                reader.readAsDataURL(file);
             });
-            directSelectedFiles = directSelectedFiles.concat(files);
+        }
+
+        async function handleDirectFileSelect(event) {
+            const rawFiles = Array.from(event.target.files);
+            for (let f of rawFiles) {
+                if (f.type.startsWith('image/') && f.size < 40 * 1024) {
+                    showToast(`⚠️ Файл "${f.name}" подозрительно маленький. Проверьте чёткость.`, 'warning', 3000);
+                }
+                const readyFile = await compressImageFile(f);
+                directSelectedFiles.push(readyFile);
+            }
             renderDirectFilePreview();
         }
 
-        function handleDropFiles(event) {
+        async function handleDropFiles(event) {
             event.preventDefault();
             document.getElementById('directUploadDropzone').style.borderColor = 'var(--border)';
             if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
-                directSelectedFiles = directSelectedFiles.concat(Array.from(event.dataTransfer.files));
+                for (let f of Array.from(event.dataTransfer.files)) {
+                    const readyFile = await compressImageFile(f);
+                    directSelectedFiles.push(readyFile);
+                }
                 renderDirectFilePreview();
             }
         }
@@ -3607,13 +3647,24 @@
             if (isPending) {
                 // ...
             } else {
+                // Расчет кнопок звонка и WhatsApp ДО формирования текста карточки
+                let cleanPhone = (d.driver_phone || '').replace(/[^\d+]/g, '');
+                let waDigits = (d.driver_phone || '').replace(/\D/g, '');
+                let phoneBtnsHTML = '';
+                if (cleanPhone && cleanPhone.length >= 7) {
+                    phoneBtnsHTML = '<div style="display:flex; gap:6px; margin-top:5px;" onclick="event.stopPropagation()">' +
+                        '<a href="tel:' + cleanPhone + '" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-weight:700;">📞 Набрать</a>' +
+                        '<a href="https://wa.me/' + waDigits + '" target="_blank" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; gap:4px; font-weight:700;">💬 WhatsApp</a>' +
+                        '</div>';
+                }
+
                 detailsHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                         <div>
                             ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
                         </div>
                         <button class="info-toggle-btn" style="margin-bottom:0;" onclick="toggleCargoExtraInfo('${d.id}', event)">
-                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="8"/></svg>
                             <span>Информация о грузе</span>
                         </button>
                     </div>
@@ -3624,25 +3675,11 @@
                         <div class="info-grid" style="margin-bottom:0;">
                             <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
                             <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                            <div class="info-item"><span>Вес / Объем</span><b>${d.weight || '22т'}</b></div>
+                            <div class="info-item"><span>Вес / Объем</span><b>${d.weight || 'до 22т'}</b></div>
                             <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
                         </div>
                     </div>
                     
-                    // Кнопки быстрого звонка и перехода в WhatsApp в 1 клик
-                    let cleanPhone = (d.driver_phone || '').replace(/[^\d+]/g, '');
-                    let waDigits = (d.driver_phone || '').replace(/\D/g, '');
-                    let phoneBtnsHTML = (cleanPhone && cleanPhone.length >= 7) ? `
-                        <div style="display:flex; gap:6px; margin-top:5px;" onclick="event.stopPropagation()">
-                            <a href="tel:${cleanPhone}" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-weight:700;">
-                                📞 Набрать
-                            </a>
-                            <a href="https://wa.me/${waDigits}" target="_blank" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; gap:4px; font-weight:700;">
-                                💬 WhatsApp
-                            </a>
-                        </div>
-                    ` : '';
-
                     <div class="info-grid">
                         <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
                         <div class="info-item"><span>Взял(а) рейс</span><b>${d.booked_by_name || 'Сотрудник'}${d.booked_by_phone ? ' (' + d.booked_by_phone + ')' : ''}</b></div>
