@@ -1378,6 +1378,17 @@
 
         <div class="profile-card">
             <div class="profile-title">
+                <svg class="icon" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                Звуки в приложении
+            </div>
+            <div style="display: flex; gap: 6px;">
+                <button class="btn btn-primary" id="sound-btn-on" onclick="setSoundSetting(true)">Включены</button>
+                <button class="btn btn-secondary" id="sound-btn-off" onclick="setSoundSetting(false)">Без звука</button>
+            </div>
+        </div>
+
+        <div class="profile-card">
+            <div class="profile-title">
                 <svg class="icon" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                 Подписки на направления
             </div>
@@ -1764,9 +1775,12 @@
         const tg = window.Telegram?.WebApp || {};
         try { tg.expand(); tg.ready(); } catch(e) {}
 
-        // Встроенный легкий звук клика без внешних файлов + вибрация Telegram
+        // Встроенный легкий звук клика с возможностью отключения в профиле + вибрация Telegram
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playTapSound(freq = 600, duration = 0.04) {
+            // Если звук отключен пользователем в профиле — не воспроизводим
+            if (localStorage.getItem('sound_enabled') === 'false') return;
+
             try {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
                 const osc = audioCtx.createOscillator();
@@ -1783,6 +1797,23 @@
             try {
                 if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
             } catch(e) {}
+        }
+
+        function setSoundSetting(enabled) {
+            localStorage.setItem('sound_enabled', enabled ? 'true' : 'false');
+            updateSoundButtons();
+            showToast(enabled ? 'Звук включен' : 'Звук выключен', 'info');
+            if (enabled) playTapSound();
+        }
+
+        function updateSoundButtons() {
+            const enabled = localStorage.getItem('sound_enabled') !== 'false';
+            const onBtn = document.getElementById('sound-btn-on');
+            const offBtn = document.getElementById('sound-btn-off');
+            if (onBtn && offBtn) {
+                onBtn.className = enabled ? 'btn btn-primary' : 'btn btn-secondary';
+                offBtn.className = !enabled ? 'btn btn-primary' : 'btn btn-secondary';
+            }
         }
 
         // Автоматически озвучивать клики по кнопкам
@@ -3598,10 +3629,29 @@
                         </div>
                     </div>
                     
+                    // Кнопки быстрого звонка и перехода в WhatsApp в 1 клик
+                    let cleanPhone = (d.driver_phone || '').replace(/[^\d+]/g, '');
+                    let waDigits = (d.driver_phone || '').replace(/\D/g, '');
+                    let phoneBtnsHTML = (cleanPhone && cleanPhone.length >= 7) ? `
+                        <div style="display:flex; gap:6px; margin-top:5px;" onclick="event.stopPropagation()">
+                            <a href="tel:${cleanPhone}" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-weight:700;">
+                                📞 Набрать
+                            </a>
+                            <a href="https://wa.me/${waDigits}" target="_blank" class="btn btn-secondary" style="padding:3px 8px; font-size:10.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; gap:4px; font-weight:700;">
+                                💬 WhatsApp
+                            </a>
+                        </div>
+                    ` : '';
+
                     <div class="info-grid">
                         <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
                         <div class="info-item"><span>Взял(а) рейс</span><b>${d.booked_by_name || 'Сотрудник'}${d.booked_by_phone ? ' (' + d.booked_by_phone + ')' : ''}</b></div>
-                        <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
+                        <div class="info-item">
+                            <span>Водитель</span>
+                            <b>${d.driver_name || 'Не указан'}</b>
+                            <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">${d.driver_phone || 'Без тел.'}</div>
+                            ${phoneBtnsHTML}
+                        </div>
                         <div class="info-item"><span>Тягач / Прицеп</span><b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b></div>
                     </div>
 
@@ -3919,6 +3969,7 @@
                     }
                     
                     renderVerificationControls(data.profile);
+                    updateSoundButtons();
 
                     let rawSubs = (data.profile.subscriptions || '').split(',').map(s => s.trim()).filter(Boolean);
                     document.querySelectorAll('.sub-chip').forEach(chip => {
