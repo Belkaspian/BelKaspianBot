@@ -1209,7 +1209,7 @@
 
     <!-- Header Bar -->
     <div class="header-top">
-        <div class="header-brand" onclick="handleHeaderClick()">
+        <div class="header-brand">
             <div class="header-logo-container">
                 <img id="headerLogoImg"
                      src="https://belkaspian.by/wp-content/uploads/2018/06/logo.png" 
@@ -1847,21 +1847,7 @@
         }
 
         function handleHeaderClick() {
-            headerClicks++;
-            if (headerTimer) clearTimeout(headerTimer);
-            if (headerClicks >= 5) {
-                headerClicks = 0;
-                let userId = getUserId();
-                let isAuthed = localStorage.getItem('admin_authed') === 'true' || 
-                               (userId && localStorage.getItem('admin_authed_' + userId) === 'true');
-                if (isAuthed) {
-                    openAdminPanel();
-                } else {
-                    document.getElementById('adminPassModal').classList.add('active');
-                }
-            } else {
-                headerTimer = setTimeout(() => { headerClicks = 0; }, 2000);
-            }
+            // Скрытый вход по кликам отключен для безопасности
         }
 
         async function submitAdminPassword() {
