@@ -5438,7 +5438,10 @@ async def my_loads_api(request):
                    COALESCE(u_book.phone, ''),
                    COALESCE(cd.is_paid, 0),
                    COALESCE(cd.paid_date, ''),
-                   COALESCE(cd.planned_payment_date, '')
+                   COALESCE(cd.planned_payment_date, ''),
+                   COALESCE(cd.pay_docs_status, 'NONE'),
+                   COALESCE(cd.pay_docs_error, ''),
+                   COALESCE(cd.paid_amount, '')
             FROM confirmed_deals cd
             LEFT JOIN loads l ON cd.load_id = l.load_id
             LEFT JOIN users u_book ON cd.user_id = u_book.user_id
@@ -5519,6 +5522,22 @@ async def my_loads_api(request):
         has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
         is_transit = bool(dt_end and msk_today > dt_end and not is_unl and has_submitted_docs)
 
+        deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay, pay_d_stat, pay_d_err, p_amount = r
+
+        # Если груз оплачен и прошло больше 5 дней — скрываем его из текущего экрана
+        if is_paid and paid_date:
+            try:
+                p_dt = datetime.strptime(paid_date[:10], "%d.%m.%Y").date()
+                if (msk_today - p_dt).days > 5:
+                    continue
+            except Exception:
+                pass
+
+        dt_start, dt_end = parse_cargo_date_range(date_str)
+        is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
+        has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
+        is_transit = bool(dt_end and msk_today > dt_end and not is_unl and has_submitted_docs)
+
         deals.append({
             "id": f"deal_{deal_id}",
             "deal_id": deal_id,
@@ -5544,7 +5563,13 @@ async def my_loads_api(request):
             "unload_date": unl_date or "",
             "order_number": ord_num or "",
             "booked_by_name": b_name or "Сотрудник",
-            "booked_by_phone": b_phone or ""
+            "booked_by_phone": b_phone or "",
+            "planned_payment_date": planned_pay or "",
+            "pay_docs_status": pay_d_stat or "NONE",
+            "pay_docs_error": pay_d_err or "",
+            "is_paid": bool(is_paid),
+            "paid_amount": p_amount or "",
+            "paid_date": paid_date or ""
         })
             
     return web.json_response({"deals": deals})
@@ -7274,7 +7299,7 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
         return
 
     today_dt = datetime.now(timezone.utc).date()
-    planned_pay_dt = add_business_days(today_dt, 11)
+    planned_pay_dt = calculate_payment_date(today_dt, 11)
     planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -7385,7 +7410,7 @@ async def submit_pay_docs_direct_api(request):
 
         # Если все хорошо: рассчитываем плановую дату оплаты (+11 рабочих дней от сегодня)
         today_dt = datetime.now(timezone.utc).date()
-        planned_pay_dt = add_business_days(today_dt, 11)
+        planned_pay_dt = calculate_payment_date(today_dt, 11)
         planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
         today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
