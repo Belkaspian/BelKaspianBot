@@ -3368,7 +3368,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
     # Замена / слияние данных: если в новом файле элемент не распознан, сохраняем старый
-    raw_truck = (t_data.get("plate") or "").strip()
+            raw_truck = (t_data.get("plate") or "").strip()
             if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
                 new_truck_plate = raw_truck.upper()
             elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
