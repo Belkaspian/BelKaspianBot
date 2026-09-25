@@ -526,8 +526,21 @@ def init_db():
         )
     """)
 
+    # Вечный стоп-лист (черный список) проблемных авто и водителей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type TEXT, -- 'VEHICLE' или 'DRIVER'
+            identifier TEXT, -- очищенный номер или ФИО для точного поиска
+            raw_value TEXT, -- исходный текст
+            reason TEXT, -- причина внесения
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     migrations = [
         "ALTER TABLE confirmed_deals ADD COLUMN load_id INTEGER",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_reminded INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
         "ALTER TABLE users ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED'",
         "ALTER TABLE users ADD COLUMN pending_company TEXT DEFAULT ''",
@@ -2544,6 +2557,62 @@ async def auto_promote_payment_docs_status():
 
         await asyncio.sleep(300)  # Проверка каждые 5 минут
 
+
+async def auto_remind_unloaded_payment_docs():
+    """Фоновый робот: спустя 10 дней после даты выгрузки мягко напоминает сдать CMR и счет."""
+    while True:
+        try:
+            conn = sqlite3.connect("cargo_bot.db", timeout=15)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id, route, unload_date 
+                FROM confirmed_deals 
+                WHERE is_unloaded = 1 
+                  AND (pay_docs_status IS NULL OR pay_docs_status IN ('NONE', 'AI_ERROR'))
+                  AND COALESCE(pay_docs_reminded, 0) = 0
+                  AND unload_date != ''
+            """)
+            rows = cursor.fetchall()
+            today_dt = datetime.now(timezone.utc).date()
+
+            for deal_id, u_id, route_str, unl_date_str in rows:
+                try:
+                    # Разбираем дату выгрузки
+                    m = re.search(r'(\d{4})-(\d{2})-(\d{2})', unl_date_str)
+                    if not m:
+                        m_ru = re.search(r'(\d{1,2})[\./](\d{1,2})[\./](\d{2,4})', unl_date_str)
+                        if m_ru:
+                            u_day, u_month, u_year = int(m_ru.group(1)), int(m_ru.group(2)), int(m_ru.group(3))
+                            unl_dt = date(u_year if u_year > 100 else u_year + 2000, u_month, u_day)
+                        else:
+                            continue
+                    else:
+                        unl_dt = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+                    # Прошло ли 10 дней?
+                    if (today_dt - unl_dt).days >= 10:
+                        cursor.execute("UPDATE confirmed_deals SET pay_docs_reminded = 1 WHERE id = ?", (deal_id,))
+                        conn.commit()
+
+                        reminder_text = (
+                            f"🔔 **Напоминание по закрывающим документам**\n\n"
+                            f"Рейс **{route_str}** был выгружен 10 дней назад ({unl_date_str}).\n"
+                            f"Пожалуйста, прикрепите копии CMR, Счёта и Акта в приложении, чтобы бухгалтерия приняла рейс к оплате."
+                        )
+                        add_notification(u_id, "Напоминание по документам", reminder_text)
+                        try:
+                            await bot.send_message(chat_id=u_id, text=reminder_text, parse_mode="Markdown")
+                        except Exception:
+                            pass
+                except Exception as ex:
+                    logging.error(f"Error checking reminder for deal {deal_id}: {ex}")
+
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error in auto_remind_unloaded_payment_docs: {e}")
+
+        await asyncio.sleep(3600)  # Проверяем раз в 1 час
+
     
 # ==================== АВТО-ОЧИСТКА ГРУЗОВ ПО ТАЙМЕРУ МСК ====================
 async def auto_clean_expired_cargos():
@@ -3368,8 +3437,14 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
         header_title = "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
         changes_summary = ""
 
+    # Проверка по вечному стоп-листу (только для глаз логиста, перевозчик этого не видит)
+    stop_alerts = check_stoplist_matches(new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone)
+    stoplist_banner = ""
+    if stop_alerts:
+        stoplist_banner = "\n\n🚨 **ВНИМАНИЕ ЛОГИСТУ! ОБНАРУЖЕНО В СТОП-ЛИСТЕ:**\n• " + "\n• ".join(stop_alerts) + "\n"
+
     admin_msg = (
-        f"**{header_title}**\n\n"
+        f"**{header_title}**{stoplist_banner}\n\n"
         f"📅 {date_str} | 📍 {route_str}\n"
         f"💰 {price_str}\n\n"
         f"{carrier_text}\n"
@@ -3811,11 +3886,207 @@ async def handle_admin_cargo_command(message: types.Message):
         f"{format_cards_block(asia_cards)}"
     )
 
+    # Создаем инлайн-кнопки для публикации любого груза из Kaiten в 1 клик
+    all_cards = uz_cards + asia_cards
+    builder = InlineKeyboardBuilder()
+    for c in all_cards[:10]:
+        builder.row(types.InlineKeyboardButton(text=f"➕ Опубл. #{c['id']}", callback_data=f"pub_kaiten_{c['id']}"))
+
     try:
-        await status_msg.edit_text(report_html, parse_mode="HTML", disable_web_page_preview=True)
+        await status_msg.edit_text(
+            report_html, 
+            parse_mode="HTML", 
+            disable_web_page_preview=True,
+            reply_markup=builder.as_markup() if all_cards else None
+        )
     except Exception as e:
         logging.error(f"Ошибка вывода грузов Kaiten: {e}")
         await status_msg.edit_text("⚠️ Ошибка формирования отчёта Kaiten.")
+
+
+@dp.callback_query(F.data.startswith("pub_kaiten_"))
+async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
+    """Публикация груза из Kaiten на Биржу в 1 клик."""
+    card_id = int(callback.data.replace("pub_kaiten_", ""))
+    await callback.answer("⏳ Загружаю данные карточки из Kaiten...")
+
+    card_data = await kaiten_api_request("GET", f"/cards/{card_id}")
+    if not card_data or not isinstance(card_data, dict):
+        await callback.message.reply(f"❌ Не удалось получить карточку Kaiten #{card_id}")
+        return
+
+    title = card_data.get("title") or card_data.get("name") or ""
+    desc = card_data.get("description") or ""
+    full_text = f"{title}\n{desc}".strip()
+
+    # Парсим через ИИ
+    ai_cargos = await parse_cargos_with_ai(full_text)
+    if not ai_cargos:
+        # Резервный парсинг
+        d_date, d_route, d_price, d_cars, d_details, d_cartype, d_cargotype, d_weight, d_expires = parse_cargo_raw(full_text)
+        ai_cargos = [{
+            "destination_country": detect_country(full_text),
+            "date": d_date, "route": d_route, "cars_count": d_cars, "price": d_price,
+            "car_type": d_cartype, "cargo_type": d_cargotype, "weight": d_weight,
+            "details": d_details, "time_limit": ""
+        }]
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, subscriptions, status FROM users WHERE status != 'BLOCKED'")
+    active_users = cursor.fetchall()
+
+    for item in ai_cargos:
+        dest_country = item.get("destination_country") or "Все"
+        c_date = item.get("date") or "Срочно"
+        c_route = item.get("route") or title
+        c_cars = item.get("cars_count") or "1"
+        c_price = item.get("price") or "Торги"
+        c_cartype = item.get("car_type") or "Тент/реф"
+        c_cargotype = item.get("cargo_type") or "ТНП"
+        c_weight = item.get("weight") or "до 22т"
+        c_details = item.get("details") or ""
+
+        cursor.execute("""
+            INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        """, (dest_country, c_date, c_route, c_cars, c_price, full_text, c_details, c_cartype, c_cargotype, c_weight))
+        new_cargo_id = cursor.lastrowid
+
+        clean_dir = dest_country.split()[0].strip().lower()
+        target_channel_id = None
+        for chan_name, chan_id in CHANNELS.items():
+            if clean_dir in chan_name.lower():
+                target_channel_id = chan_id
+                break
+
+        if target_channel_id:
+            try:
+                bot_info = await bot.get_me()
+                b_username = bot_info.username or ""
+                chan_card = f"📍 **{c_date} | {c_route}**\n💰 **{c_price}** | 🚚 {c_cars} авто\n🚛 {c_cartype} | {c_cargotype} | {c_weight}"
+                b_builder = InlineKeyboardBuilder()
+                if b_username:
+                    b_builder.row(types.InlineKeyboardButton(text="📱 Открыть в приложении", url=f"https://t.me/{b_username}?start=load_{new_cargo_id}"))
+                await bot.send_message(chat_id=target_channel_id, text=chan_card, reply_markup=b_builder.as_markup() if b_username else None, parse_mode="Markdown")
+            except Exception:
+                pass
+
+        for u_id, subs, _ in active_users:
+            u_subs = [s.strip().lower() for s in (subs or "").split(",") if s.strip()]
+            if any(clean_dir in s for s in u_subs):
+                await send_cargo_to_user(u_id, new_cargo_id)
+
+    conn.commit()
+    conn.close()
+
+    await callback.message.reply(f"✅ Карточка Kaiten **#{card_id}** успешно опубликована на Бирже и разослана перевозчикам!", parse_mode="Markdown")
+
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/find', 'find', '/поиск', 'поиск'))))
+async def handle_admin_find_command(message: types.Message):
+    """Мгновенный поиск машины или водителя по номеру/фамилии."""
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("ℹ️ Укажите номер авто или фамилию для поиска:\nНапример: `/find 1234` или `/find Иванов`", parse_mode="Markdown")
+        return
+
+    query = parts[1].strip()
+    clean_q = re.sub(r'[\s\W_]', '', query).upper()
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cd.id, cd.order_number, cd.date, cd.route, cd.price,
+               COALESCE(cd.last_truck_plate, ''), COALESCE(cd.last_trailer_plate, ''),
+               COALESCE(cd.last_driver_name, ''), COALESCE(cd.driver_phone, ''),
+               COALESCE(u.company, 'Не указана'), COALESCE(cd.unload_date, ''),
+               cd.is_unloaded, cd.status
+        FROM confirmed_deals cd
+        LEFT JOIN users u ON cd.user_id = u.user_id
+        WHERE cd.last_truck_plate LIKE ? OR cd.last_trailer_plate LIKE ?
+           OR cd.last_driver_name LIKE ? OR cd.driver_phone LIKE ?
+           OR cd.order_number LIKE ?
+        ORDER BY cd.id DESC LIMIT 5
+    """, (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await message.reply(f"🔍 По запросу `{query}` совпадений не найдено.", parse_mode="Markdown")
+        return
+
+    cards = []
+    for r in rows:
+        d_id, ord_num, d_date, d_route, d_price, tr, trl, drv, ph, comp, unl, is_unl, st = r
+        status_text = "Выгружен (" + unl + ")" if is_unl else "В пути / На погрузке"
+        plates = f"{tr}/{trl}" if trl else tr
+        cards.append(
+            f"🚚 **Заказ:** #{ord_num or d_id} | 📍 {d_route} ({d_date})\n"
+            f"• **ТС:** `{plates or '—'}`\n"
+            f"• **Водитель:** {drv or 'Не указан'} ({ph or 'без тел.'})\n"
+            f"• **Перевозчик:** {comp}\n"
+            f"• **Статус:** {status_text} | 💰 {d_price}"
+        )
+
+    await message.reply(f"🔍 **Результаты поиска по `{query}`:**\n\n" + "\n\n".join(cards), parse_mode="Markdown")
+
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/blacklist_del', 'blacklist_del'))))
+async def handle_admin_blacklist_del(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply("Укажите ID записи для удаления:\nНапример: `/blacklist_del 2`", parse_mode="Markdown")
+        return
+    b_id = int(parts[1])
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM blacklist WHERE id = ?", (b_id,))
+    conn.commit()
+    conn.close()
+    await message.reply(f"✅ Запись #{b_id} удалена из чёрного списка.")
+
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/blacklist', 'blacklist', '/чс', 'чс'))))
+async def handle_admin_blacklist_command(message: types.Message):
+    """Просмотр и добавление в вечный стоп-лист."""
+    text = message.text.strip()
+    parts = text.split(maxsplit=3)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+
+    if len(parts) >= 4 and parts[1].lower() in ['авто', 'машина', 'тс', 'водитель']:
+        kind = 'VEHICLE' if parts[1].lower() in ['авто', 'машина', 'тс'] else 'DRIVER'
+        ident = parts[2].strip()
+        reason = parts[3].strip()
+        cursor.execute("INSERT INTO blacklist (item_type, identifier, raw_value, reason) VALUES (?, ?, ?, ?)", (kind, ident, ident, reason))
+        conn.commit()
+        conn.close()
+        await message.reply(f"🚫 Успешно добавлено в ЧС:\n**Тип:** {parts[1].capitalize()}\n**Значение:** `{ident}`\n**Причина:** {reason}", parse_mode="Markdown")
+        return
+
+    # Просмотр списка
+    cursor.execute("SELECT id, item_type, raw_value, reason FROM blacklist ORDER BY id DESC LIMIT 25")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await message.reply(
+            "📋 **Чёрный список пуст.**\n\n"
+            "Чтобы добавить, отправьте команду:\n"
+            "• `/blacklist авто 1234 АВ-7 Срыв погрузки`\n"
+            "• `/blacklist водитель Иванов Иван Причина`",
+            parse_mode="Markdown"
+        )
+        return
+
+    lines = ["📋 **ВЕЧНЫЙ СТОП-ЛИСТ (АВТО И ВОДИТЕЛИ):**"]
+    for b_id, b_type, b_raw, b_reason in rows:
+        icon = "🚛" if b_type == 'VEHICLE' else "👤"
+        lines.append(f"{icon} `[#{b_id}]` **{b_raw}** — {b_reason} (удалить: `/blacklist_del {b_id}`)")
+
+    await message.reply("\n".join(lines), parse_mode="Markdown")
 
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/help', 'help', '/помощь', 'помощь', '/команды'))))
@@ -3823,14 +4094,13 @@ async def handle_admin_help_command(message: types.Message):
     """Справка по командам, работающая только в админ-канале."""
     help_text = (
         "📖 **Шпаргалка команд Админ-канала:**\n\n"
-        "• **`/cargo`** (или **`грузы`**) — Актуальный список грузов из первой колонки («Загрузки») Kaiten\n\n"
-        "• **`/menu`** (или **`меню`**) — Кнопка для входа в веб-панель управления (Биржа, Все заказы, Перевозчики, Ключи)\n\n"
-        "• **`!Текст сообщения`** — Моментальная рассылка важного сообщения ВСЕМ перевозчикам бота\n"
-        "  *(Пример: `!Внимание! Завтра погрузки с 8:00!`)*\n\n"
-        "• **`/test_backup`** — Проверка создания бэкапа базы данных с выгрузкой в канал бэкапов\n\n"
-        "• **`/help`** (или **`помощь`**) — Показать эту справку\n\n"
-        "📝 **Публикация грузов:**\n"
-        "Грузы из этого канала не публикуются. Публикация происходит только из канала **belkaspian world**."
+        "• **`/cargo`** (или **`грузы`**) — Актуальные грузы из первой колонки Kaiten с кнопками моментальной публикации\n\n"
+        "• **`/find 1234`** (или **`поиск Иванов`**) — Мгновенный поиск машины/водителя/рейса\n\n"
+        "• **`/blacklist`** — Управление вечным чёрным списком (авто и водители)\n"
+        "  *(Пример: `/blacklist авто 1234 АВ-7 Срыв погрузки`)*\n\n"
+        "• **`/menu`** (или **`меню`**) — Вход в веб-панель управления (Биржа, Заказы, Ключи)\n\n"
+        "• **`!Текст`** — Рассылка важного сообщения ВСЕМ перевозчикам\n\n"
+        "• **`/test_backup`** — Проверка создания бэкапа базы данных"
     )
     try:
         await message.reply(help_text, parse_mode="Markdown")
@@ -5291,8 +5561,14 @@ async def direct_upload_docs_api(request):
         conn.close()
 
         header_title = "🔄 ЗАМЕНА ДАННЫХ ПО ГРУЗУ" if was_previously_submitted else "📄 ПОДАЧА ДАННЫХ ПО ГРУЗУ"
+        # Проверка по вечному стоп-листу (только для глаз логиста)
+        stop_alerts = check_stoplist_matches(new_truck_plate, new_trailer_plate, new_driver_short_name, new_driver_phone)
+        stoplist_banner = ""
+        if stop_alerts:
+            stoplist_banner = "\n\n🚨 **ВНИМАНИЕ ЛОГИСТУ! ОБНАРУЖЕНО В СТОП-ЛИСТЕ:**\n• " + "\n• ".join(stop_alerts) + "\n"
+
         admin_msg = (
-            f"**{header_title}**\n\n"
+            f"**{header_title}**{stoplist_banner}\n\n"
             f"📅 {date_str} | 📍 {route_str}\n"
             f"💰 {price_str}\n\n"
             f"{user_info}\n\n"
@@ -5875,6 +6151,38 @@ async def decline_counter_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
         
+def check_stoplist_matches(truck_plate: str, trailer_plate: str, driver_name: str, driver_phone: str) -> list[str]:
+    """Проверяет автомобиль и водителя по вечному чёрному списку."""
+    warnings = []
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+
+    clean_truck = re.sub(r'[\s\W_]', '', truck_plate or '').upper()
+    clean_trailer = re.sub(r'[\s\W_]', '', trailer_plate or '').upper()
+    clean_driver = (driver_name or '').strip().lower()
+    clean_phone = re.sub(r'\D', '', driver_phone or '')
+
+    cursor.execute("SELECT id, item_type, identifier, raw_value, reason FROM blacklist")
+    rows = cursor.fetchall()
+    conn.close()
+
+    for b_id, b_type, b_ident, b_raw, b_reason in rows:
+        b_ident_clean = re.sub(r'[\s\W_]', '', b_ident or '').upper()
+
+        if b_type == 'VEHICLE':
+            if clean_truck and b_ident_clean and (b_ident_clean in clean_truck or clean_truck in b_ident_clean):
+                warnings.append(f"Тягач `{truck_plate}` числится в ЧС! Причина: {b_reason}")
+            elif clean_trailer and b_ident_clean and (b_ident_clean in clean_trailer or clean_trailer in b_ident_clean):
+                warnings.append(f"Прицеп `{trailer_plate}` числится в ЧС! Причина: {b_reason}")
+        elif b_type == 'DRIVER':
+            b_drv_clean = b_ident.lower().strip()
+            if clean_driver and b_drv_clean and (b_drv_clean in clean_driver or clean_driver in b_drv_clean):
+                warnings.append(f"Водитель `{driver_name}` числится в ЧС! Причина: {b_reason}")
+            elif clean_phone and len(clean_phone) >= 7 and b_ident_clean in clean_phone:
+                warnings.append(f"Телефон водителя `{driver_phone}` числится в ЧС! Причина: {b_reason}")
+
+    return warnings
+
 def is_admin_authorized(request, data: dict = None) -> bool:
     """Безопасная проверка: либо Telegram ID владельца (ADMIN_ID), либо секретный ADMIN_KEY из Environment."""
     token = request.headers.get("X-Admin-Key")
@@ -6975,8 +7283,9 @@ async def webserver_on_startup(app):
     asyncio.create_task(self_ping())
     asyncio.create_task(auto_clean_expired_cargos())
     asyncio.create_task(auto_promote_payment_docs_status())
+    asyncio.create_task(auto_remind_unloaded_payment_docs())
     asyncio.create_task(auto_backup_db_loop())
-
+    
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
