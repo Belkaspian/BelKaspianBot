@@ -6350,8 +6350,10 @@ def check_stoplist_matches(truck_plate: str, trailer_plate: str, driver_name: st
     return warnings
 
 def is_admin_authorized(request, data: dict = None) -> bool:
-    """Безопасная проверка: либо Telegram ID владельца (ADMIN_ID), либо секретный ADMIN_KEY из Environment."""
     token = request.headers.get("X-Admin-Key")
+    # Проверяем ключ не только в заголовках, но и в параметрах ссылки скачивания Excel
+    if not token:
+        token = request.query.get("admin_key")
     if not token and data:
         token = data.get("admin_key")
 
@@ -6363,9 +6365,11 @@ def is_admin_authorized(request, data: dict = None) -> bool:
     if ADMIN_ID and uid and str(uid).strip() == str(ADMIN_ID).strip():
         return True
 
-    # 2. Если вход с другого ПК/браузера — проверяем ключ из переменной окружения
     env_key = (ADMIN_KEY or "").strip()
-    if env_key and token and str(token).strip() == env_key:
+    db_pass = get_db_admin_password()
+    valid_keys = [k for k in [env_key, db_pass] if k]
+
+    if token and str(token).strip() in valid_keys:
         return True
 
     return False
