@@ -6475,6 +6475,83 @@ async def admin_rotate_company_key_api(request):
 
     return web.json_response({"status": "success", "new_key": new_code, "company": company_name})
 
+async def admin_edit_key_api(request):
+    """Изменение названия компании и лимита сотрудников у ключа."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    key_id = int(data.get('id', 0))
+    new_company = data.get('company', '').strip()
+    try:
+        new_max_users = int(data.get('max_users', 5))
+    except (ValueError, TypeError):
+        new_max_users = 5
+
+    if not key_id:
+        return web.json_response({"error": "ID ключа не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT key_code FROM carrier_keys WHERE id = ?", (key_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return web.json_response({"error": "Ключ не найден"}, status=404)
+
+    key_code = row[0]
+
+    # Обновляем сам ключ
+    cursor.execute("""
+        UPDATE carrier_keys 
+        SET company = ?, max_users = ? 
+        WHERE id = ?
+    """, (new_company, new_max_users, key_id))
+
+    # Обновляем название компании у всех привязанных к этому ключу сотрудников
+    if new_company:
+        cursor.execute("UPDATE users SET company = ? WHERE company_key = ?", (new_company, key_code))
+
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success"})
+
+async def admin_delete_key_api(request):
+    """Безвозвратное удаление ключа и отвязка сотрудников."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    key_id = int(data.get('id', 0))
+    if not key_id:
+        return web.json_response({"error": "ID ключа не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT key_code FROM carrier_keys WHERE id = ?", (key_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return web.json_response({"error": "Ключ не найден"}, status=404)
+
+    key_code = row[0]
+    cursor.execute("DELETE FROM carrier_keys WHERE id = ?", (key_id,))
+    # Отвязываем сотрудников от удаленного ключа
+    cursor.execute("UPDATE users SET company_key = '' WHERE company_key = ?", (key_code,))
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success"})
+
 async def admin_toggle_key_status_api(request):
     """Блокировка или разблокировка ключа и всех его сотрудников."""
     try:
@@ -6859,6 +6936,8 @@ async def web_server():
     app.router.add_post("/api/admin/toggle_key_status", admin_toggle_key_status_api)
     app.router.add_post("/api/admin/unlink_employee", admin_unlink_employee_api)
     app.router.add_post("/api/admin/rotate_company_key", admin_rotate_company_key_api)
+    app.router.add_post("/api/admin/edit_key", admin_edit_key_api)
+    app.router.add_post("/api/admin/delete_key", admin_delete_key_api)
     
     app.on_startup.append(webserver_on_startup)
     runner = web.AppRunner(app)
