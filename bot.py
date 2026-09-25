@@ -5003,7 +5003,6 @@ async def my_loads_api(request):
         })
 
     for r in confirmed_rows:
-        for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay = r
 
         # Если груз оплачен и прошло больше 5 дней — скрываем его из текущего экрана
