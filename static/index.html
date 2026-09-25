@@ -1699,6 +1699,31 @@
         </div>
     </div>
 
+    <!-- Модальное окно редактирования ключа компании -->
+    <div class="modal-overlay" id="adminEditKeyModal" style="z-index: 4500 !important;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Редактирование ключа компании</div>
+                <div class="modal-close" onclick="closeModal('adminEditKeyModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <input type="hidden" id="editKeyIdInput" />
+            <div class="form-group">
+                <label>Название компании:</label>
+                <input type="text" id="editKeyCompanyInput" placeholder="ООО ТрансЛогистик" />
+            </div>
+            <div class="form-group">
+                <label>Лимит сотрудников:</label>
+                <input type="number" id="editKeyLimitInput" value="5" min="1" max="100" />
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitAdminEditKey()">Сохранить изменения</button>
+                <button class="btn btn-secondary" onclick="closeModal('adminEditKeyModal')">Отмена</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Всплывающее окно входа по ключу для пользователей без Telegram -->
     <div class="modal-overlay" id="carrierKeyModal" style="z-index: 4000 !important;">
         <div class="modal-card">
@@ -2130,8 +2155,14 @@
                                     <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${webLink}')">
                                         🌐 Web ссылка
                                     </button>
-                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="rotateCompanyKey(${k.id}, '${k.company}')" title="Аннулировать старый ключ и выдать новый">
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="openEditKeyModal(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}', ${k.max_users || 5})">
+                                        ✏️ Редактировать
+                                    </button>
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="rotateCompanyKey(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}')" title="Аннулировать старый ключ и выдать новый">
                                         🔄 Сменить ключ
+                                    </button>
+                                    <button class="btn btn-danger" style="padding:3px 8px; font-size:10px; height:24px;" onclick="deleteCompanyKey(${k.id}, '${k.key_code}')">
+                                        🗑 Удалить
                                     </button>
                                 </div>
 
@@ -2169,6 +2200,60 @@
                     showToast(data.error || 'Ошибка генерации', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        function openEditKeyModal(keyId, company, maxUsers) {
+            document.getElementById('editKeyIdInput').value = keyId;
+            document.getElementById('editKeyCompanyInput').value = (company === '—' ? '' : company);
+            document.getElementById('editKeyLimitInput').value = maxUsers || 5;
+            document.getElementById('adminEditKeyModal').classList.add('active');
+        }
+
+        async function submitAdminEditKey() {
+            let keyId = document.getElementById('editKeyIdInput').value;
+            let company = document.getElementById('editKeyCompanyInput').value.trim();
+            let limit = parseInt(document.getElementById('editKeyLimitInput').value) || 5;
+            closeModal('adminEditKeyModal');
+
+            try {
+                let res = await fetch('/api/admin/edit_key', {
+                    method: 'POST',
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({ id: keyId, company: company, max_users: limit })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Данные ключа успешно обновлены', 'success');
+                    loadAdminData();
+                } else {
+                    showToast(data.error || 'Ошибка обновления', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
+
+        async function deleteCompanyKey(keyId, keyCode) {
+            askConfirm(`Удалить ключ ${keyCode}?\nСотрудники будут отвязаны от этого ключа.`, async (confirmed) => {
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/admin/delete_key', {
+                            method: 'POST',
+                            headers: getAdminHeaders(),
+                            body: JSON.stringify({ id: keyId })
+                        });
+                        let data = await res.json();
+                        if (res.ok) {
+                            showToast(`Ключ ${keyCode} удален`, 'info');
+                            loadAdminData();
+                        } else {
+                            showToast(data.error || 'Ошибка удаления', 'error');
+                        }
+                    } catch(e) {
+                        showToast('Ошибка сети', 'error');
+                    }
+                }
+            });
         }
 
         async function unlinkEmployee(userId) {
