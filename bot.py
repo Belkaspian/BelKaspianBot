@@ -3712,22 +3712,32 @@ async def handle_admin_help_command(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка отправки help в админ-канал: {e}")
 
-@dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
+@dp.channel_post(F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/admin', 'admin', '/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
         return
 
     menu_text = (
         "⚙️ **Панель управления Админ-канала:**\n\n"
-        "• Для моментальной рассылки ВСЕМ пользователям отправьте сообщение с восклицательными знаками, например: `!Внимание! Завтра погрузки с 8:00!`\n"
-        "• Нажмите кнопку ниже, чтобы открыть веб-панель управления."
+        "• Нажмите кнопку ниже, чтобы открыть панель прямо внутри Telegram.\n"
+        "• Рассылка всем перевозчикам: `!Текст сообщения`"
     )
+
+    # Получаем юзернейм бота для открытия Mini App прямо внутри Telegram
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username or ""
+
     builder = InlineKeyboardBuilder()
-    web_app_url = f"{RENDER_URL}/webapp?tab=admin"
-    builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=web_app_url))
+    if bot_username:
+        # Ссылка через t.me/?startapp открывает Web App внутри Telegram без браузера
+        tg_internal_url = f"https://t.me/{bot_username}?startapp=admin"
+        builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=tg_internal_url))
+    else:
+        web_app_url = f"{RENDER_URL}/webapp?tab=admin"
+        builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=web_app_url))
 
     try:
-        await message.answer(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        await message.reply(menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Ошибка отправки меню в админ-канал: {e}")
 
