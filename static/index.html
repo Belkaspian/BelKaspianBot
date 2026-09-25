@@ -1664,6 +1664,31 @@
     </div>
 
     
+    <!-- Модальное окно генерации ключа в админке -->
+    <div class="modal-overlay" id="adminGenKeyModal" style="z-index: 4500 !important;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Создание ключа доступа</div>
+                <div class="modal-close" onclick="closeModal('adminGenKeyModal')">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Компания (необязательно, можно ввести сразу):</label>
+                <input type="text" id="genKeyCompanyInput" placeholder="Например: ООО ТрансЛогистик" />
+            </div>
+            <div class="form-group">
+                <label>Лимит сотрудников (по умолчанию 5):</label>
+                <input type="number" id="genKeyLimitInput" value="5" min="1" max="50" />
+            </div>
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="submitCreateAccessKey()">
+                    Сгенерировать ключ
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Всплывающее окно входа по ключу для пользователей без Telegram -->
     <div class="modal-overlay" id="carrierKeyModal" style="z-index: 4000 !important;">
         <div class="modal-card">
@@ -1980,6 +2005,8 @@
                 allAdminDeals = dData.deals || [];
                 allAdminLoadsArray = lData.loads || [];
                 allAdminKeysArray = kData.keys || [];
+                adminBotUsername = kData.bot_username || '';
+                adminRenderUrl = kData.render_url || '';
 
                 populateAdminCarrierFilter();
                 switchAdminSubTab(adminSubTab);
@@ -1988,26 +2015,23 @@
             }
         }
 
+        let adminBotUsername = '';
+        let adminRenderUrl = '';
+
         /* Отрисовка вкладки "Ключи доступа" в админке */
         function renderAdminKeys() {
             let body = document.getElementById('adminContentBody');
             body.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                     <div>
-                        <div style="font-weight:700; font-size:13px;">Ключи доступа для браузера</div>
-                        <div style="font-size:11px; color:var(--text-muted);">Генерируйте ключи и передавайте их перевозчикам</div>
+                        <div style="font-weight:700; font-size:13px;">Ключи компаний и сотрудников</div>
+                        <div style="font-size:11px; color:var(--text-muted);">Копируйте ссылки в 1 клик и управляйте доступом сотрудников</div>
                     </div>
-                    <button class="btn btn-primary" style="width:auto; padding:7px 12px; font-size:11px;" onclick="generateNewAccessKey()">
+                    <button class="btn btn-primary" style="width:auto; padding:7px 12px; font-size:11px;" onclick="openGenKeyModal()">
                         ➕ Сгенерировать ключ
                     </button>
                 </div>
                 <div class="table-container">
-                    <div class="t-head" style="grid-template-columns: 90px 1fr 85px 80px;">
-                        <div>Ключ</div>
-                        <div>Компания / Контакт</div>
-                        <div style="text-align:center;">Статус</div>
-                        <div style="text-align:right;">Действие</div>
-                    </div>
                     ${allAdminKeysArray.length === 0 ? '<div class="loader">Ключей пока нет. Нажмите «Сгенерировать ключ»</div>' : allAdminKeysArray.map(k => {
                         let isBlocked = (k.status === 'BLOCKED');
                         let isUnused = (k.status === 'UNUSED');
@@ -2016,22 +2040,54 @@
                             : (isUnused 
                                 ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fef3c7; color:#d97706;">Свободен</span>`
                                 : `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d;">Активен</span>`);
+                        
+                        let tgLink = adminBotUsername ? `https://t.me/${adminBotUsername}?start=key_${k.key_code}` : '';
+                        let webLink = `${adminRenderUrl || window.location.origin}/webapp?key=${k.key_code}`;
+
+                        let employeesListHTML = (k.employees && k.employees.length > 0) ? `
+                            <div style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--border); font-size:10.5px;">
+                                <div style="font-weight:700; color:var(--text-muted); margin-bottom:4px;">Сотрудники компании (${k.employees.length} из ${k.max_users || 5}):</div>
+                                ${k.employees.map(emp => `
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; background:var(--bg); padding:3px 6px; border-radius:4px;">
+                                        <span>👤 <b>${emp.name}</b> (${emp.phone || 'без тел.'}) [ID: ${emp.user_id}]</span>
+                                        <button class="btn btn-danger" style="padding:1px 5px; font-size:9.5px; height:20px;" onclick="unlinkEmployee(${emp.user_id})">
+                                            Отвязать ✕
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : `<div style="font-size:10px; color:var(--text-muted); margin-top:4px;">Сотрудников пока нет (лимит: ${k.max_users || 5})</div>`;
+
                         return `
-                            <div class="t-row" style="grid-template-columns: 90px 1fr 85px 80px; padding:8px 10px;">
-                                <div style="display:flex; align-items:center; gap:4px;">
-                                    <b style="font-size:12px; letter-spacing:0.5px; color:var(--primary);">${k.key_code}</b>
-                                    <span style="cursor:pointer;" onclick="copyTextToClipboard('${k.key_code}')" title="Скопировать">📋</span>
+                            <div style="padding:10px 12px; border-bottom:1px solid var(--border);">
+                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">
+                                    <div>
+                                        <b style="font-size:14px; letter-spacing:1px; color:var(--primary);">${k.key_code}</b>
+                                        <span style="margin-left:8px; font-weight:700; font-size:12px;">${k.company}</span>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        ${statusBadge}
+                                        <button class="btn ${isBlocked ? 'btn-success' : 'btn-danger'}" style="padding:2px 8px; font-size:10px; height:24px;" onclick="toggleKeyStatus(${k.id})">
+                                            ${isBlocked ? 'Разблок.' : 'Заблок.'}
+                                        </button>
+                                    </div>
                                 </div>
-                                <div class="col-route">
-                                    <span style="font-weight:600; font-size:11px; color:var(--text);">${k.company}</span>
-                                    <span style="font-size:9.5px; color:var(--text-muted);">${k.name} ${k.phone !== '—' ? '• ' + k.phone : ''}</span>
-                                </div>
-                                <div style="text-align:center;">${statusBadge}</div>
-                                <div style="text-align:right;">
-                                    <button class="btn ${isBlocked ? 'btn-success' : 'btn-danger'}" style="padding:2px 6px; font-size:10px; height:24px;" onclick="toggleKeyStatus(${k.id})">
-                                        ${isBlocked ? 'Разблок.' : 'Заблок.'}
+
+                                <div style="display:flex; gap:6px; margin:6px 0;">
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${k.key_code}')">
+                                        📋 Код
+                                    </button>
+                                    ${tgLink ? `
+                                        <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${tgLink}')">
+                                            🚀 TG ссылка
+                                        </button>
+                                    ` : ''}
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${webLink}')">
+                                        🌐 Web ссылка
                                     </button>
                                 </div>
+
+                                ${employeesListHTML}
                             </div>
                         `;
                     }).join('')}
@@ -2039,21 +2095,52 @@
             `;
         }
 
-        async function generateNewAccessKey() {
+        function openGenKeyModal() {
+            document.getElementById('genKeyCompanyInput').value = '';
+            document.getElementById('genKeyLimitInput').value = '5';
+            document.getElementById('adminGenKeyModal').classList.add('active');
+        }
+
+        async function submitCreateAccessKey() {
+            let comp = document.getElementById('genKeyCompanyInput').value.trim();
+            let limit = parseInt(document.getElementById('genKeyLimitInput').value) || 5;
+            closeModal('adminGenKeyModal');
+
             try {
                 let res = await fetch('/api/admin/generate_key', {
                     method: 'POST',
-                    headers: getAdminHeaders()
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({ company: comp, max_users: limit })
                 });
                 let data = await res.json();
                 if (res.ok) {
-                    showToast(`Ключ ${data.key_code} создан!`, 'success');
+                    showToast(`Ключ ${data.key_code} успешно создан!`, 'success');
                     copyTextToClipboard(data.key_code);
                     loadAdminData();
                 } else {
                     showToast(data.error || 'Ошибка генерации', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function unlinkEmployee(userId) {
+            askConfirm('Отвязать этого сотрудника от компании?', async (confirmed) => {
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/admin/unlink_employee', {
+                            method: 'POST',
+                            headers: getAdminHeaders(),
+                            body: JSON.stringify({ user_id: userId })
+                        });
+                        if (res.ok) {
+                            showToast('Сотрудник отвязан от компании', 'info');
+                            loadAdminData();
+                        } else {
+                            showToast('Ошибка при отвязке', 'error');
+                        }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
+            });
         }
 
         async function toggleKeyStatus(keyId) {
@@ -3309,8 +3396,8 @@
                     
                     <div class="info-grid">
                         <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
+                        <div class="info-item"><span>Взял(а) рейс</span><b>${d.booked_by_name || 'Сотрудник'}${d.booked_by_phone ? ' (' + d.booked_by_phone + ')' : ''}</b></div>
                         <div class="info-item"><span>Водитель</span><b>${d.driver_name || 'Не указан'}</b></div>
-                        <div class="info-item"><span>Телефон</span><b>${formatPhonesHTML(d.driver_phone)}</b></div>
                         <div class="info-item"><span>Тягач / Прицеп</span><b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b></div>
                     </div>
 
@@ -3817,8 +3904,13 @@
             }
             switchTab('catalog');
         } else {
-            if (!isInsideTelegram && (!currentUserId || currentUserId === 0)) {
-                // Открываем окно ввода ключа при первом входе
+            let keyFromUrl = urlParams.get('key');
+            if (keyFromUrl) {
+                let clean = keyFromUrl.trim().toUpperCase();
+                let keyInput = document.getElementById('carrierInputKey');
+                if (keyInput) keyInput.value = clean;
+                document.getElementById('carrierKeyModal').classList.add('active');
+            } else if (!isInsideTelegram && (!currentUserId || currentUserId === 0)) {
                 document.getElementById('carrierKeyModal').classList.add('active');
             }
             if (requestedTab === 'profile') switchTab('profile');
