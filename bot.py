@@ -3809,6 +3809,60 @@ async def handle_admin_test_backup(message: types.Message):
 
 
 
+# База подсказок по грузам для автоматического определения кузова и груза
+CLIENT_CARGO_HINTS = [
+    (["сибур", "sibur", "тобольск"], "Стандартный тент/реф (82-96м3), полиэтилен до 23т"),
+    (["боржоми", "borjomi"], "Тент/реф, вода до 22т"),
+    (["тритон", "triton"], "Реф +8+15, алкоголь до 22т"),
+    (["автоваз", "ваз", "avtovaz", "тольятти"], "Стандартный тент, бок\nАвтокузова до 15т"),
+    (["беко", "beko"], "Тент/реф/мега/сцепка\nБытовая техника до 10т"),
+    (["прайм топ", "праймтоп", "primetop", "prime top"], "Тент/реф/мега\nКраска ADR 3, до 22т"),
+    (["кифато", "kifato"], "Тент, бок\nСтеллажи до 22т"),
+    (["истконтракт", "ист контракт", "east contract", "eastcontract"], "Тент, бок\nДревесный шпон до 22т"),
+    (["нэфис", "нефис", "nefis"], "Тент/реф/мега/сцепка\nБытовая химия не адр до 21т"),
+    (["схз"], "Тент/реф/мега\nБытовая химия не адр до 21т"),
+    (["продмаш", "prodmash"], "Тент/мега/сцепка, бок/верх\nДорожные ограждения до 22т"),
+    (["фаберлик", "faberlic"], "Реф +8+15\nКосметика до 22т"),
+    (["эр-эс-эйч", "эр эс эйч", "rsh", "эрэсэйч"], "Реф +8+15, алкоголь до 22т"),
+    (["аскона", "askona"], "Тент/реф/мега\nПостельные принадлежности до 20т")
+]
+DEFAULT_CARGO_HINT = "Тент/реф, ТНП до 22т"
+
+def get_cargo_hint(card_text: str) -> str:
+    """Подбирает кузов и тип груза по ключевым словам из карточки."""
+    text_lower = card_text.lower()
+    for keywords, hint in CLIENT_CARGO_HINTS:
+        if any(kw in text_lower for kw in keywords):
+            return hint
+    return DEFAULT_CARGO_HINT
+
+def extract_card_route_and_date(title: str, due_date: str) -> tuple[str, str]:
+    """Извлекает аккуратную дату и маршрут из названия карточки Kaiten."""
+    clean_title = re.sub(r'^\s*#?\d{4,8}\b', '', title).strip(' -.,_')
+
+    # Ищем дату (например, 25.09 или 25.09-28.09)
+    date_match = re.search(r'(\d{1,2}[\./]\d{1,2}(?:\s*[-—–]\s*\d{1,2}[\./]\d{1,2})?)', clean_title)
+    if date_match:
+        extracted_date = date_match.group(1).replace('/', '.')
+        route_text = clean_title.replace(date_match.group(0), '').strip(' -.,_')
+    elif due_date:
+        try:
+            m = re.search(r'\d{4}-(\d{2})-(\d{2})', due_date)
+            extracted_date = f"{m.group(2)}.{m.group(1)}" if m else "Срочно"
+        except Exception:
+            extracted_date = "Срочно"
+        route_text = clean_title
+    else:
+        extracted_date = "Срочно"
+        route_text = clean_title
+
+    # Нормализуем стрелки и тире в маршруте (например: Тобольск-Алматы)
+    route_text = re.sub(r'\s*[-—→]+\s*', '-', route_text).strip(' -.,_')
+    if not route_text:
+        route_text = clean_title or "Маршрут не указан"
+
+    return extracted_date, route_text
+
 async def get_kaiten_first_column_cards(direction_key: str) -> list[dict]:
     """Получает карточки из первой колонки (Загрузки) указанной доски Kaiten."""
     if not KAITEN_API_KEY:
@@ -3820,20 +3874,15 @@ async def get_kaiten_first_column_cards(direction_key: str) -> list[dict]:
 
     columns = await kaiten_api_request("GET", f"/boards/{board_id}/columns")
     target_col_id = None
-    target_col_title = ""
 
     if columns and isinstance(columns, list):
-        # Ищем колонку со словом "загруз" (Загрузки / Загрузка)
         for c in columns:
             title = (c.get("title") or c.get("name") or "").lower()
             if "загруз" in title:
                 target_col_id = c.get("id")
-                target_col_title = c.get("title") or c.get("name")
                 break
-        # Если по названию не нашли — берем самую первую колонку доски
         if not target_col_id and len(columns) > 0:
             target_col_id = columns[0].get("id")
-            target_col_title = columns[0].get("title") or columns[0].get("name")
 
     if not target_col_id:
         target_col_id = KAITEN_TARGET_COLUMNS.get(direction_key, [None])[0]
@@ -3853,16 +3902,22 @@ async def get_kaiten_first_column_cards(direction_key: str) -> list[dict]:
         if not isinstance(card, dict):
             continue
         title = (card.get("title") or card.get("name") or "").strip()
+        desc = (card.get("description") or "").strip()
         card_id = card.get("id")
         due = str(card.get("due_date") or card.get("due_datetime") or "").strip()
         if title:
-            result.append({"id": card_id, "title": title, "due_date": due[:10] if due else ""})
+            result.append({
+                "id": card_id,
+                "title": title,
+                "description": desc,
+                "due_date": due[:10] if due else ""
+            })
     return result
 
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/cargo', 'cargo', '/грузы', 'грузы'))))
 async def handle_admin_cargo_command(message: types.Message):
-    """Выводит актуальные грузы из первой колонки (Загрузки) досок Kaiten."""
+    """Выводит актуальные грузы из первой колонки (Загрузки) досок Kaiten в красивом формате."""
     status_msg = await message.reply("⏳ Запрашиваю данные из Kaiten...")
 
     uz_cards = await get_kaiten_first_column_cards("UZBEKISTAN")
@@ -3870,13 +3925,20 @@ async def handle_admin_cargo_command(message: types.Message):
 
     def format_cards_block(cards_list: list) -> str:
         if not cards_list:
-            return "• <i>Нет грузов в первой колонке</i>\n"
-        lines = []
+            return "• <i>Нет грузов в колонке загрузок</i>\n"
+        items = []
         for c in cards_list:
-            due_str = f" <code>({c['due_date']})</code>" if c['due_date'] else ""
+            card_date, card_route = extract_card_route_and_date(c["title"], c["due_date"])
+            hint_text = get_cargo_hint(f"{c['title']} {c['description']}")
             card_url = f"https://{KAITEN_DOMAIN}/card/{c['id']}"
-            lines.append(f"• <a href='{card_url}'>#{c['id']}</a> {html.escape(c['title'])}{due_str}")
-        return "\n".join(lines) + "\n"
+
+            card_block = (
+                f"<b>{html.escape(card_date)} {html.escape(card_route)}</b> "
+                f"(<a href='{card_url}'>#{c['id']}</a>)\n"
+                f"{html.escape(hint_text)}"
+            )
+            items.append(card_block)
+        return "\n\n".join(items) + "\n"
 
     report_html = (
         "📋 <b>АКТУАЛЬНЫЕ ГРУЗЫ ИЗ KAITEN (КОЛОНКА «ЗАГРУЗКИ»)</b>\n\n"
