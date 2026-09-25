@@ -84,6 +84,30 @@ def add_business_days(start_date: date, num_days: int) -> date:
             added += 1
     return cur_date
 
+def calculate_payment_date(start_date: date, num_days: int = 11) -> date:
+    """
+    Добавляет 11 обычных календарных дней от даты подачи документов.
+    Если дата попадает на выходной (Сб, Вс) или праздник — переносит на следующий рабочий день.
+    """
+    target = start_date + timedelta(days=num_days)
+    
+    # Список официальных праздничных дней (месяц, день)
+    holidays = {
+        (1, 1), (1, 2), (1, 7),   # Новый год, Рождество
+        (2, 23),                   # 23 февраля
+        (3, 8),                    # 8 марта
+        (5, 1), (5, 9),            # Майские праздники
+        (7, 3),                    # День Независимости
+        (11, 4), (11, 7),          # Ноябрьские праздники
+        (12, 25)                   # Католическое Рождество
+    }
+    
+    # Если дата попадает на субботу (5), воскресенье (6) или праздник — сдвигаем на следующий день
+    while target.weekday() >= 5 or (target.month, target.day) in holidays:
+        target += timedelta(days=1)
+        
+    return target
+
 
 BACKUP_CHANNEL_ID_RAW = os.getenv("BACKUP_CHANNEL_ID", str(ADMIN_CHANNEL_ID))
 try:
@@ -2497,7 +2521,8 @@ async def auto_promote_payment_docs_status():
                     target_acc_date = add_business_days(sub_dt, 2)
 
                     if today_dt >= target_acc_date:
-                        planned_pay = add_business_days(today_dt, 10).strftime("%d.%m.%Y")
+                        # Дата рассчитывается строго от даты, когда перевозчик прикрепил документы (sub_dt)
+                        planned_pay = calculate_payment_date(sub_dt, 11).strftime("%d.%m.%Y")
                         cursor.execute("""
                             UPDATE confirmed_deals 
                             SET pay_docs_status = 'ACCEPTED', planned_payment_date = ? 
