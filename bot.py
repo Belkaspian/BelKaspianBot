@@ -3734,18 +3734,103 @@ async def handle_admin_test_backup(message: types.Message):
 
 
 
+async def get_kaiten_first_column_cards(direction_key: str) -> list[dict]:
+    """Получает карточки из первой колонки (Загрузки) указанной доски Kaiten."""
+    if not KAITEN_API_KEY:
+        return []
+    board_config = KAITEN_BOARDS.get(direction_key)
+    if not board_config:
+        return []
+    board_id = board_config["board_id"]
+
+    columns = await kaiten_api_request("GET", f"/boards/{board_id}/columns")
+    target_col_id = None
+    target_col_title = ""
+
+    if columns and isinstance(columns, list):
+        # Ищем колонку со словом "загруз" (Загрузки / Загрузка)
+        for c in columns:
+            title = (c.get("title") or c.get("name") or "").lower()
+            if "загруз" in title:
+                target_col_id = c.get("id")
+                target_col_title = c.get("title") or c.get("name")
+                break
+        # Если по названию не нашли — берем самую первую колонку доски
+        if not target_col_id and len(columns) > 0:
+            target_col_id = columns[0].get("id")
+            target_col_title = columns[0].get("title") or columns[0].get("name")
+
+    if not target_col_id:
+        target_col_id = KAITEN_TARGET_COLUMNS.get(direction_key, [None])[0]
+
+    if not target_col_id:
+        return []
+
+    cards = await kaiten_api_request("GET", "/cards", params={"column_id": target_col_id, "archived": "false", "limit": 100})
+    if not cards or not isinstance(cards, list):
+        cards = await kaiten_api_request("GET", f"/columns/{target_col_id}/cards", params={"archived": "false", "limit": 100})
+
+    if not cards or not isinstance(cards, list):
+        return []
+
+    result = []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        title = (card.get("title") or card.get("name") or "").strip()
+        card_id = card.get("id")
+        due = str(card.get("due_date") or card.get("due_datetime") or "").strip()
+        if title:
+            result.append({"id": card_id, "title": title, "due_date": due[:10] if due else ""})
+    return result
+
+
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/cargo', 'cargo', '/грузы', 'грузы'))))
+async def handle_admin_cargo_command(message: types.Message):
+    """Выводит актуальные грузы из первой колонки (Загрузки) досок Kaiten."""
+    status_msg = await message.reply("⏳ Запрашиваю данные из Kaiten...")
+
+    uz_cards = await get_kaiten_first_column_cards("UZBEKISTAN")
+    asia_cards = await get_kaiten_first_column_cards("ASIA_CAUCASUS")
+
+    def format_cards_block(cards_list: list) -> str:
+        if not cards_list:
+            return "• <i>Нет грузов в первой колонке</i>\n"
+        lines = []
+        for c in cards_list:
+            due_str = f" <code>({c['due_date']})</code>" if c['due_date'] else ""
+            card_url = f"https://{KAITEN_DOMAIN}/card/{c['id']}"
+            lines.append(f"• <a href='{card_url}'>#{c['id']}</a> {html.escape(c['title'])}{due_str}")
+        return "\n".join(lines) + "\n"
+
+    report_html = (
+        "📋 <b>АКТУАЛЬНЫЕ ГРУЗЫ ИЗ KAITEN (КОЛОНКА «ЗАГРУЗКИ»)</b>\n\n"
+        "🇺🇿 <b>Узбекистан:</b>\n"
+        f"{format_cards_block(uz_cards)}\n"
+        "🌍 <b>Средняя Азия и Кавказ:</b>\n"
+        f"{format_cards_block(asia_cards)}"
+    )
+
+    try:
+        await status_msg.edit_text(report_html, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        logging.error(f"Ошибка вывода грузов Kaiten: {e}")
+        await status_msg.edit_text("⚠️ Ошибка формирования отчёта Kaiten.")
+
+
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/help', 'help', '/помощь', 'помощь', '/команды'))))
 async def handle_admin_help_command(message: types.Message):
     """Справка по командам, работающая только в админ-канале."""
     help_text = (
         "📖 **Шпаргалка команд Админ-канала:**\n\n"
+        "• **`/cargo`** (или **`грузы`**) — Актуальный список грузов из первой колонки («Загрузки») Kaiten\n\n"
         "• **`/menu`** (или **`меню`**) — Кнопка для входа в веб-панель управления (Биржа, Все заказы, Перевозчики, Ключи)\n\n"
         "• **`!Текст сообщения`** — Моментальная рассылка важного сообщения ВСЕМ перевозчикам бота\n"
         "  *(Пример: `!Внимание! Завтра погрузки с 8:00!`)*\n\n"
         "• **`/test_backup`** — Проверка создания бэкапа базы данных с выгрузкой в канал бэкапов\n\n"
         "• **`/help`** (или **`помощь`**) — Показать эту справку\n\n"
         "📝 **Публикация грузов:**\n"
-        "Просто отправьте текст заявки в канал — бот через ИИ сам определит маршрут, даты, ставку и опубликует груз на бирже."
+        "Грузы из этого канала не публикуются. Публикация происходит только из канала **belkaspian world**."
     )
     try:
         await message.reply(help_text, parse_mode="Markdown")
@@ -3817,9 +3902,12 @@ async def handle_channel_post(message: types.Message):
         if is_handled:
             return
 
-    if not raw_text or raw_text.startswith("!") or raw_text.startswith("/"):
+    # Если сообщение написано в админ-канале — грузы отсюда НЕ публикуем (для этого есть канал belkaspian world)
+    if chat_id == ADMIN_CHANNEL_ID:
         return
 
+    if not raw_text or raw_text.startswith("!") or raw_text.startswith("/"):
+        return
     is_unified_channel = (CARGO_INPUT_CHANNEL_ID and chat_id == CARGO_INPUT_CHANNEL_ID)
 
     # 1. Распознавание через ИИ
