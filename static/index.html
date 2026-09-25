@@ -3947,10 +3947,12 @@
             saveProfileTimer = setTimeout(() => { saveProfile(); }, 400);
         }
 
-        // Определяем нужную вкладку из ссылки
+        // Определяем нужную вкладку из ссылки или параметров Telegram Mini App
         const urlParams = new URLSearchParams(window.location.search);
         const urlPath = window.location.pathname;
-        let requestedTab = urlParams.get('tab') || urlParams.get('page');
+        let tgStartParam = tg.initDataUnsafe?.start_param; // Считываем параметр при открытии внутри Telegram
+
+        let requestedTab = urlParams.get('tab') || urlParams.get('page') || tgStartParam;
 
         if (!requestedTab) {
             if (urlPath.includes('admin')) requestedTab = 'admin';
