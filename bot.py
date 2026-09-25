@@ -326,14 +326,41 @@ async def restore_db_from_telegram() -> bool:
 
 
 async def auto_backup_db_loop():
-    """Фоновый цикл автосохранения каждые 15 минут."""
-    await asyncio.sleep(60)
+    """Фоновый цикл автосохранения по расписанию (время МСК)."""
+    last_backup_slot = ""
     while True:
         try:
-            await push_db_backup(reason="Плановое автосохранение (15 мин)")
+            # Получаем текущее время по МСК (UTC+3)
+            msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+            weekday = msk_now.weekday()  # 0..4 — будни (пн-пт), 5..6 — выходные (сб-вс)
+            cur_hour = msk_now.hour
+            cur_minute = msk_now.minute
+
+            # Расписание для будних (пн-пт): 08:00, 11:00, 14:00, 17:30, 00:00
+            if weekday < 5:
+                weekday_slots = [(8, 0), (11, 0), (14, 0), (17, 30), (0, 0)]
+                is_target_time = (cur_hour, cur_minute) in weekday_slots
+                day_name = "Будни"
+            else:
+                # Расписание для выходных (сб-вс): 14:00
+                weekend_slots = [(14, 0)]
+                is_target_time = (cur_hour, cur_minute) in weekend_slots
+                day_name = "Выходной"
+
+            current_slot_id = f"{msk_now.strftime('%Y-%m-%d')}_{cur_hour:02d}:{cur_minute:02d}"
+
+            # Если наступило время из расписания и бэкап в эту минуту еще не отправлялся
+            if is_target_time and current_slot_id != last_backup_slot:
+                last_backup_slot = current_slot_id
+                slot_time_str = f"{cur_hour:02d}:{cur_minute:02d}"
+                reason = f"По расписанию ({day_name}, {slot_time_str} МСК)"
+                await push_db_backup(reason=reason)
+
         except Exception as e:
             logging.error(f"Ошибка в auto_backup_db_loop: {e}")
-        await asyncio.sleep(900)
+
+        # Проверяем время каждые 25 секунд
+        await asyncio.sleep(25)
 
 
 # ==================== БАЗА ДАННЫХ ====================
@@ -2534,12 +2561,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 async def send_welcome_message(message: types.Message):
     u_id = message.from_user.id
-    web_app_url = f"{RENDER_URL}/webapp?user_id={u_id}"
     inline_builder1 = InlineKeyboardBuilder()
-    inline_builder1.row(types.InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=web_app_url)))
+    inline_builder1.row(types.InlineKeyboardButton(text="📦 Биржа грузов", web_app=WebAppInfo(url=f"{RENDER_URL}/webapp?tab=catalog&user_id={u_id}")))
+    inline_builder1.row(
+        types.InlineKeyboardButton(text="🚚 Мои грузы", web_app=WebAppInfo(url=f"{RENDER_URL}/webapp?tab=my&user_id={u_id}")),
+        types.InlineKeyboardButton(text="👤 Профиль", web_app=WebAppInfo(url=f"{RENDER_URL}/webapp?tab=profile&user_id={u_id}"))
+    )
 
     await message.answer(
-        "Приветствую!\nДля удобства использования нашего бота есть Web-App 👇",
+        "Приветствую!\nВыберите нужный раздел в Web-App 👇",
         reply_markup=inline_builder1.as_markup()
     )
 
@@ -3630,7 +3660,7 @@ async def handle_admin_menu_command(message: types.Message):
         "• Нажмите кнопку ниже, чтобы открыть веб-панель управления."
     )
     builder = InlineKeyboardBuilder()
-    web_app_url = f"{RENDER_URL}/webapp"
+    web_app_url = f"{RENDER_URL}/webapp?tab=admin"
     builder.row(types.InlineKeyboardButton(text="🛠 Открыть админ-панель", url=web_app_url))
 
     try:
@@ -6135,6 +6165,8 @@ async def web_server():
     app.router.add_get("/", handle_ping)
     app.router.add_get("/ping", handle_ping)
     app.router.add_get("/webapp", serve_index)
+    app.router.add_get("/admin", serve_index)
+    app.router.add_get("/webapp/{page}", serve_index)
     app.router.add_get("/api/loads", get_loads_api)
     app.router.add_get("/api/my_loads", my_loads_api)
     app.router.add_post("/api/set_unload_date", set_unload_date_api)
