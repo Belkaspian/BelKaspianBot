@@ -484,6 +484,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN pending_company TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN pending_name TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN pending_phone TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN company_key TEXT DEFAULT ''",
         "ALTER TABLE pending_counters ADD COLUMN action_type TEXT DEFAULT 'COUNTER'",
         "ALTER TABLE loads ADD COLUMN cargo_type TEXT",
         "ALTER TABLE loads ADD COLUMN weight TEXT",
@@ -1066,19 +1067,23 @@ def format_carrier_info(user_id: int, username: str = "", full_name: str = "") -
     row = cursor.fetchone()
     conn.close()
 
-    comp = row[0] if row and row[0] and row[0] != 'Не указана' else "Не указана"
+    comp = row[0] if row and row[0] and row[0] != 'Не указана' else "Компания не указана"
     db_name = row[1] if row and row[1] else ""
     phone = row[2] if row and row[2] else "Не указан"
 
-    display_name = db_name or full_name or "Перевозчик"
+    display_name = db_name or full_name or "Сотрудник"
 
     if username:
         clean_username = username.lstrip('@')
         user_mention = f"@{clean_username}"
     else:
-        user_mention = f"@{display_name} (ID: {user_id})"
+        user_mention = f"ID: {user_id}"
 
-    return f"👤 Перевозчик: {user_mention}\n🏢 {comp}, {display_name} {phone}"
+    return (
+        f"🏢 **Компания:** {comp}\n"
+        f"👤 **Сотрудник:** {display_name} ({user_mention})\n"
+        f"📞 **Телефон сотрудника:** {phone}"
+    )
 
 def build_cargo_card_text(date_str, route_str, price_str, cars_str, details_text, admin_comment="", is_closed=False):
     if not cars_str.endswith("авто") and not cars_str.endswith("машин"):
@@ -4789,7 +4794,25 @@ async def my_loads_api(request):
         return web.json_response({"deals": [], "is_blocked": True})
     
     try:
-        cursor.execute("""
+        # Узнаем, привязан ли сотрудник к общему ключу компании
+        cursor.execute("SELECT company_key FROM users WHERE user_id = ?", (user_id,))
+        k_row = cursor.fetchone()
+        comp_key = k_row[0] if k_row and k_row[0] else ""
+
+        # Если сотрудник привязан к компании по ключу — показываем все грузы этой компании,
+        # если нет — только его личные
+        if comp_key:
+            user_filter_sql = "cd.user_id IN (SELECT user_id FROM users WHERE company_key = ?)"
+            user_filter_params = (comp_key,)
+            bid_filter_sql = "b.user_id IN (SELECT user_id FROM users WHERE company_key = ?) AND b.status IN ('PENDING', 'COUNTER')"
+            bid_filter_params = (comp_key,)
+        else:
+            user_filter_sql = "cd.user_id = ?"
+            user_filter_params = (user_id,)
+            bid_filter_sql = "b.user_id = ? AND b.status IN ('PENDING', 'COUNTER')"
+            bid_filter_params = (user_id,)
+
+        cursor.execute(f"""
             SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, 
                    COALESCE(cd.details, ''), COALESCE(cd.status, 'CONFIRMED'),
                    COALESCE(l.car_type, 'Тент/реф'),
@@ -4807,12 +4830,12 @@ async def my_loads_api(request):
                    COALESCE(cd.order_number, '')
             FROM confirmed_deals cd
             LEFT JOIN loads l ON cd.load_id = l.load_id
-            WHERE cd.user_id = ?
+            WHERE {user_filter_sql}
             ORDER BY cd.id DESC
-        """, (user_id,))
+        """, user_filter_params)
         confirmed_rows = cursor.fetchall()
         
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT b.bid_id, b.load_id, l.date, l.route, b.cars, 
                    COALESCE(b.counter_rate, b.rate) as price,
                    COALESCE(l.details, ''), b.status,
@@ -4822,9 +4845,9 @@ async def my_loads_api(request):
                    0 as docs_submitted
             FROM bids b
             JOIN loads l ON b.load_id = l.load_id
-            WHERE b.user_id = ? AND b.status IN ('PENDING', 'COUNTER')
+            WHERE {bid_filter_sql}
             ORDER BY b.bid_id DESC
-        """, (user_id,))
+        """, bid_filter_params)
         pending_rows = cursor.fetchall()
     except Exception as e:
         logging.error(f"Error querying my_loads: {e}")
@@ -5963,7 +5986,7 @@ def generate_carrier_code() -> str:
     return f"{part1}-{part2}"
 
 async def activate_carrier_key_api(request):
-    """Активация ключа перевозчиком при входе через браузер без Telegram."""
+    """Активация ключа сотрудником через веб-браузер (к 1 ключу компании может подключаться N сотрудников)."""
     try:
         data = await request.json()
         raw_key = data.get('key_code', '').strip().upper()
@@ -5973,76 +5996,60 @@ async def activate_carrier_key_api(request):
         else:
             formatted_key = raw_key
 
-        company = data.get('company', '').strip()
-        name = data.get('name', '').strip()
-        phone = data.get('phone', '').strip()
+        company_input = data.get('company', '').strip()
+        employee_name = data.get('name', '').strip()
+        employee_phone = data.get('phone', '').strip()
+
+        if not employee_name or not employee_phone:
+            return web.json_response({"error": "Укажите имя сотрудника и контактный телефон."}, status=400)
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT id, user_id, status, company, name, phone FROM carrier_keys WHERE key_code = ?", (formatted_key,))
+        cursor.execute("SELECT id, status, company FROM carrier_keys WHERE key_code = ?", (formatted_key,))
         row = cursor.fetchone()
 
         if not row:
             conn.close()
             return web.json_response({"error": "Ключ не найден. Проверьте правильность ввода."}, status=404)
 
-        key_id, u_id, k_status, saved_comp, saved_name, saved_phone = row
+        key_id, k_status, saved_comp = row
 
         if k_status == 'BLOCKED':
             conn.close()
-            return web.json_response({"error": "Этот ключ заблокирован администратором."}, status=403)
+            return web.json_response({"error": "Ключ этой компании заблокирован администратором."}, status=403)
 
-        # Если ключ уже был активирован ранее — просто авторизуем перевозчика повторно
-        if k_status == 'ACTIVE' and u_id:
-            conn.close()
-            return web.json_response({
-                "status": "success",
-                "user_id": u_id,
-                "company": saved_comp,
-                "name": saved_name,
-                "phone": saved_phone,
-                "key_code": formatted_key
-            })
+        # Если у ключа уже сохранено название компании — используем его, иначе берем введенное первым сотрудником
+        final_company = saved_comp if saved_comp and saved_comp != '—' else (company_input or "Компания")
 
-        # Если ключ новый (UNUSED) — регистрируем компанию
-        if not company or not name or not phone:
-            conn.close()
-            return web.json_response({"error": "Заполните все поля: Компания, ФИО и Телефон."}, status=400)
+        # Генерируем уникальный Web ID для ЭТОГО конкретного сотрудника
+        import random
+        new_employee_id = 80000000 + random.randint(10000, 999999)
 
-        # Генерируем уникальный ID для веб-перевозчика (от 80000000+)
-        new_web_user_id = 80000000 + key_id
-
-        # Создаем верифицированного пользователя в таблице users
+        # Создаем сотрудника в таблице users с привязкой к ключу компании
         cursor.execute("""
-            INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status)
-            VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED')
-            ON CONFLICT(user_id) DO UPDATE SET
-                company = excluded.company,
-                name = excluded.name,
-                phone = excluded.phone,
-                status = 'ACTIVE',
-                verification_status = 'VERIFIED'
-        """, (new_web_user_id, company, name, phone))
+            INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status, company_key)
+            VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED', ?)
+        """, (new_employee_id, final_company, employee_name, employee_phone, formatted_key))
 
-        # Обновляем статус ключа
+        # Обновляем название компании у ключа
         cursor.execute("""
             UPDATE carrier_keys 
-            SET status = 'ACTIVE', user_id = ?, company = ?, name = ?, phone = ?
+            SET status = 'ACTIVE', company = ?
             WHERE id = ?
-        """, (new_web_user_id, company, name, phone, key_id))
+        """, (final_company, key_id))
 
         conn.commit()
         conn.close()
 
-        # Уведомляем администратора в админ-канале
+        # Уведомляем администратора в админ-канале о подключении конкретного сотрудника
         try:
             msg_text = (
-                f"🔑 **АКТИВИРОВАН НОВЫЙ КЛЮЧ ДОСТУПА**\n\n"
-                f"• Ключ: `{formatted_key}`\n"
-                f"• Компания: {company}\n"
-                f"• Контакт: {name}\n"
-                f"• Телефон: {phone}\n"
-                f"• Назначен Web-ID: `{new_web_user_id}`"
+                f"🔑 **ПОДКЛЮЧЕН СОТРУДНИК К КЛЮЧУ**\n\n"
+                f"• Ключ компании: `{formatted_key}`\n"
+                f"🏢 **Компания:** {final_company}\n"
+                f"👤 **Сотрудник:** {employee_name}\n"
+                f"📞 **Телефон:** {employee_phone}\n"
+                f"💻 **Формат:** Веб-браузер (Web-ID: `{new_employee_id}`)"
             )
             await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=msg_text, parse_mode="Markdown")
         except Exception:
@@ -6050,10 +6057,10 @@ async def activate_carrier_key_api(request):
 
         return web.json_response({
             "status": "success",
-            "user_id": new_web_user_id,
-            "company": company,
-            "name": name,
-            "phone": phone,
+            "user_id": new_employee_id,
+            "company": final_company,
+            "name": employee_name,
+            "phone": employee_phone,
             "key_code": formatted_key
         })
 
@@ -6061,52 +6068,50 @@ async def activate_carrier_key_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 def link_key_to_user_profile(target_user_id: int, key_code: str) -> tuple[bool, str]:
-    """Объединяет Telegram-аккаунт и ключ доступа в единый профиль компании."""
+    """Привязывает Telegram-аккаунт сотрудника к ключу компании (не стирая других коллег)."""
     raw_key = key_code.strip().upper()
     clean = re.sub(r'[^A-Z0-9]', '', raw_key)
     formatted = f"{clean[:3]}-{clean[3:]}" if len(clean) == 6 else raw_key
 
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_id, company, name, phone, status FROM carrier_keys WHERE key_code = ?", (formatted,))
+    cursor.execute("SELECT id, company, status FROM carrier_keys WHERE key_code = ?", (formatted,))
     row = cursor.fetchone()
 
     if not row:
         conn.close()
         return False, "Ключ не найден. Проверьте правильность ввода."
 
-    k_id, old_uid, comp, contact_name, phone, k_status = row
+    k_id, comp, k_status = row
 
     if k_status == 'BLOCKED':
         conn.close()
         return False, "Данный ключ доступа заблокирован администратором."
 
-    # Если ключ уже был активирован через браузер (под временным ID 80000000+),
-    # переносим все забранные им грузы, заявки и ставки на его реальный Telegram ID!
-    if old_uid and old_uid != target_user_id:
-        cursor.execute("UPDATE confirmed_deals SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
-        cursor.execute("UPDATE bids SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
-        cursor.execute("UPDATE notifications SET user_id = ? WHERE user_id = ?", (target_user_id, old_uid))
-        cursor.execute("DELETE FROM users WHERE user_id = ?", (old_uid,))
+    final_comp = comp if comp and comp != '—' else "Компания"
 
-    # Обновляем профиль пользователя Telegram
+    # Привязываем Telegram-аккаунт к ключу компании, делаем его верифицированным
     cursor.execute("""
-        INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status)
-        VALUES (?, ?, ?, ?, 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED')
+        INSERT INTO users (user_id, company, name, phone, subscriptions, status, verification_status, company_key)
+        VALUES (?, ?, 'Сотрудник', '', 'Казахстан,Узбекистан,Кыргызстан,Грузия,Азербайджан,Армения', 'ACTIVE', 'VERIFIED', ?)
         ON CONFLICT(user_id) DO UPDATE SET
-            company = CASE WHEN excluded.company != '' THEN excluded.company ELSE users.company END,
-            name = CASE WHEN excluded.name != '' THEN excluded.name ELSE users.name END,
-            phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE users.phone END,
+            company = excluded.company,
+            company_key = excluded.company_key,
             status = 'ACTIVE',
             verification_status = 'VERIFIED'
-    """, (target_user_id, comp, contact_name, phone))
+    """, (target_user_id, final_comp, formatted))
 
-    # Закрепляем ключ за реальным Telegram ID
-    cursor.execute("UPDATE carrier_keys SET user_id = ?, status = 'ACTIVE' WHERE id = ?", (target_user_id, k_id))
+    # Ключ теперь активен
+    cursor.execute("UPDATE carrier_keys SET status = 'ACTIVE' WHERE id = ?", (k_id,))
     conn.commit()
+
+    # Считываем имя сотрудника для подтверждения
+    cursor.execute("SELECT name, phone FROM users WHERE user_id = ?", (target_user_id,))
+    u_row = cursor.fetchone()
+    emp_name = u_row[0] if u_row and u_row[0] else "Сотрудник"
     conn.close()
 
-    return True, f"Аккаунт успешно привязан к компании «{comp}»! Доступ открыт."
+    return True, f"Вы успешно подключены к компании «{final_comp}»! Все грузы компании теперь доступны."
 
 async def link_carrier_key_api(request):
     """API для привязки ключа прямо из WebApp в Личном кабинете."""
@@ -6207,10 +6212,9 @@ async def admin_toggle_key_status_api(request):
 
     cursor.execute("UPDATE carrier_keys SET status = ? WHERE id = ?", (new_status, key_id))
 
-    # Если ключ привязан к перевозчику — синхронно блокируем/разблокируем его аккаунт
-    if linked_uid:
-        user_status = 'BLOCKED' if new_status == 'BLOCKED' else 'ACTIVE'
-        cursor.execute("UPDATE users SET status = ? WHERE user_id = ?", (user_status, linked_uid))
+    # Блокируем или разблокируем ВСЕХ сотрудников, привязанных к этому ключу компании!
+    user_status = 'BLOCKED' if new_status == 'BLOCKED' else 'ACTIVE'
+    cursor.execute("UPDATE users SET status = ? WHERE company_key = ?", (user_status, key_code))
 
     conn.commit()
     conn.close()
