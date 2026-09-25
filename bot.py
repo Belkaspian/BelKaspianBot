@@ -48,6 +48,7 @@ if not TOKEN:
 
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app-name.onrender.com")
 ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_KEY = os.getenv("ADMIN_KEY") or os.getenv("ADMIN_PASSWORD")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 gemini_client = None
@@ -5612,24 +5613,48 @@ async def decline_counter_api(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
         
+def is_admin_authorized(request, data: dict = None) -> bool:
+    """Безопасная проверка: либо Telegram ID владельца (ADMIN_ID), либо секретный ADMIN_KEY из Environment."""
+    token = request.headers.get("X-Admin-Key")
+    if not token and data:
+        token = data.get("admin_key")
+
+    uid = request.query.get("user_id")
+    if not uid and data:
+        uid = data.get("user_id")
+
+    # 1. Если вход из вашего личного Telegram (ADMIN_ID) — вход автоматический
+    if ADMIN_ID and uid and str(uid).strip() == str(ADMIN_ID).strip():
+        return True
+
+    # 2. Если вход с другого ПК/браузера — проверяем ключ из переменной окружения
+    env_key = (ADMIN_KEY or "").strip()
+    if env_key and token and str(token).strip() == env_key:
+        return True
+
+    return False
+
 async def admin_verify_pass_api(request):
     try:
         data = await request.json()
-        password = data.get('password', '')
+        entered_key = data.get('password', '').strip()
         user_id = data.get('user_id', 0)
-        conn = sqlite3.connect("cargo_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'admin_password'")
-        row = cursor.fetchone()
-        conn.close()
-        db_pass = row[0] if row else '123456'
-        if password == db_pass or (ADMIN_ID and str(user_id) == str(ADMIN_ID)):
-            return web.json_response({"status": "success"})
-        return web.json_response({"error": "Неверный пароль"}, status=403)
+
+        env_key = (ADMIN_KEY or "").strip()
+        is_owner_tg = bool(ADMIN_ID and str(user_id).strip() == str(ADMIN_ID).strip())
+        is_key_match = bool(env_key and entered_key == env_key)
+
+        if is_owner_tg or is_key_match:
+            return web.json_response({"status": "success", "admin_key": env_key or entered_key})
+
+        return web.json_response({"error": "Неверный ключ администратора"}, status=403)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
 async def admin_get_carriers_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, company, name, phone, status, subscriptions FROM users ORDER BY user_id DESC")
@@ -5641,6 +5666,13 @@ async def admin_get_carriers_api(request):
 async def admin_toggle_carrier_status_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         u_id = int(data.get('user_id'))
         reason = data.get('reason', '').strip()
         conn = sqlite3.connect("cargo_bot.db")
@@ -5652,7 +5684,6 @@ async def admin_toggle_carrier_status_api(request):
         conn.commit()
         conn.close()
 
-        # Отправляем уведолмения в Telegram и сохраняем в журнал
         if new_status == 'BLOCKED':
             msg_text = f"⛔️ Ваш аккаунт заблокирован администратором.\nПричина: {reason if reason else 'Нарушение правил'}"
             add_notification(u_id, "Аккаунт заблокирован", msg_text)
@@ -5671,6 +5702,9 @@ async def admin_toggle_carrier_status_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 async def admin_get_loads_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     query = """
@@ -5699,6 +5733,13 @@ async def admin_get_loads_api(request):
 async def admin_edit_load_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         load_id = int(data.get('id'))
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
@@ -5717,6 +5758,13 @@ async def admin_edit_load_api(request):
 async def admin_toggle_load_active_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         load_id = int(data.get('id'))
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
@@ -5734,6 +5782,13 @@ async def admin_toggle_load_active_api(request):
 async def admin_hard_delete_load_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         load_id = int(data.get('id'))
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
@@ -5747,6 +5802,9 @@ async def admin_hard_delete_load_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 async def admin_get_confirmed_deals_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -5771,6 +5829,13 @@ async def admin_get_confirmed_deals_api(request):
 async def admin_edit_deal_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         deal_id = int(data.get('deal_id'))
         new_cars = int(data.get('cars', 1))
         new_route = data.get('route')
@@ -5792,7 +5857,6 @@ async def admin_edit_deal_api(request):
                 WHERE id = ?
             """, (new_route, new_date, new_price, new_details, deal_id))
 
-            # Если количество машин увеличено (например с 1 до 2), создаем дополнительные дубликаты заказа для перевозчика
             diff = new_cars - old_cars
             if diff > 0:
                 for _ in range(diff):
@@ -5818,6 +5882,13 @@ async def admin_edit_deal_api(request):
 async def admin_cancel_deal_api(request):
     try:
         data = await request.json()
+    except Exception:
+        data = {}
+
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
+
+    try:
         deal_id = int(data.get('deal_id'))
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
