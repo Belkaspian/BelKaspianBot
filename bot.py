@@ -3836,32 +3836,56 @@ def get_cargo_hint(card_text: str) -> str:
             return hint
     return DEFAULT_CARGO_HINT
 
-def extract_card_route_and_date(title: str, due_date: str) -> tuple[str, str]:
-    """Извлекает аккуратную дату и маршрут из названия карточки Kaiten."""
-    clean_title = re.sub(r'^\s*#?\d{4,8}\b', '', title).strip(' -.,_')
+def parse_kaiten_card_title(raw_title: str, due_date: str = "") -> tuple[str, str, str]:
+    """
+    Разбирает название карточки Kaiten:
+    Пример: '108 / 2482012 Верхняя Пышма - Караганда // Сибур'
+    Возвращает: (дата, чистый_маршрут, триггер_клиента)
+    """
+    if not raw_title:
+        return "Срочно", "Маршрут не указан", ""
 
-    # Ищем дату (например, 25.09 или 25.09-28.09)
-    date_match = re.search(r'(\d{1,2}[\./]\d{1,2}(?:\s*[-—–]\s*\d{1,2}[\./]\d{1,2})?)', clean_title)
+    text = raw_title.strip()
+    client_trigger = ""
+
+    # 1. Извлекаем клиента/триггер после / или // в конце строки
+    parts = re.split(r'\s*(?:\/{1,2}|\|)\s*', text)
+    if len(parts) > 1:
+        last_part = parts[-1].strip()
+        # Если в хвосте нет тире и это не чисто номер - значит это клиент/подсказка (например: "Сибур")
+        if not re.search(r'^\d{5,}$', last_part) and not any(sep in last_part for sep in ['-', '—', '→']):
+            client_trigger = last_part
+            # Удаляем хвостик клиента из названия маршрута
+            text = re.sub(r'\s*(?:\/{1,2}|\|)\s*' + re.escape(last_part) + r'\s*$', '', text).strip()
+
+    # 2. Отрезаем ведущие номера и слэши заказа (например: "108 / 2482012 ", "931234 / ")
+    text = re.sub(r'^\s*#?\d+\s*(?:\/\s*\d+)?\s*(?:\/|\/\/)?\s*', '', text).strip()
+    text = re.sub(r'^\s*#?\d{3,8}\b\s*', '', text).strip(' -/\\_')
+
+    # 3. Извлекаем дату (если есть в тексте: 25.09) или берем из срока карточки Kaiten
+    extracted_date = ""
+    date_match = re.search(r'\b(\d{1,2}[\./]\d{1,2}(?:\s*[-—–]\s*\d{1,2}[\./]\d{1,2})?)\b', text)
     if date_match:
         extracted_date = date_match.group(1).replace('/', '.')
-        route_text = clean_title.replace(date_match.group(0), '').strip(' -.,_')
+        text = text.replace(date_match.group(0), '').strip(' -/\\_')
     elif due_date:
-        try:
-            m = re.search(r'\d{4}-(\d{2})-(\d{2})', due_date)
-            extracted_date = f"{m.group(2)}.{m.group(1)}" if m else "Срочно"
-        except Exception:
+        m_due = re.search(r'\d{4}-(\d{2})-(\d{2})', due_date)
+        if m_due:
+            extracted_date = f"{m_due.group(2)}.{m_due.group(1)}"
+        else:
             extracted_date = "Срочно"
-        route_text = clean_title
     else:
         extracted_date = "Срочно"
-        route_text = clean_title
 
-    # Нормализуем стрелки и тире в маршруте (например: Тобольск-Алматы)
-    route_text = re.sub(r'\s*[-—→]+\s*', '-', route_text).strip(' -.,_')
-    if not route_text:
-        route_text = clean_title or "Маршрут не указан"
+    # 4. Очищаем маршрут от лишних слэшей и нормализуем тире
+    clean_route = re.sub(r'[\/\\|]+', ' ', text)
+    clean_route = re.sub(r'\s*[-—→]+\s*', ' - ', clean_route)
+    clean_route = re.sub(r'\s+', ' ', clean_route).strip(' -.,_')
 
-    return extracted_date, route_text
+    if not clean_route:
+        clean_route = "Маршрут не указан"
+
+    return extracted_date, clean_route, client_trigger
 
 async def get_kaiten_first_column_cards(direction_key: str) -> list[dict]:
     """Получает карточки из первой колонки (Загрузки) указанной доски Kaiten."""
@@ -3923,13 +3947,16 @@ async def handle_admin_cargo_command(message: types.Message):
     uz_cards = await get_kaiten_first_column_cards("UZBEKISTAN")
     asia_cards = await get_kaiten_first_column_cards("ASIA_CAUCASUS")
 
+    parsed_all_cards = []
+
     def format_cards_block(cards_list: list) -> str:
         if not cards_list:
             return "• <i>Нет грузов в колонке загрузок</i>\n"
         items = []
         for c in cards_list:
-            card_date, card_route = extract_card_route_and_date(c["title"], c["due_date"])
-            hint_text = get_cargo_hint(f"{c['title']} {c['description']}")
+            card_date, card_route, trigger = parse_kaiten_card_title(c["title"], c["due_date"])
+            # Ищем подсказку по названию, описанию и выделенному триггеру клиента
+            hint_text = get_cargo_hint(f"{c['title']} {c['description']} {trigger}")
             card_url = f"https://{KAITEN_DOMAIN}/card/{c['id']}"
 
             card_block = (
@@ -3938,6 +3965,13 @@ async def handle_admin_cargo_command(message: types.Message):
                 f"{html.escape(hint_text)}"
             )
             items.append(card_block)
+
+            # Сохраняем для создания удобных кнопок с датой и маршрутом
+            parsed_all_cards.append({
+                "id": c["id"],
+                "date": card_date,
+                "route": card_route
+            })
         return "\n\n".join(items) + "\n"
 
     report_html = (
@@ -3948,11 +3982,14 @@ async def handle_admin_cargo_command(message: types.Message):
         f"{format_cards_block(asia_cards)}"
     )
 
-    # Создаем инлайн-кнопки для публикации любого груза из Kaiten в 1 клик
-    all_cards = uz_cards + asia_cards
+    # Кнопки публикации: пишем дату и маршрут вместо безликих номеров
     builder = InlineKeyboardBuilder()
-    for c in all_cards[:10]:
-        builder.row(types.InlineKeyboardButton(text=f"➕ Опубл. #{c['id']}", callback_data=f"pub_kaiten_{c['id']}"))
+    for c in parsed_all_cards[:10]:
+        btn_label = f"➕ {c['date']} {c['route']}"
+        # Ограничиваем длину текста кнопки, чтобы она аккуратно помещалась на экране телефона
+        if len(btn_label) > 38:
+            btn_label = btn_label[:36] + "…"
+        builder.row(types.InlineKeyboardButton(text=btn_label, callback_data=f"pub_kaiten_{c['id']}"))
 
     try:
         await status_msg.edit_text(
@@ -4042,7 +4079,8 @@ async def handle_publish_kaiten_callback(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    await callback.message.reply(f"✅ Карточка Kaiten **#{card_id}** успешно опубликована на Бирже и разослана перевозчикам!", parse_mode="Markdown")
+    card_date, clean_route, _ = parse_kaiten_card_title(title, card_data.get("due_date", ""))
+    await callback.message.reply(f"✅ Груз **{card_date} {clean_route}** (#{card_id}) успешно опубликован на Бирже!", parse_mode="Markdown")
 
 
 @dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/find', 'find', '/поиск', 'поиск'))))
