@@ -3694,6 +3694,24 @@ async def handle_admin_test_backup(message: types.Message):
 
 
 
+@dp.channel_post(F.chat.id == ADMIN_CHANNEL_ID, F.text.func(lambda t: bool(t) and t.strip().lower().startswith(('/help', 'help', '/помощь', 'помощь', '/команды'))))
+async def handle_admin_help_command(message: types.Message):
+    """Справка по командам, работающая только в админ-канале."""
+    help_text = (
+        "📖 **Шпаргалка команд Админ-канала:**\n\n"
+        "• **`/menu`** (или **`меню`**) — Кнопка для входа в веб-панель управления (Биржа, Все заказы, Перевозчики, Ключи)\n\n"
+        "• **`!Текст сообщения`** — Моментальная рассылка важного сообщения ВСЕМ перевозчикам бота\n"
+        "  *(Пример: `!Внимание! Завтра погрузки с 8:00!`)*\n\n"
+        "• **`/test_backup`** — Проверка создания бэкапа базы данных с выгрузкой в канал бэкапов\n\n"
+        "• **`/help`** (или **`помощь`**) — Показать эту справку\n\n"
+        "📝 **Публикация грузов:**\n"
+        "Просто отправьте текст заявки в канал — бот через ИИ сам определит маршрут, даты, ставку и опубликует груз на бирже."
+    )
+    try:
+        await message.reply(help_text, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Ошибка отправки help в админ-канал: {e}")
+
 @dp.channel_post(F.text.func(lambda text: bool(text) and text.strip().lower().startswith(('/меню', '/menu', 'меню'))))
 async def handle_admin_menu_command(message: types.Message):
     if message.chat.id != ADMIN_CHANNEL_ID:
