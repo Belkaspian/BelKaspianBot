@@ -581,7 +581,6 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0"
     ]
-    ]
     for migration in migrations:
         try:
             cursor.execute(migration)
