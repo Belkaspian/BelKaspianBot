@@ -5975,7 +5975,7 @@ async def direct_upload_docs_api(request):
         return web.json_response({"status": "success", "docs_status": docs_status})
     except Exception as e:
         logging.error(f"Error in direct_upload_docs_api: {e}", exc_info=True)
-        # Откат застрявшего статуса в случае ошибки
+        # Откат застрявшего статуса в случае  ошибки
         if deal_id:
             try:
                 conn = sqlite3.connect("cargo_bot.db")
@@ -5986,6 +5986,7 @@ async def direct_upload_docs_api(request):
             except Exception:
                 pass
         return web.json_response({"error": str(e)}, status=400)
+
 
 async def set_arrived_loading_api(request):
     """Фиксация прибытия на погрузку: перевод в статус Едут (строго после подачи данных)"""
