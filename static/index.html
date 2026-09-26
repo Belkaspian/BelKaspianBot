@@ -737,15 +737,28 @@
             padding: 14px 16px;
             background: var(--bg);
             border-bottom: 1px solid var(--border);
-            animation: slideDown 0.22s ease-out;
-        }
-
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-6px); }
-            to { opacity: 1; transform: translateY(0); }
         }
 
         .t-details.active { display: block; }
+
+        /* Фиксируем шапку, вкладки и поиск в админ-меню намертво наверху */
+        #adminPanelModal .modal-card {
+            overflow: hidden !important;
+            display: flex !important;
+            flex-direction: column !important;
+        }
+        #adminPanelModal .modal-header,
+        #adminPanelModal .sub-nav,
+        #adminPanelModal #admin-sort-search-container {
+            flex-shrink: 0 !important;
+        }
+        #adminContentBody {
+            flex: 1 1 auto !important;
+            overflow-y: auto !important;
+            min-height: 0 !important;
+            padding-right: 2px !important;
+            -webkit-overflow-scrolling: touch;
+        }
 
         .info-grid {
             display: grid;
@@ -5256,7 +5269,6 @@
                 }
 
                 detailsHTML = `
-                    ${d.is_today ? `<div style="margin-bottom:8px;"><span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span></div>` : ''}
                     ${statusBoxHTML}
                     ${formattedMissingDocs}
 
@@ -5269,22 +5281,24 @@
                             <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">${d.driver_phone || 'Без тел.'}</div>
                             ${phoneBtnsHTML}
                         </div>
-                        <div class="info-item"><span>Тягач / Прицеп</span><b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b></div>
+                        <div class="info-item">
+                            <span>Тягач / Прицеп</span>
+                            <b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b>
+                            <div style="margin-top:6px;">
+                                <button class="info-toggle-btn" style="width: 100%; justify-content: center; height: 24px; padding: 0 4px; font-size: 10px; border-radius: var(--radius-sm); font-weight: 700;" onclick="toggleCargoExtraInfo('${d.id}', event)">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width:12px; height:12px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                    <span>О грузе</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
-                    <div style="margin-bottom: 10px;">
-                        <button class="info-toggle-btn" style="width: 100%; justify-content: center; height: 28px; border-radius: var(--radius-sm);" onclick="toggleCargoExtraInfo('${d.id}', event)">
-                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                            <span>Информация о грузе</span>
-                        </button>
-
-                        <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none; margin-top: 8px; margin-bottom: 0;">
-                            <div class="info-grid" style="margin-bottom:0;">
-                                <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
-                                <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                                <div class="info-item"><span>Вес / Объем</span><b>${d.weight || 'до 22т'}</b></div>
-                                <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
-                            </div>
+                    <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none; margin-bottom: 10px;">
+                        <div class="info-grid" style="margin-bottom:0;">
+                            <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
+                            <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                            <div class="info-item"><span>Вес / Объем</span><b>${d.weight || 'до 22т'}</b></div>
+                            <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
                         </div>
                     </div>
 
@@ -5414,7 +5428,8 @@
 
                     let sortedLoads = sortItems(rawLoads);
                     let newHash = JSON.stringify(sortedLoads);
-                    if (isSilent && !searchQuery && newHash === currentDataHash) return;
+                    // Если данные не поменялись — не трогаем экран, чтобы меню не дергалось
+                    if (isSilent && newHash === currentDataHash) return;
 
                     currentDataHash = newHash;
                     if (!sortedLoads || sortedLoads.length === 0) {
@@ -5514,7 +5529,8 @@
 
                     let sortedDeals = sortItems(filteredDeals);
                     let newHash = JSON.stringify(sortedDeals);
-                    if (isSilent && !searchQuery && newHash === currentDataHash) return;
+                    // Если данные не поменялись — не трогаем экран, чтобы меню не дергалось
+                    if (isSilent && newHash === currentDataHash) return;
 
                     currentDataHash = newHash;
                     if (sortedDeals.length === 0) {
