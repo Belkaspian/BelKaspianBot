@@ -2146,7 +2146,11 @@
                 if (filterBox) filterBox.style.display = 'none';
             }
 
-            applyAdminFilters();
+            if (tab === 'kaiten') {
+                renderAdminKaiten(false);
+            } else {
+                applyAdminFilters();
+            }
         }
 
         function applyAdminFilters() {
@@ -2155,7 +2159,9 @@
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
+            else if (adminSubTab === 'kaiten') {
+                // На вкладке Kaiten фоновый опрос не перезагружает экран!
+            }
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
@@ -2414,7 +2420,7 @@
 
             if (shouldFetch && !isKaitenLoading) {
                 isKaitenLoading = true;
-                // Спиннер показываем только при первой загрузке или при ручном обновлении
+                // Спиннер показываем только при первой загрузке или ручном нажатии на кнопку
                 if (!allAdminKaitenArray || allAdminKaitenArray.length === 0 || forceRefresh) {
                     body.innerHTML = '<div class="loader"><div class="spinner"></div>Запрос карточек из Kaiten...</div>';
                 }
@@ -2474,6 +2480,14 @@
                 </div>
             `;
         }
+
+        // Автоматическое тихое обновление Kaiten раз в 3 минуты, если вкладка открыта
+        setInterval(() => {
+            const adminModal = document.getElementById('adminPanelModal');
+            if (adminModal && adminModal.classList.contains('active') && adminSubTab === 'kaiten') {
+                renderAdminKaiten(true);
+            }
+        }, 180000);
 
         async function publishKaitenCardFromWeb(cardId) {
             showToast('Анализ ИИ и публикация на биржу...', 'info');
@@ -2774,18 +2788,22 @@
             const dirFilterBox = document.getElementById('adminDirectionFilterBox');
 
             if (tab === 'exchange' || tab === 'deals') {
-                filterBox.style.display = 'flex';
+                if (filterBox) filterBox.style.display = 'flex';
                 if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
                 if (dirFilterBox) dirFilterBox.style.display = 'block';
             } else if (tab === 'carriers') {
-                filterBox.style.display = 'flex';
+                if (filterBox) filterBox.style.display = 'flex';
                 if (carrierFilterBox) carrierFilterBox.style.display = 'none';
                 if (dirFilterBox) dirFilterBox.style.display = 'block';
             } else {
-                filterBox.style.display = 'none';
+                if (filterBox) filterBox.style.display = 'none';
             }
 
-            applyAdminFilters();
+            if (tab === 'kaiten') {
+                renderAdminKaiten(false);
+            } else {
+                applyAdminFilters();
+            }
         }
 
         function applyAdminFilters() {
@@ -2794,7 +2812,9 @@
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
+            else if (adminSubTab === 'kaiten') {
+                // На вкладке Kaiten фоновый опрос не перезагружает экран!
+            }
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
@@ -3783,7 +3803,11 @@
                 if (filterBox) filterBox.style.display = 'none';
             }
 
-            applyAdminFilters();
+            if (tab === 'kaiten') {
+                renderAdminKaiten(false);
+            } else {
+                applyAdminFilters();
+            }
         }
 
         function applyAdminFilters() {
@@ -3792,7 +3816,9 @@
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
+            else if (adminSubTab === 'kaiten') {
+                // На вкладке Kaiten фоновый опрос не перезагружает экран!
+            }
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
@@ -5225,10 +5251,17 @@
 
                     ${(mySubTab === 'active' && (d.is_today || d.can_load) && !d.is_loaded) ? `
                         <div style="margin-bottom: 8px;">
-                            <button class="btn btn-success" style="width: 100%; height: 34px; font-weight: 700; font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-sm);" onclick="setArrivedLoading('${d.deal_id || d.id}', event)">
-                                <svg class="icon" viewBox="0 0 24 24" style="width: 13px; height: 13px;"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
-                                <span>Приехал на загрузку</span>
-                            </button>
+                            ${(d.docs_submitted && d.docs_status !== 'NONE') ? `
+                                <button class="btn btn-success" style="width: 100%; height: 34px; font-weight: 700; font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-sm);" onclick="setArrivedLoading('${d.deal_id || d.id}', event)">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width: 13px; height: 13px;"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+                                    <span>Приехал на загрузку</span>
+                                </button>
+                            ` : `
+                                <button class="btn btn-secondary" style="width: 100%; height: 34px; font-weight: 600; font-size: 11px; opacity: 0.55; cursor: not-allowed; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-sm);" onclick="showToast('Сначала необходимо внести данные по машине и водителю!', 'warning'); event.stopPropagation();">
+                                    <svg class="icon" viewBox="0 0 24 24" style="width: 13px; height: 13px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                    <span>Приехал на загрузку (сначала внесите данные)</span>
+                                </button>
+                            `}
                         </div>
                     ` : ''}
 
