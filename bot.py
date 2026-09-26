@@ -8044,7 +8044,6 @@ async def admin_bid_action_api(request):
             confirm_cars = cars_count
 
         if is_reservation:
-            # Если бронь: возвращаем оставшиеся неподтвержденные машины на биржу
             returned_cars = cars_count - confirm_cars
             if returned_cars > 0:
                 m = re.search(r'\d+', str(cur_cars_str))
@@ -8052,7 +8051,6 @@ async def admin_bid_action_api(request):
                 new_cars = cur_cars + returned_cars
                 c.execute("UPDATE loads SET cars_count = ?, status = 'ACTIVE' WHERE load_id = ?", (str(new_cars), load_id))
         else:
-            # Если ставка: списываем только подтвержденные машины
             m = re.search(r'\d+', str(cur_cars_str))
             cur_cars = int(m.group(0)) if m else 1
             if cur_cars > confirm_cars:
@@ -8077,6 +8075,56 @@ async def admin_bid_action_api(request):
             await bot.send_message(chat_id=user_id, text=f"• Логист подтвердил **{confirm_cars} из {cars_count} авто** по рейсу **{route_str}** ({rate}). Перейдите в раздел «Мои грузы» для подачи документов.")
         except Exception:
             pass
+        return web.json_response({"status": "success"})
+
+    elif action == "counter":
+        # Встречная ставка логиста из веб-панели
+        counter_rate = format_custom_rate(data.get("rate") or data.get("counter_rate") or "")
+        if not counter_rate or counter_rate == "Торги":
+            conn.close()
+            return web.json_response({"error": "Укажите встречную ставку"}, status=400)
+
+        counter_cars = int(data.get("cars") or cars_count)
+        if counter_cars <= 0: counter_cars = 1
+        if counter_cars > cars_count: counter_cars = cars_count
+
+        if is_reservation and counter_cars < cars_count:
+            returned = cars_count - counter_cars
+            m = re.search(r'\d+', str(cur_cars_str))
+            cur_cars = int(m.group(0)) if m else 0
+            c.execute("UPDATE loads SET cars_count = ?, status = 'ACTIVE' WHERE load_id = ?", (str(cur_cars + returned), load_id))
+
+        c.execute("""
+            UPDATE bids 
+            SET status = 'COUNTER', counter_rate = ?, cars = ? 
+            WHERE bid_id = ?
+        """, (counter_rate, counter_cars, bid_id))
+        conn.commit()
+        conn.close()
+
+        await sync_admin_bid_message(bid_id, f"Встречная ставка: {counter_rate} ({counter_cars} авто)")
+
+        add_notification(
+            user_id, 
+            "Встречное предложение", 
+            f"Логист предложил вам ставку {counter_rate} на {counter_cars} авто по рейсу {route_str}."
+        )
+
+        counter_builder = InlineKeyboardBuilder()
+        counter_builder.row(
+            types.InlineKeyboardButton(text="Принять встречную", callback_data=f"accept_counter_{bid_id}"),
+            types.InlineKeyboardButton(text="Отклонить", callback_data=f"decline_counter_{bid_id}")
+        )
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"• Логист предложил встречную ставку **{counter_rate}** ({counter_cars} авто) по рейсу **{route_str}** (ваша ставка: {rate}).\n\nПринимаете предложение?",
+                reply_markup=counter_builder.as_markup(),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
         return web.json_response({"status": "success"})
 
     elif action == "decline":
