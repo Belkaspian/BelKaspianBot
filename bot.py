@@ -4688,6 +4688,88 @@ async def handle_accept_counter(callback: types.CallbackQuery):
 
     conn.close()
 
+
+@dp.callback_query(F.data.startswith("accept_reserve_"))
+async def handle_accept_reserve(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("accept_reserve_", ""))
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if not bid:
+        conn.close()
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    load_id, user_id, cars_count, rate = bid
+    cursor.execute("SELECT route, date, details FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+    route_str, date_str, details_text = load if load else ("Груз", "Срочно", "")
+
+    for _ in range(cars_count):
+        cursor.execute("""
+            INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+        """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+    cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(user_id, "Бронь подтверждена", f"Логист подтвердил бронирование груза {route_str} ({rate}). Теперь вы можете подать документы.")
+    try:
+        await bot.send_message(chat_id=user_id, text=f"• Бронь по грузу **{route_str}** ({rate}) подтверждена логистом! Перейдите в раздел «Мои грузы» для подачи документов.")
+    except Exception:
+        pass
+
+    await callback.message.edit_text(callback.message.text + "\n\n• **БРОНЬ ПОДТВЕРЖДЕНА ЛОГИСТОМ**")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("decline_reserve_"))
+async def handle_decline_reserve(callback: types.CallbackQuery):
+    bid_id = int(callback.data.replace("decline_reserve_", ""))
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = cursor.fetchone()
+
+    if not bid:
+        conn.close()
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+
+    load_id, user_id, cars_count, rate = bid
+    cursor.execute("SELECT route, cars_count, status FROM loads WHERE load_id = ?", (load_id,))
+    load = cursor.fetchone()
+
+    if load:
+        route_str, current_cars_str, current_status = load
+        m = re.search(r'\d+', str(current_cars_str))
+        cur_cars = int(m.group(0)) if m else 0
+        new_cars = cur_cars + cars_count
+        cursor.execute("UPDATE loads SET cars_count = ?, status = 'ACTIVE' WHERE load_id = ?", (str(new_cars), load_id))
+    else:
+        route_str = "Груз"
+
+    cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+    conn.commit()
+    conn.close()
+
+    # Возвращаем груз на биржу для всех перевозчиков
+    await update_cargo_messages_for_all_users(load_id)
+
+    add_notification(user_id, "Бронь отклонена", f"Бронирование по грузу {route_str} отклонено (груз неактуален или снят).")
+    try:
+        await bot.send_message(chat_id=user_id, text=f"❌ Запрос на бронь по грузу **{route_str}** отклонён логистом (груз снят).")
+    except Exception:
+        pass
+
+    await callback.message.edit_text(callback.message.text + "\n\n• **ОТКЛОНЕНО (ГРУЗ ВОЗВРАЩЁН НА БИРЖУ)**")
+    await callback.answer()
+
+
+
 @dp.callback_query(F.data.startswith("decline_counter_"))
 async def handle_decline_counter(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("decline_counter_", ""))
@@ -6199,32 +6281,42 @@ async def book_load_api(request):
     carrier_text = format_carrier_info(user_id, username, first_name)
 
     if action == 'confirm':
+        # 1. Сразу снимаем запрашиваемое количество авто с биржи (резерв)
         if current_cars > requested_cars:
             cursor.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(current_cars - requested_cars), load_id))
         else:
             cursor.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
 
-        for _ in range(requested_cars):
-            cursor.execute("""
-                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
-            """, (load_id, user_id, date_str, route_str, price_str, details_text))
+        # 2. Создаем заявку на согласование с пометкой бронирования
+        cursor.execute("""
+            INSERT INTO bids (load_id, user_id, cars, rate, comment, status)
+            VALUES (?, ?, ?, ?, 'RESERVATION', 'PENDING')
+        """, (load_id, user_id, requested_cars, price_str))
+        bid_id = cursor.lastrowid
 
         conn.commit()
         conn.close()
 
-        add_notification(user_id, "Груз забронирован", f"Вы забронировали груз {route_str} ({requested_cars} авто, {price_str}).")
+        # Обновляем сообщения во всех каналах и у пользователей — груз исчезает с биржи
         await update_cargo_messages_for_all_users(load_id)
 
+        add_notification(user_id, "Запрос на бронь", f"Груз {route_str} ({requested_cars} авто, {price_str}) отправлен на согласование логисту.")
+
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(
+            types.InlineKeyboardButton(text="Подтвердить бронь", callback_data=f"accept_reserve_{bid_id}"),
+            types.InlineKeyboardButton(text="Отклонить (вернуть на биржу)", callback_data=f"decline_reserve_{bid_id}")
+        )
+
         admin_notification = (
-            f"**ГРУЗ ЗАБРАН ИЗ WEB APP**\n\n"
+            f"**ЗАПРОС НА БРОНИРОВАНИЕ (ГРУЗ СНЯТ В РЕЗЕРВ)**\n\n"
             f"• Рейс #{load_id} | Маршрут: {route_str}\n"
             f"• Дата: {date_str}\n"
-            f"• Ставка: {price_str} | Забрано авто: {requested_cars}\n\n"
+            f"• Базовая ставка: {price_str} | Авто: {requested_cars}\n\n"
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, parse_mode="Markdown")
+            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
         except Exception:
             pass
 
@@ -7726,6 +7818,220 @@ async def submit_pay_docs_direct_api(request):
 
 # ==================== СЕРВЕР И ЗАПУСК ====================
 
+# API сводки для панели администратора
+async def admin_get_stats_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM loads WHERE status = 'ACTIVE'")
+    active_loads = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM confirmed_deals WHERE is_unloaded = 0")
+    in_transit = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM confirmed_deals WHERE is_unloaded = 1 AND (is_paid = 0 OR is_paid IS NULL)")
+    awaiting_pay = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM blacklist WHERE item_type = 'VEHICLE'")
+    bl_veh = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM blacklist WHERE item_type = 'DRIVER'")
+    bl_drv = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM bids WHERE status = 'PENDING'")
+    pending_bids = c.fetchone()[0]
+    conn.close()
+    return web.json_response({
+        "active_loads": active_loads,
+        "in_transit": in_transit,
+        "awaiting_pay": awaiting_pay,
+        "blacklist_total": bl_veh + bl_drv,
+        "pending_bids": pending_bids
+    })
+
+# API списка заявок на согласовании (ставки и брони)
+async def admin_get_bids_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("""
+        SELECT b.bid_id, b.load_id, b.user_id, b.cars, b.rate, b.comment, b.status,
+               COALESCE(l.route, 'Маршрут не указан'), COALESCE(l.date, 'Срочно'),
+               COALESCE(u.company, 'Компания не указана'), COALESCE(u.name, 'Сотрудник'), COALESCE(u.phone, 'Не указан')
+        FROM bids b
+        LEFT JOIN loads l ON b.load_id = l.load_id
+        LEFT JOIN users u ON b.user_id = u.user_id
+        WHERE b.status = 'PENDING'
+        ORDER BY b.bid_id DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+    bids = [{
+        "bid_id": r[0], "load_id": r[1], "user_id": r[2], "cars": r[3],
+        "rate": r[4], "comment": r[5], "status": r[6], "route": r[7],
+        "date": r[8], "company": r[9], "name": r[10], "phone": r[11],
+        "is_reservation": (r[5] == 'RESERVATION')
+    } for r in rows]
+    return web.json_response({"bids": bids})
+
+# API действия по заявке (подтвердить / отклонить бронь или ставку)
+async def admin_bid_action_api(request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    bid_id = int(data.get("bid_id", 0))
+    action = data.get("action", "")
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("SELECT load_id, user_id, cars, rate, comment FROM bids WHERE bid_id = ?", (bid_id,))
+    bid = c.fetchone()
+    if not bid:
+        conn.close()
+        return web.json_response({"error": "Заявка не найдена"}, status=404)
+
+    load_id, user_id, cars_count, rate, comment = bid
+    is_reservation = (comment == 'RESERVATION')
+
+    c.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
+    l_row = c.fetchone()
+    route_str, date_str, details_text, cur_cars_str = l_row if l_row else ("Груз", "Срочно", "", "1")
+
+    if action == "accept":
+        # Если это была обычная ставка (не резерв), уменьшаем остаток машин
+        if not is_reservation:
+            m = re.search(r'\d+', str(cur_cars_str))
+            cur_cars = int(m.group(0)) if m else 1
+            if cur_cars > cars_count:
+                c.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(cur_cars - cars_count), load_id))
+            else:
+                c.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+        for _ in range(cars_count):
+            c.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+        c.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+        await update_cargo_messages_for_all_users(load_id)
+        add_notification(user_id, "Заявка подтверждена", f"Логист подтвердил ваш рейс {route_str} ({rate}).")
+        return web.json_response({"status": "success"})
+
+    elif action == "decline":
+        # Если это была бронь (машины уже были сняты), возвращаем их обратно на биржу
+        if is_reservation:
+            m = re.search(r'\d+', str(cur_cars_str))
+            cur_cars = int(m.group(0)) if m else 0
+            new_cars = cur_cars + cars_count
+            c.execute("UPDATE loads SET cars_count = ?, status = 'ACTIVE' WHERE load_id = ?", (str(new_cars), load_id))
+
+        c.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+        await update_cargo_messages_for_all_users(load_id)
+        add_notification(user_id, "Заявка отклонена", f"Заявка по рейсу {route_str} отклонена логистом.")
+        return web.json_response({"status": "success"})
+
+    conn.close()
+    return web.json_response({"error": "Неизвестное действие"}, status=400)
+
+# API списка грузов из Kaiten (колонка «Загрузки»)
+async def admin_get_kaiten_cards_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    uz_cards = await get_kaiten_first_column_cards("UZBEKISTAN")
+    asia_cards = await get_kaiten_first_column_cards("ASIA_CAUCASUS")
+    all_cards = []
+    for c in uz_cards:
+        c_date, c_route, trigger = parse_kaiten_card_title(c["title"], c.get("due_date", ""))
+        all_cards.append({
+            "id": c["id"], "region": "Узбекистан", "date": c_date, "route": c_route,
+            "title": c["title"], "desc": c["description"], "hint": get_cargo_hint(f"{c['title']} {c['description']} {trigger}")
+        })
+    for c in asia_cards:
+        c_date, c_route, trigger = parse_kaiten_card_title(c["title"], c.get("due_date", ""))
+        all_cards.append({
+            "id": c["id"], "region": "Азия и Кавказ", "date": c_date, "route": c_route,
+            "title": c["title"], "desc": c["description"], "hint": get_cargo_hint(f"{c['title']} {c['description']} {trigger}")
+        })
+    return web.json_response({"cards": all_cards})
+
+# API стоп-листа (чёрного списка)
+async def admin_get_blacklist_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("SELECT id, item_type, raw_value, reason, created_at FROM blacklist ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    items = [{"id": r[0], "item_type": r[1], "value": r[2], "reason": r[3], "created_at": r[4]} for r in rows]
+    return web.json_response({"blacklist": items})
+
+async def admin_add_blacklist_api(request):
+    try: data = await request.json()
+    except Exception: data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    kind = data.get("type", "VEHICLE")
+    val = data.get("value", "").strip()
+    reason = data.get("reason", "").strip()
+    if not val or not reason:
+        return web.json_response({"error": "Заполните значение и причину"}, status=400)
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("INSERT INTO blacklist (item_type, identifier, raw_value, reason) VALUES (?, ?, ?, ?)", (kind, val, val, reason))
+    conn.commit()
+    conn.close()
+    return web.json_response({"status": "success"})
+
+async def admin_del_blacklist_api(request):
+    try: data = await request.json()
+    except Exception: data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    b_id = int(data.get("id", 0))
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("DELETE FROM blacklist WHERE id = ?", (b_id,))
+    conn.commit()
+    conn.close()
+    return web.json_response({"status": "success"})
+
+# API рассылки всем перевозчикам
+async def admin_broadcast_api(request):
+    try: data = await request.json()
+    except Exception: data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    text = data.get("text", "").strip()
+    if not text:
+        return web.json_response({"error": "Текст сообщения пуст"}, status=400)
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE status = 'ACTIVE'")
+    users = c.fetchall()
+    conn.close()
+    count = 0
+    for (u_id,) in users:
+        try:
+            await bot.send_message(chat_id=u_id, text=f"📢 ВАЖНОЕ СООБЩЕНИЕ:\n\n{text}")
+            count += 1
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+    return web.json_response({"status": "success", "sent_count": count})
+
+# API ручного бэкапа базы в канал
+async def admin_trigger_backup_api(request):
+    if not is_admin_authorized(request):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+    success, result_text = await push_db_backup(reason="Запрос из админ-меню Web App")
+    return web.json_response({"status": "success" if success else "error", "message": result_text})
+
 async def handle_ping(request):
     return web.Response(text="Bot is running!", status=200)
 
@@ -7781,6 +8087,15 @@ async def web_server():
     app.router.add_post("/api/submit_pay_docs_prompt", submit_pay_docs_prompt_api)
 
     app.router.add_post("/api/admin/verify_pass", admin_verify_pass_api)
+    app.router.add_get("/api/admin/stats", admin_get_stats_api)
+    app.router.add_get("/api/admin/bids", admin_get_bids_api)
+    app.router.add_post("/api/admin/bid_action", admin_bid_action_api)
+    app.router.add_get("/api/admin/kaiten_cards", admin_get_kaiten_cards_api)
+    app.router.add_get("/api/admin/blacklist", admin_get_blacklist_api)
+    app.router.add_post("/api/admin/blacklist/add", admin_add_blacklist_api)
+    app.router.add_post("/api/admin/blacklist/del", admin_del_blacklist_api)
+    app.router.add_post("/api/admin/broadcast", admin_broadcast_api)
+    app.router.add_post("/api/admin/trigger_backup", admin_trigger_backup_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
     app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
     app.router.add_post("/api/admin/edit_carrier", admin_edit_carrier_api)
