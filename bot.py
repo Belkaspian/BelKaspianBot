@@ -7959,6 +7959,71 @@ async def admin_get_kaiten_cards_api(request):
         })
     return web.json_response({"cards": all_cards})
 
+# API публикации груза из Kaiten прямо из веб-панели
+async def admin_publish_kaiten_api(request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    card_id = int(request.query.get("id") or data.get("id", 0))
+    if not card_id:
+        return web.json_response({"error": "ID карточки не указан"}, status=400)
+
+    card_data = await kaiten_api_request("GET", f"/cards/{card_id}")
+    if not card_data or not isinstance(card_data, dict):
+        return web.json_response({"error": "Карточка не найдена в Kaiten"}, status=404)
+
+    title = card_data.get("title") or card_data.get("name") or ""
+    desc = card_data.get("description") or ""
+    full_text = f"{title}\n{desc}".strip()
+
+    fallback_date, fallback_route, trigger = parse_kaiten_card_title(title, card_data.get("due_date", ""))
+    fallback_hint = get_cargo_hint(f"{title} {desc} {trigger}")
+    hint_lines = [h.strip() for h in fallback_hint.split('\n') if h.strip()]
+    fallback_cartype = hint_lines[0] if len(hint_lines) > 0 else "Тент/реф"
+    fallback_cargo = hint_lines[1] if len(hint_lines) > 1 else "ТНП до 22т"
+    fallback_country = detect_country(f"{fallback_route} {full_text}")
+    fallback_price = extract_price(full_text)
+
+    ai_cargos = await parse_cargos_with_ai(f"Заявка из Kaiten #{card_id}:\n{full_text}\nПодсказка: {fallback_hint}")
+
+    if ai_cargos and len(ai_cargos) > 0:
+        item = ai_cargos[0]
+        dest_country = item.get("destination_country") or fallback_country
+        c_date = item.get("date") or fallback_date
+        c_route = item.get("route") or fallback_route
+        c_cars = str(item.get("cars_count") or "1")
+        c_price = item.get("price") or fallback_price
+        c_cartype = item.get("car_type") or fallback_cartype
+        c_cargotype = item.get("cargo_type") or fallback_cargo
+        c_weight = item.get("weight") or "до 22т"
+        c_details = item.get("details") or fallback_hint
+    else:
+        dest_country = fallback_country
+        c_date = fallback_date
+        c_route = fallback_route
+        c_cars = "1"
+        c_price = fallback_price
+        c_cartype = fallback_cartype
+        c_cargotype = fallback_cargo
+        c_weight = "до 22т"
+        c_details = fallback_hint
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+    """, (dest_country, c_date, c_route, c_cars, c_price, full_text, c_details, c_cartype, c_cargotype, c_weight))
+    new_cargo_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"status": "success", "cargo_id": new_cargo_id})
+
 # API стоп-листа (чёрного списка)
 async def admin_get_blacklist_api(request):
     if not is_admin_authorized(request):
@@ -8091,6 +8156,7 @@ async def web_server():
     app.router.add_get("/api/admin/bids", admin_get_bids_api)
     app.router.add_post("/api/admin/bid_action", admin_bid_action_api)
     app.router.add_get("/api/admin/kaiten_cards", admin_get_kaiten_cards_api)
+    app.router.add_post("/api/admin/kaiten_publish", admin_publish_kaiten_api)
     app.router.add_get("/api/admin/blacklist", admin_get_blacklist_api)
     app.router.add_post("/api/admin/blacklist/add", admin_add_blacklist_api)
     app.router.add_post("/api/admin/blacklist/del", admin_del_blacklist_api)
