@@ -1509,6 +1509,10 @@
                 <input type="text" id="uploadModalPhone" placeholder="+375291234567 / +79991234567" />
             </div>
             <div class="form-group">
+                <label>Комментарий / Текстовые данные по грузу</label>
+                <textarea id="uploadModalComment" placeholder="Сюда можно вставить текст с данными машины, прицепа, паспорта водителя или любые заметки..." rows="3"></textarea>
+            </div>
+            <div class="form-group">
                 <label>Документы (СТС, ВУ, Паспорт)</label>
                 <div class="dropzone" id="directUploadDropzone" 
                      onclick="document.getElementById('directUploadFiles').click()"
@@ -3427,6 +3431,8 @@
             uploadModalMode = mode;
             document.getElementById('uploadModalDealId').value = dealId;
             document.getElementById('uploadModalPhone').value = '';
+            const commentEl = document.getElementById('uploadModalComment');
+            if (commentEl) commentEl.value = '';
             directSelectedFiles = [];
             renderDirectFilePreview();
 
@@ -3533,9 +3539,10 @@
         async function submitDirectUploadData() {
             const dealId = document.getElementById('uploadModalDealId').value;
             const phone = document.getElementById('uploadModalPhone').value.trim();
+            const comment = (document.getElementById('uploadModalComment')?.value || '').trim();
 
-            if (directSelectedFiles.length === 0 && !phone) {
-                return showToast('Укажите номер телефона или выберите файлы', 'error');
+            if (directSelectedFiles.length === 0 && !phone && !comment) {
+                return showToast('Укажите телефон, комментарий или прикрепите файлы', 'error');
             }
 
             closeModal('directUploadModal');
@@ -3545,6 +3552,7 @@
             formData.append('deal_id', dealId);
             formData.append('user_id', getUserId());
             formData.append('phone', phone);
+            formData.append('comment', comment);
             directSelectedFiles.forEach(f => formData.append('files', f));
 
             directSelectedFiles = [];
