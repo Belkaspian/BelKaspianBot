@@ -3701,26 +3701,41 @@
 
         function switchAdminSubTab(tab) {
             adminSubTab = tab;
-            document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
-            document.getElementById('admTabDeals').classList.toggle('active', tab === 'deals');
-            document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
-            const tabKeys = document.getElementById('admTabKeys');
-            if (tabKeys) tabKeys.classList.toggle('active', tab === 'keys');
+            const tabs = ['overview', 'bids', 'exchange', 'deals', 'kaiten', 'carriers', 'keys', 'blacklist', 'broadcast'];
+            tabs.forEach(t => {
+                const el = document.getElementById(`admTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                if (el) el.classList.toggle('active', tab === t);
+            });
 
+            const filterBox = document.getElementById('admin-sort-search-container');
             const carrierFilterBox = document.getElementById('adminCarrierFilterBox');
-            if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
+            const dirFilterBox = document.getElementById('adminDirectionFilterBox');
 
-            const filterContainer = document.getElementById('admin-sort-search-container');
-            if (filterContainer) filterContainer.style.display = (tab === 'keys') ? 'none' : 'flex';
+            if (tab === 'exchange' || tab === 'deals') {
+                if (filterBox) filterBox.style.display = 'flex';
+                if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
+                if (dirFilterBox) dirFilterBox.style.display = 'block';
+            } else if (tab === 'carriers') {
+                if (filterBox) filterBox.style.display = 'flex';
+                if (carrierFilterBox) carrierFilterBox.style.display = 'none';
+                if (dirFilterBox) dirFilterBox.style.display = 'block';
+            } else {
+                if (filterBox) filterBox.style.display = 'none';
+            }
 
             applyAdminFilters();
         }
 
         function applyAdminFilters() {
-            if (adminSubTab === 'exchange') renderAdminLoads();
+            if (adminSubTab === 'overview') renderAdminOverview();
+            else if (adminSubTab === 'bids') renderAdminBids();
+            else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
+            else if (adminSubTab === 'kaiten') renderAdminKaiten();
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
+            else if (adminSubTab === 'blacklist') renderAdminBlacklist();
+            else if (adminSubTab === 'broadcast') renderAdminBroadcast();
         }
 
         /* 1. ОТРИСОВКА ВКЛАДКИ "БИРЖА" */
