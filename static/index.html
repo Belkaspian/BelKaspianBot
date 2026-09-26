@@ -2262,7 +2262,7 @@
                                 <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
                                 ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
                             </div>
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
                                 <button class="btn btn-success admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
                                     Подтвердить
                                 </button>
@@ -2271,6 +2271,9 @@
                                         Часть (${b.cars})
                                     </button>
                                 ` : ''}
+                                <button class="btn btn-secondary admin-head-btn" style="margin-left:0;" onclick="submitBidCounter(${b.bid_id}, ${b.cars}, '${(b.rate || '').replace(/'/g, "\\'")}')">
+                                    Своя ставка
+                                </button>
                                 <button class="btn btn-danger admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
                                     ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
                                 </button>
@@ -2321,6 +2324,42 @@
                     showToast(data.error || 'Ошибка действия', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidCounter(bidId, maxCars, currentRate) {
+            let promptRate = prompt(`Текущая ставка: ${currentRate}\nВведите вашу встречную ставку (например: 2500 USD или 260 000 RUB):`);
+            if (!promptRate || !promptRate.trim()) return;
+
+            let carsCount = maxCars;
+            if (maxCars > 1) {
+                let promptCars = prompt(`Сколько авто предложить по этой ставке? (всего запрошено: ${maxCars}):`, String(maxCars));
+                if (promptCars) {
+                    let parsed = parseInt(promptCars);
+                    if (!isNaN(parsed) && parsed > 0) carsCount = Math.min(parsed, maxCars);
+                }
+            }
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        bid_id: bidId,
+                        action: 'counter',
+                        rate: promptRate.trim(),
+                        cars: carsCount
+                    })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Встречная ставка ${promptRate} отправлена перевозчику!`, 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка отправки', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
         }
 
         /* 3. БИРЖА (АККУРАТНАЯ КНОПКА ДОБАВИТЬ ГРУЗ) */
