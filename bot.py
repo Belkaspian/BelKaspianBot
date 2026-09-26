@@ -579,7 +579,9 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN is_paid INTEGER DEFAULT 0",
         "ALTER TABLE confirmed_deals ADD COLUMN paid_amount TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''",
-        "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0"
+        "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0",
+        "ALTER TABLE bids ADD COLUMN admin_chat_id INTEGER",
+        "ALTER TABLE bids ADD COLUMN admin_message_id INTEGER"
     ]
     for migration in migrations:
         try:
@@ -3593,6 +3595,23 @@ def detect_country(text: str) -> str:
 
 # ==================== ОБРАБОТЧИК ОТВЕТОВ АДМИНА ЧЕРЕЗ PENDING_COUNTERS ====================
 
+async def sync_admin_bid_message(bid_id: int, status_note: str):
+    """Снимает кнопки с сообщения в Telegram-чате логистов при обработке из веб-админки."""
+    try:
+        conn = sqlite3.connect("cargo_bot.db", timeout=10)
+        cursor = conn.cursor()
+        cursor.execute("SELECT admin_chat_id, admin_message_id FROM bids WHERE bid_id = ?", (bid_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] and row[1]:
+            chat_id, msg_id = row[0], row[1]
+            try:
+                await bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+            except Exception:
+                pass
+    except Exception as e:
+        logging.error(f"Error syncing admin bid message: {e}")
+
 async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
     # 1. Проверяем, не является ли сообщение ручной фиксацией ошибки по номеру заявки (например: "2606060373-000001 Неверная дата акта")
     if message_text and any(char.isdigit() for char in message_text):
@@ -5630,30 +5649,36 @@ async def my_loads_api(request):
         is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
         is_transit = False
 
-        deals.append({
-            "id": f"bid_{bid_id}",
-            "bid_id": bid_id,
-            "load_id": load_id,
-            "date": date_str or "Срочно",
-            "route": route_str or "Маршрут",
-            "price": price_str or "Торги",
-            "status": status_str,
-            "details": details_str or "",
-            "car_type": car_type or "Тент/реф",
-            "cargo_type": cargo_type or "ТНП",
-            "weight": weight or "до 22т",
-            "is_today": is_today,
-            "is_transit": is_transit,
-            "is_unloaded": False,
-            "docs_submitted": False,
-            "docs_status": "NONE",
-            "missing_docs": "",
-            "truck_plate": "",
-            "trailer_plate": "",
-            "driver_name": "",
-            "driver_phone": "",
-            "unload_date": ""
-        })
+        # Формируем индивидуальную карточку на КАЖДОЕ забранное авто
+        total_cars_in_bid = max(1, int(cars_count or 1))
+        for car_idx in range(total_cars_in_bid):
+            item_id = f"bid_{bid_id}" if total_cars_in_bid == 1 else f"bid_{bid_id}_{car_idx+1}"
+            deals.append({
+                "id": item_id,
+                "bid_id": bid_id,
+                "load_id": load_id,
+                "date": date_str or "Срочно",
+                "route": route_str or "Маршрут",
+                "price": price_str or "Торги",
+                "status": status_str,
+                "details": details_str or "",
+                "car_type": car_type or "Тент/реф",
+                "cargo_type": cargo_type or "ТНП",
+                "weight": weight or "до 22т",
+                "is_today": is_today,
+                "is_transit": is_transit,
+                "is_unloaded": False,
+                "docs_submitted": False,
+                "docs_status": "NONE",
+                "missing_docs": "",
+                "truck_plate": "",
+                "trailer_plate": "",
+                "driver_name": "",
+                "driver_phone": "",
+                "unload_date": "",
+                "car_num": (car_idx + 1) if total_cars_in_bid > 1 else None,
+                "total_cars": total_cars_in_bid
+            })
 
     for r in confirmed_rows:
         deal_id, load_id, date_str, route_str, cars_count, price_str, details_str, status_str, car_type, cargo_type, weight, docs_sub, docs_stat, miss_docs, tr_plate, trl_plate, drv_name, drv_phone, unl_date, is_unl, ord_num, b_name, b_phone, is_paid, paid_date, planned_pay, pay_d_stat, pay_d_err, p_amount = r
@@ -6385,29 +6410,32 @@ async def book_load_api(request):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            sent_msg = await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            if sent_msg:
+                c_up = sqlite3.connect("cargo_bot.db", timeout=10)
+                c_up.execute("UPDATE bids SET admin_chat_id = ?, admin_message_id = ? WHERE bid_id = ?", (ADMIN_CHANNEL_ID, sent_msg.message_id, bid_id))
+                c_up.commit()
+                c_up.close()
         except Exception:
             pass
 
         return web.json_response({"status": "success"})
 
     elif action == 'bid':
-        # Ограничиваем количество запрашиваемых машин общим доступным остатком
         if requested_cars > current_cars:
             requested_cars = current_cars
 
-        # Добавляем ровно requested_cars записей на согласование (но не более доступных)
-        for _ in range(requested_cars):
-            cursor.execute("""
-                INSERT INTO bids (load_id, user_id, cars, rate, comment)
-                VALUES (?, ?, 1, ?, ?)
-            """, (load_id, user_id, proposed_price, carrier_comment or 'Своя ставка'))
+        # Записываем заявку с общим количеством запрошенных авто
+        cursor.execute("""
+            INSERT INTO bids (load_id, user_id, cars, rate, comment, status)
+            VALUES (?, ?, ?, ?, ?, 'PENDING')
+        """, (load_id, user_id, requested_cars, proposed_price, carrier_comment or 'Своя ставка'))
             
         bid_id = cursor.lastrowid
         conn.commit()
         conn.close()
 
-        add_notification(user_id, "Ставка отправлена", f"Ваша ставка {proposed_price} по грузу {route_str} отправлена логисту.")
+        add_notification(user_id, "Ставка отправлена", f"Ваша ставка {proposed_price} ({requested_cars} авто) по грузу {route_str} отправлена логисту.")
 
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(
@@ -6426,7 +6454,12 @@ async def book_load_api(request):
             f"{carrier_text}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            sent_msg = await bot.send_message(chat_id=ADMIN_CHANNEL_ID, text=admin_notification, reply_markup=admin_builder.as_markup(), parse_mode="Markdown")
+            if sent_msg:
+                c_up = sqlite3.connect("cargo_bot.db", timeout=10)
+                c_up.execute("UPDATE bids SET admin_chat_id = ?, admin_message_id = ? WHERE bid_id = ?", (ADMIN_CHANNEL_ID, sent_msg.message_id, bid_id))
+                c_up.commit()
+                c_up.close()
         except Exception:
             pass
 
@@ -7986,7 +8019,52 @@ async def admin_bid_action_api(request):
         conn.commit()
         conn.close()
         await update_cargo_messages_for_all_users(load_id)
+        await sync_admin_bid_message(bid_id, "Подтверждено в веб-панели")
         add_notification(user_id, "Заявка подтверждена", f"Логист подтвердил ваш рейс {route_str} ({rate}).")
+        return web.json_response({"status": "success"})
+
+    elif action == "partial":
+        # Подтверждение части авто
+        confirm_cars = int(data.get("cars", 1))
+        if confirm_cars <= 0:
+            confirm_cars = 1
+        if confirm_cars > cars_count:
+            confirm_cars = cars_count
+
+        if is_reservation:
+            # Если бронь: возвращаем оставшиеся неподтвержденные машины на биржу
+            returned_cars = cars_count - confirm_cars
+            if returned_cars > 0:
+                m = re.search(r'\d+', str(cur_cars_str))
+                cur_cars = int(m.group(0)) if m else 0
+                new_cars = cur_cars + returned_cars
+                c.execute("UPDATE loads SET cars_count = ?, status = 'ACTIVE' WHERE load_id = ?", (str(new_cars), load_id))
+        else:
+            # Если ставка: списываем только подтвержденные машины
+            m = re.search(r'\d+', str(cur_cars_str))
+            cur_cars = int(m.group(0)) if m else 1
+            if cur_cars > confirm_cars:
+                c.execute("UPDATE loads SET cars_count = ? WHERE load_id = ?", (str(cur_cars - confirm_cars), load_id))
+            else:
+                c.execute("UPDATE loads SET status = 'CLOSED', cars_count = '0' WHERE load_id = ?", (load_id,))
+
+        for _ in range(confirm_cars):
+            c.execute("""
+                INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+            """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+        c.execute("UPDATE bids SET status = 'ACCEPTED', cars = ? WHERE bid_id = ?", (confirm_cars, bid_id))
+        conn.commit()
+        conn.close()
+
+        await update_cargo_messages_for_all_users(load_id)
+        await sync_admin_bid_message(bid_id, f"Подтверждено {confirm_cars} из {cars_count} авто")
+        add_notification(user_id, "Частичное подтверждение", f"Логист подтвердил {confirm_cars} из {cars_count} авто по рейсу {route_str} ({rate}).")
+        try:
+            await bot.send_message(chat_id=user_id, text=f"• Логист подтвердил **{confirm_cars} из {cars_count} авто** по рейсу **{route_str}** ({rate}). Перейдите в раздел «Мои грузы» для подачи документов.")
+        except Exception:
+            pass
         return web.json_response({"status": "success"})
 
     elif action == "decline":
@@ -8001,6 +8079,7 @@ async def admin_bid_action_api(request):
         conn.commit()
         conn.close()
         await update_cargo_messages_for_all_users(load_id)
+        await sync_admin_bid_message(bid_id, "Отклонено в веб-панели")
         add_notification(user_id, "Заявка отклонена", f"Заявка по рейсу {route_str} отклонена логистом.")
         return web.json_response({"status": "success"})
 
