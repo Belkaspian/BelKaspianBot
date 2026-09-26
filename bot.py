@@ -578,7 +578,9 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN planned_payment_date TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN is_paid INTEGER DEFAULT 0",
         "ALTER TABLE confirmed_deals ADD COLUMN paid_amount TEXT DEFAULT ''",
-        "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''"
+        "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0"
+    ]
     ]
     for migration in migrations:
         try:
@@ -5668,8 +5670,19 @@ async def my_loads_api(request):
 
         dt_start, dt_end = parse_cargo_date_range(date_str)
         is_today = bool(dt_start and dt_end and dt_start <= msk_today <= dt_end)
-        has_submitted_docs = bool(docs_sub) or (docs_stat and docs_stat != 'NONE')
-        is_transit = bool(dt_end and msk_today > dt_end and not is_unl and has_submitted_docs)
+        can_load = bool(dt_start and msk_today >= dt_start) or is_today
+        
+        # Переносим в «Едут» ТОЛЬКО если была нажата кнопка прибытия на загрузку:
+        cursor_loaded = 0
+        try:
+            c_check = sqlite3.connect("cargo_bot.db")
+            c_res = c_check.cursor().execute("SELECT COALESCE(is_loaded, 0) FROM confirmed_deals WHERE id = ?", (deal_id,)).fetchone()
+            cursor_loaded = c_res[0] if c_res else 0
+            c_check.close()
+        except Exception:
+            pass
+
+        is_transit = bool(cursor_loaded and not is_unl)
 
         deals.append({
             "id": f"deal_{deal_id}",
@@ -5684,6 +5697,8 @@ async def my_loads_api(request):
             "cargo_type": cargo_type or "ТНП",
             "weight": weight or "до 22т",
             "is_today": is_today,
+            "can_load": can_load,
+            "is_loaded": bool(cursor_loaded),
             "is_transit": is_transit,
             "is_unloaded": bool(is_unl),
             "docs_submitted": bool(docs_sub),
@@ -5944,6 +5959,51 @@ async def direct_upload_docs_api(request):
                 conn.close()
             except Exception:
                 pass
+        return web.json_response({"error": str(e)}, status=400)
+
+async def set_arrived_loading_api(request):
+    """Фиксация прибытия на погрузку: перевод в статус Едут"""
+    try:
+        data = await request.json()
+        deal_id_raw = data.get('deal_id')
+        user_id = int(data.get('user_id', 0))
+
+        digits = re.findall(r'\d+', str(deal_id_raw))
+        clean_deal_id = int(digits[0]) if digits else 0
+
+        if not clean_deal_id or not user_id:
+            return web.json_response({"error": "Неверные данные"}, status=400)
+
+        conn = sqlite3.connect("cargo_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE confirmed_deals 
+            SET is_loaded = 1, status = 'IN_TRANSIT'
+            WHERE id = ? AND user_id = ?
+        """, (clean_deal_id, user_id))
+        
+        cursor.execute("""
+            SELECT route, last_truck_plate, last_driver_name 
+            FROM confirmed_deals WHERE id = ?
+        """, (clean_deal_id,))
+        d_info = cursor.fetchone()
+        conn.commit()
+        conn.close()
+
+        # Оповещение логистов в админ-канал
+        if d_info:
+            r_str, tr_plate, dr_name = d_info
+            try:
+                await bot.send_message(
+                    chat_id=ADMIN_CHANNEL_ID,
+                    text=f"📍 **Водитель прибыл на загрузку!**\n\n• Маршрут: {r_str}\n• Авто: `{tr_plate or '—'}`\n• Водитель: {dr_name or 'Не указан'}",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+        return web.json_response({"status": "success"})
+    except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
 async def set_unload_date_api(request):
@@ -8146,6 +8206,7 @@ async def web_server():
     app.router.add_get("/webapp/{page}", serve_index)
     app.router.add_get("/api/loads", get_loads_api)
     app.router.add_get("/api/my_loads", my_loads_api)
+    app.router.add_post("/api/set_arrived_loading", set_arrived_loading_api)
     app.router.add_post("/api/set_unload_date", set_unload_date_api)
     app.router.add_get("/api/notifications", notifications_get_api)
     app.router.add_post("/api/notifications/read", notifications_read_api)
