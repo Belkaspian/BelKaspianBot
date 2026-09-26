@@ -2150,15 +2150,17 @@
         }
 
         function applyAdminFilters() {
+            const openIds = saveExpandedState();
             if (adminSubTab === 'overview') renderAdminOverview();
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten();
+            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
             else if (adminSubTab === 'broadcast') renderAdminBroadcast();
+            restoreExpandedState(openIds);
         }
 
         /* 1. СВОДКА */
@@ -2254,10 +2256,15 @@
                                 <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
                                 ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
                             </div>
-                            <div style="display:flex; gap:8px;">
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                 <button class="btn btn-success admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
                                     Подтвердить
                                 </button>
+                                ${b.cars > 1 ? `
+                                    <button class="btn btn-warning admin-head-btn" style="margin-left:0;" onclick="submitBidPartial(${b.bid_id}, ${b.cars})">
+                                        Часть (${b.cars})
+                                    </button>
+                                ` : ''}
                                 <button class="btn btn-danger admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
                                     ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
                                 </button>
@@ -2277,6 +2284,31 @@
                 let data = await res.json();
                 if (res.ok) {
                     showToast(action === 'accept' ? 'Заявка подтверждена' : 'Заявка отклонена', 'info');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка действия', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidPartial(bidId, maxCars) {
+            let input = prompt(`Сколько авто подтвердить из ${maxCars}?`, '1');
+            if (input === null) return;
+            let count = parseInt(input);
+            if (isNaN(count) || count <= 0) {
+                return showToast('Укажите корректное число авто', 'error');
+            }
+            if (count > maxCars) count = maxCars;
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({ bid_id: bidId, action: 'partial', cars: count })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Подтверждено авто: ${count} из ${maxCars}`, 'success');
                     loadAdminData();
                     loadData(false);
                 } else {
@@ -2371,45 +2403,76 @@
         }
 
         /* 4. KAITEN ГРУЗЫ */
-        async function renderAdminKaiten() {
+        let lastKaitenFetchTime = 0;
+        let isKaitenLoading = false;
+
+        async function renderAdminKaiten(forceRefresh = false) {
             let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div>Запрос карточек из Kaiten...</div>';
-            try {
-                let res = await adminFetch('/api/admin/kaiten_cards');
-                let data = await res.json();
-                allAdminKaitenArray = data.cards || [];
+            const now = Date.now();
+            const threeMinutes = 3 * 60 * 1000;
+            const shouldFetch = forceRefresh || (now - lastKaitenFetchTime > threeMinutes) || (lastKaitenFetchTime === 0);
 
-                if (allAdminKaitenArray.length === 0) {
-                    body.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-title">В Kaiten нет грузов в колонке «Загрузки»</div>
-                            <div class="empty-desc">Карточки появляются автоматически при создании в Kaiten.</div>
-                        </div>`;
-                    return;
+            if (shouldFetch && !isKaitenLoading) {
+                isKaitenLoading = true;
+                // Спиннер показываем только при первой загрузке или при ручном обновлении
+                if (!allAdminKaitenArray || allAdminKaitenArray.length === 0 || forceRefresh) {
+                    body.innerHTML = '<div class="loader"><div class="spinner"></div>Запрос карточек из Kaiten...</div>';
                 }
-
-                body.innerHTML = `
-                    <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px;">
-                        Карточки Kaiten (${allAdminKaitenArray.length})
-                    </div>
-                    <div class="table-container">
-                        ${allAdminKaitenArray.map(c => `
-                            <div style="padding:10px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                                <div>
-                                    <b style="font-size:13px; color:var(--text);">${c.date} ${c.route}</b>
-                                    <span class="badge" style="margin-left:6px; font-size:9.5px;">${c.region}</span>
-                                    <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">#${c.id} • ${c.hint}</div>
-                                </div>
-                                <button class="btn btn-primary admin-head-btn" onclick="publishKaitenCardFromWeb(${c.id})">
-                                    Опубликовать
-                                </button>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-            } catch(e) {
-                body.innerHTML = '<div class="loader">Ошибка загрузки карточек Kaiten</div>';
+                try {
+                    let res = await adminFetch('/api/admin/kaiten_cards');
+                    let data = await res.json();
+                    allAdminKaitenArray = data.cards || [];
+                    lastKaitenFetchTime = Date.now();
+                } catch(e) {
+                    showToast('Ошибка загрузки карточек Kaiten', 'error');
+                } finally {
+                    isKaitenLoading = false;
+                }
             }
+
+            if (!allAdminKaitenArray || allAdminKaitenArray.length === 0) {
+                body.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <span style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Карточки Kaiten (0)</span>
+                        <button class="btn btn-secondary admin-head-btn" onclick="renderAdminKaiten(true)" ${isKaitenLoading ? 'disabled' : ''}>
+                            ${isKaitenLoading ? '⏳ Загрузка...' : '🔄 Обновить вручную'}
+                        </button>
+                    </div>
+                    <div class="empty-state">
+                        <div class="empty-title">В Kaiten нет грузов в колонке «Загрузки»</div>
+                        <div class="empty-desc">Карточки появляются автоматически при создании в Kaiten.</div>
+                    </div>`;
+                return;
+            }
+
+            let minutesAgo = Math.floor((Date.now() - lastKaitenFetchTime) / 60000);
+            let timeText = lastKaitenFetchTime ? `(обновлено ${minutesAgo === 0 ? 'только что' : minutesAgo + ' мин. назад'})` : '';
+
+            body.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <div>
+                        <span style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Карточки Kaiten (${allAdminKaitenArray.length})</span>
+                        <span style="font-size:10px; color:var(--text-muted); margin-left:6px;">${timeText}</span>
+                    </div>
+                    <button class="btn btn-secondary admin-head-btn" onclick="renderAdminKaiten(true)" ${isKaitenLoading ? 'disabled' : ''}>
+                        ${isKaitenLoading ? '⏳ Загрузка...' : '🔄 Обновить вручную'}
+                    </button>
+                </div>
+                <div class="table-container">
+                    ${allAdminKaitenArray.map(c => `
+                        <div style="padding:10px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                            <div>
+                                <b style="font-size:13px; color:var(--text);">${c.date} ${c.route}</b>
+                                <span class="badge" style="margin-left:6px; font-size:9.5px;">${c.region}</span>
+                                <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">#${c.id} • ${c.hint}</div>
+                            </div>
+                            <button class="btn btn-primary admin-head-btn" onclick="publishKaitenCardFromWeb(${c.id})">
+                                Опубликовать
+                            </button>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
         }
 
         async function publishKaitenCardFromWeb(cardId) {
@@ -2726,15 +2789,17 @@
         }
 
         function applyAdminFilters() {
+            const openIds = saveExpandedState();
             if (adminSubTab === 'overview') renderAdminOverview();
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten();
+            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
             else if (adminSubTab === 'broadcast') renderAdminBroadcast();
+            restoreExpandedState(openIds);
         }
 
         /* 1. СВОДКА И БЫСТРЫЕ ДЕЙСТВИЯ */
@@ -3722,15 +3787,17 @@
         }
 
         function applyAdminFilters() {
+            const openIds = saveExpandedState();
             if (adminSubTab === 'overview') renderAdminOverview();
             else if (adminSubTab === 'bids') renderAdminBids();
             else if (adminSubTab === 'exchange') renderAdminLoads();
             else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten();
+            else if (adminSubTab === 'kaiten') renderAdminKaiten(false);
             else if (adminSubTab === 'carriers') renderAdminCarriers();
             else if (adminSubTab === 'keys') renderAdminKeys();
             else if (adminSubTab === 'blacklist') renderAdminBlacklist();
             else if (adminSubTab === 'broadcast') renderAdminBroadcast();
+            restoreExpandedState(openIds);
         }
 
         /* 1. ОТРИСОВКА ВКЛАДКИ "БИРЖА" */
@@ -4983,6 +5050,7 @@
 
             let isToday = checkIsToday(d.date, d.is_today);
             let todayBadgeHTML = isToday ? `<span class="today-indicator">СЕГОДНЯ</span>` : '';
+            let carNumBadgeHTML = d.car_num ? `<span class="today-indicator" style="background:#f1f5f9; color:#475569; border-color:#cbd5e1;">АВТО ${d.car_num}/${d.total_cars}</span>` : '';
 
             let mainBtnText = "Подать данные";
             let btnClass = "btn-primary";
@@ -5200,6 +5268,7 @@
                     <div class="col-date">
                         <div>${d.date}</div>
                         ${todayBadgeHTML}
+                        ${carNumBadgeHTML}
                     </div>
                     <div class="col-route">${routeHTML}</div>
                     ${truckColHTML}
@@ -5235,7 +5304,10 @@
         window.addEventListener('resize', updateMarquees);
         
         async function loadData(isSilent = false) {
-            if (!isSilent) tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
+            const openIds = saveExpandedState();
+            if (!isSilent && (!tbody.children || tbody.children.length === 0)) {
+                tbody.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка...</div>';
+            }
             let userId = getUserId();
             checkNotifications();
 
@@ -5413,10 +5485,32 @@
                         tbody.innerHTML = sortedDeals.map(d => renderDealRow(d, false)).join('');
                     }
                 }
+                restoreExpandedState(openIds);
                 updateMarquees();
             } catch(e) {
                 if (!isSilent) tbody.innerHTML = '<div class="loader">Ошибка загрузки данных</div>';
             }
+        }
+
+        function saveExpandedState() {
+            const activeElements = document.querySelectorAll('.t-details.active');
+            const openIds = [];
+            activeElements.forEach(el => {
+                if (el.id && el.id.startsWith('details-')) {
+                    openIds.push(el.id.replace('details-', ''));
+                }
+            });
+            return openIds;
+        }
+
+        function restoreExpandedState(openIds) {
+            if (!openIds || openIds.length === 0) return;
+            openIds.forEach(id => {
+                const row = document.getElementById(`row-${id}`);
+                const details = document.getElementById(`details-${id}`);
+                if (row) row.classList.add('expanded');
+                if (details) details.classList.add('active');
+            });
         }
 
         function toggleRow(id) {
