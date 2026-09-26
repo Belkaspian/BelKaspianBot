@@ -5988,7 +5988,7 @@ async def direct_upload_docs_api(request):
         return web.json_response({"error": str(e)}, status=400)
 
 async def set_arrived_loading_api(request):
-    """Фиксация прибытия на погрузку: перевод в статус Едут"""
+    """Фиксация прибытия на погрузку: перевод в статус Едут (строго после подачи данных)"""
     try:
         data = await request.json()
         deal_id_raw = data.get('deal_id')
@@ -6003,16 +6003,25 @@ async def set_arrived_loading_api(request):
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
+            SELECT route, last_truck_plate, last_driver_name, docs_submitted, docs_status 
+            FROM confirmed_deals WHERE id = ? AND user_id = ?
+        """, (clean_deal_id, user_id))
+        d_info = cursor.fetchone()
+
+        if not d_info:
+            conn.close()
+            return web.json_response({"error": "Заказ не найден"}, status=404)
+
+        r_str, tr_plate, dr_name, docs_sub, docs_stat = d_info
+        if not docs_sub or docs_stat == 'NONE':
+            conn.close()
+            return web.json_response({"error": "Нельзя отметить прибытие на загрузку, пока не внесены данные по ТС и водителю!"}, status=400)
+
+        cursor.execute("""
             UPDATE confirmed_deals 
             SET is_loaded = 1, status = 'IN_TRANSIT'
             WHERE id = ? AND user_id = ?
         """, (clean_deal_id, user_id))
-        
-        cursor.execute("""
-            SELECT route, last_truck_plate, last_driver_name 
-            FROM confirmed_deals WHERE id = ?
-        """, (clean_deal_id,))
-        d_info = cursor.fetchone()
         conn.commit()
         conn.close()
 
