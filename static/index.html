@@ -2645,802 +2645,10 @@
             });
         }
 
-        async function loadAdminData(isSilent = false) {
-            try {
-                let uid = getUserId();
-                let headers = getAdminHeaders();
-                let [sRes, bRes, cRes, dRes, lRes, kRes] = await Promise.all([
-                    fetch(`/api/admin/stats?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/bids?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/carriers?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/confirmed_deals?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/loads?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/keys?user_id=${uid}&t=` + Date.now(), { headers })
-                ]);
 
-                if (sRes.status === 403 || cRes.status === 403) {
-                    if (!isSilent) {
-                        closeModal('adminPanelModal');
-                        document.getElementById('adminPassModal').classList.add('active');
-                        showToast('Требуется админ-ключ', 'error');
-                    }
-                    return;
-                }
-
-                allAdminStats = sRes.ok ? await sRes.json() : {};
-                let bData = bRes.ok ? await bRes.json() : {};
-                let cData = cRes.ok ? await cRes.json() : {};
-                let dData = dRes.ok ? await dRes.json() : {};
-                let lData = lRes.ok ? await lRes.json() : {};
-                let kData = kRes.ok ? await kRes.json() : {};
-
-                allAdminBidsArray = bData.bids || [];
-                allAdminCarriersArray = cData.carriers || [];
-                allAdminDeals = dData.deals || [];
-                allAdminLoadsArray = lData.loads || [];
-                allAdminKeysArray = kData.keys || [];
-                adminBotUsername = kData.bot_username || '';
-                adminRenderUrl = kData.render_url || '';
-
-                const bBids = document.getElementById('badgeAdmBidsCount');
-                const bLoads = document.getElementById('badgeAdmLoadsCount');
-                const bDeals = document.getElementById('badgeAdmDealsCount');
-                const bCarriers = document.getElementById('badgeAdmCarriersCount');
-                if (bBids) bBids.textContent = allAdminBidsArray.length > 0 ? `(${allAdminBidsArray.length})` : '';
-                if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
-                if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
-                if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
-
-                populateAdminCarrierFilter();
-                applyAdminFilters();
-            } catch(e) {
-                if (!isSilent) showToast('Ошибка загрузки админ-панели', 'error');
-            }
-        }
-
-        function switchAdminSubTab(tab) {
-            adminSubTab = tab;
-            const tabs = ['overview', 'bids', 'exchange', 'deals', 'kaiten', 'carriers', 'keys', 'blacklist', 'broadcast'];
-            tabs.forEach(t => {
-                const el = document.getElementById(`admTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
-                if (el) el.classList.toggle('active', tab === t);
-            });
-
-            const filterBox = document.getElementById('admin-sort-search-container');
-            const carrierFilterBox = document.getElementById('adminCarrierFilterBox');
-            const dirFilterBox = document.getElementById('adminDirectionFilterBox');
-
-            if (tab === 'exchange' || tab === 'deals') {
-                filterBox.style.display = 'flex';
-                if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
-                if (dirFilterBox) dirFilterBox.style.display = 'block';
-            } else if (tab === 'carriers') {
-                filterBox.style.display = 'flex';
-                if (carrierFilterBox) carrierFilterBox.style.display = 'none';
-                if (dirFilterBox) dirFilterBox.style.display = 'block';
-            } else {
-                filterBox.style.display = 'none';
-            }
-
-            applyAdminFilters();
-        }
-
-        function applyAdminFilters() {
-            if (adminSubTab === 'overview') renderAdminOverview();
-            else if (adminSubTab === 'bids') renderAdminBids();
-            else if (adminSubTab === 'exchange') renderAdminLoads();
-            else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'kaiten') renderAdminKaiten();
-            else if (adminSubTab === 'carriers') renderAdminCarriers();
-            else if (adminSubTab === 'keys') renderAdminKeys();
-            else if (adminSubTab === 'blacklist') renderAdminBlacklist();
-            else if (adminSubTab === 'broadcast') renderAdminBroadcast();
-        }
-
-        /* 1. СВОДКА И БЫСТРЫЕ ДЕЙСТВИЯ */
-        function renderAdminOverview() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = `
-                <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:10px; margin-bottom:14px;">
-                    <div class="profile-card" style="margin-bottom:0; padding:12px;">
-                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">На бирже</span>
-                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.active_loads || 0}</div>
-                        <span style="font-size:10px; color:var(--text-muted);">активных грузов</span>
-                    </div>
-                    <div class="profile-card" style="margin-bottom:0; padding:12px; cursor:pointer;" onclick="switchAdminSubTab('bids')">
-                        <span style="font-size:10.5px; color:var(--warning); font-weight:700; text-transform:uppercase;">На согласовании</span>
-                        <div style="font-size:22px; font-weight:700; color:var(--warning); margin-top:2px;">${allAdminStats.pending_bids || 0}</div>
-                        <span style="font-size:10px; color:var(--text-muted);">требуют ответа</span>
-                    </div>
-                    <div class="profile-card" style="margin-bottom:0; padding:12px;">
-                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">В рейсе</span>
-                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.in_transit || 0}</div>
-                        <span style="font-size:10px; color:var(--text-muted);">машин едут / на погрузке</span>
-                    </div>
-                    <div class="profile-card" style="margin-bottom:0; padding:12px;">
-                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Ожидают оплаты</span>
-                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.awaiting_pay || 0}</div>
-                        <span style="font-size:10px; color:var(--text-muted);">выгружены</span>
-                    </div>
-                </div>
-
-                <div class="profile-card" style="margin-bottom:12px; padding:14px;">
-                    <div class="profile-title" style="margin-bottom:8px;">Инструменты и отчёты</div>
-                    <div style="display:flex; flex-wrap:wrap; gap:8px;">
-                        <button class="btn btn-secondary" style="flex:1; min-width:140px; font-size:11px;" onclick="downloadAdminExcel()">
-                            Выгрузить отчёт Excel
-                        </button>
-                        <button class="btn btn-secondary" style="flex:1; min-width:140px; font-size:11px;" onclick="triggerAdminBackup()">
-                            Создать бэкап базы данных
-                        </button>
-                        <button class="btn btn-primary" style="flex:1; min-width:140px; font-size:11px;" onclick="openAdminAddLoadModal()">
-                            Добавить груз на биржу
-                        </button>
-                    </div>
-                </div>
-            `;
-        }
-
-        async function triggerAdminBackup() {
-            showToast('Создание бэкапа...', 'info');
-            try {
-                let res = await fetch('/api/admin/trigger_backup', {
-                    method: 'POST',
-                    headers: getAdminHeaders()
-                });
-                let data = await res.json();
-                if (data.status === 'success') {
-                    showToast('Резервная копия отправлена и закреплена в канале', 'success');
-                } else {
-                    showToast(data.message || 'Ошибка бэкапа', 'error');
-                }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
-        }
-
-        /* 2. СОГЛАСОВАНИЕ (БРОНИ И СТАВКИ) */
-        function renderAdminBids() {
-            let body = document.getElementById('adminContentBody');
-            if (!allAdminBidsArray || allAdminBidsArray.length === 0) {
-                body.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-title">Нет заявок на согласовании</div>
-                        <div class="empty-desc">Все бронирования и ставки обработаны.</div>
-                    </div>`;
-                return;
-            }
-
-            body.innerHTML = `
-                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
-                    Заявки, требующие решения (${allAdminBidsArray.length})
-                </div>
-                <div class="table-container">
-                    ${allAdminBidsArray.map(b => {
-                        let isReserve = b.is_reservation;
-                        let badgeHTML = isReserve
-                            ? `<span class="badge" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Бронь (снят с биржи)</span>`
-                            : `<span class="badge" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Своя ставка</span>`;
-
-                        return `
-                        <div style="padding:12px; border-bottom:1px solid var(--border);">
-                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
-                                <div>
-                                    <div style="font-weight:700; font-size:13px; color:var(--text);">${b.route}</div>
-                                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Дата: ${b.date} • ${b.cars} авто • Ставка: <b>${b.rate}</b></div>
-                                </div>
-                                ${badgeHTML}
-                            </div>
-                            <div style="background:var(--bg); padding:6px 10px; border-radius:var(--radius-sm); font-size:11px; margin-bottom:8px;">
-                                <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
-                                ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
-                            </div>
-                            <div style="display:flex; gap:8px;">
-                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
-                                    Подтвердить
-                                </button>
-                                <button class="btn btn-danger" style="padding:6px 12px; font-size:11px;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
-                                    ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
-                                </button>
-                            </div>
-                        </div>`;
-                    }).join('')}
-                </div>
-            `;
-        }
-
-        async function submitBidDecision(bidId, action) {
-            try {
-                let res = await fetch('/api/admin/bid_action', {
-                    method: 'POST',
-                    headers: getAdminHeaders(),
-                    body: JSON.stringify({ bid_id: bidId, action: action })
-                });
-                let data = await res.json();
-                if (res.ok) {
-                    showToast(action === 'accept' ? 'Заявка подтверждена' : 'Заявка отклонена', 'info');
-                    loadAdminData();
-                    loadData(false);
-                } else {
-                    showToast(data.error || 'Ошибка действия', 'error');
-                }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
-        }
-
-        /* 3. KAITEN ГРУЗЫ */
-        async function renderAdminKaiten() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div>Запрос карточек из Kaiten...</div>';
-            try {
-                let res = await fetch('/api/admin/kaiten_cards', { headers: getAdminHeaders() });
-                let data = await res.json();
-                allAdminKaitenArray = data.cards || [];
-
-                if (allAdminKaitenArray.length === 0) {
-                    body.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-title">В Kaiten нет грузов в колонке «Загрузки»</div>
-                            <div class="empty-desc">Карточки появляются автоматически при создании в Kaiten.</div>
-                        </div>`;
-                    return;
-                }
-
-                body.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                        <span style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Карточки Kaiten (${allAdminKaitenArray.length})</span>
-                    </div>
-                    <div class="table-container">
-                        ${allAdminKaitenArray.map(c => `
-                            <div style="padding:10px 12px; border-bottom:1px solid var(--border);">
-                                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                                    <div>
-                                        <b style="font-size:13px; color:var(--text);">${c.date} ${c.route}</b>
-                                        <span class="badge" style="margin-left:6px; font-size:9.5px;">${c.region}</span>
-                                        <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">#${c.id} • ${c.hint}</div>
-                                    </div>
-                                    <button class="btn btn-primary" style="padding:5px 10px; font-size:11px; height:28px;" onclick="publishKaitenCardFromWeb(${c.id})">
-                                        Опубликовать на биржу
-                                    </button>
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-            } catch(e) {
-                body.innerHTML = '<div class="loader">Ошибка загрузки Kaiten</div>';
-            }
-        }
-
-        async function publishKaitenCardFromWeb(cardId) {
-            showToast('Анализ ИИ и публикация...', 'info');
-            try {
-                let res = await fetch(`/api/publish_kaiten?id=${cardId}`, { headers: getAdminHeaders() });
-                showToast('Груз опубликован на бирже!', 'success');
-                loadAdminData();
-                loadData(false);
-            } catch(e) {
-                // Если эндпоинт отсутствует, инициируем через обратный вызов
-                showToast('Публикация отправлена', 'info');
-            }
-        }
-
-        /* 4. СТОП-ЛИСТ (ЧЕРНЫЙ СПИСОК) */
-        async function renderAdminBlacklist() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка стоп-листа...</div>';
-            try {
-                let res = await fetch('/api/admin/blacklist', { headers: getAdminHeaders() });
-                let data = await res.json();
-                allAdminBlacklistArray = data.blacklist || [];
-
-                body.innerHTML = `
-                    <div class="profile-card" style="margin-bottom:12px; padding:12px;">
-                        <div class="profile-title" style="margin-bottom:8px;">Внести в стоп-лист</div>
-                        <div style="display:grid; grid-template-columns: 120px 1fr 1fr auto; gap:6px;">
-                            <select id="blTypeInput">
-                                <option value="VEHICLE">Авто / Прицеп</option>
-                                <option value="DRIVER">Водитель / Тел.</option>
-                            </select>
-                            <input type="text" id="blValInput" placeholder="Номер ТС или ФИО" />
-                            <input type="text" id="blReasonInput" placeholder="Причина внесения" />
-                            <button class="btn btn-danger" style="font-size:11px; height:34px;" onclick="submitAddBlacklist()">
-                                Добавить
-                            </button>
-                        </div>
-                    </div>
-
-                    <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
-                        Записи стоп-листа (${allAdminBlacklistArray.length})
-                    </div>
-                    <div class="table-container">
-                        ${allAdminBlacklistArray.length === 0 ? '<div class="loader">Стоп-лист пуст</div>' : allAdminBlacklistArray.map(item => `
-                            <div style="display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border-bottom:1px solid var(--border);">
-                                <div>
-                                    <span class="badge" style="font-size:9px; margin-right:6px;">${item.item_type === 'VEHICLE' ? 'Авто' : 'Водитель'}</span>
-                                    <b style="font-size:12px;">${item.value}</b>
-                                    <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">— ${item.reason}</span>
-                                </div>
-                                <button class="btn btn-secondary" style="padding:2px 8px; font-size:10px; height:24px; color:var(--error);" onclick="submitDelBlacklist(${item.id})">
-                                    Удалить
-                                </button>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-            } catch(e) {
-                body.innerHTML = '<div class="loader">Ошибка загрузки стоп-листа</div>';
-            }
-        }
-
-        async function submitAddBlacklist() {
-            let t = document.getElementById('blTypeInput').value;
-            let v = document.getElementById('blValInput').value.trim();
-            let r = document.getElementById('blReasonInput').value.trim();
-            if (!v || !r) return showToast('Заполните значение и причину', 'error');
-
-            try {
-                let res = await fetch('/api/admin/blacklist/add', {
-                    method: 'POST',
-                    headers: getAdminHeaders(),
-                    body: JSON.stringify({ type: t, value: v, reason: r })
-                });
-                if (res.ok) {
-                    showToast('Внесено в стоп-лист', 'success');
-                    renderAdminBlacklist();
-                } else { showToast('Ошибка добавления', 'error'); }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
-        }
-
-        async function submitDelBlacklist(id) {
-            askConfirm('Удалить запись из стоп-листа?', async (conf) => {
-                if (conf) {
-                    try {
-                        let res = await fetch('/api/admin/blacklist/del', {
-                            method: 'POST',
-                            headers: getAdminHeaders(),
-                            body: JSON.stringify({ id: id })
-                        });
-                        if (res.ok) {
-                            showToast('Запись удалена', 'info');
-                            renderAdminBlacklist();
-                        }
-                    } catch(e) { showToast('Ошибка сети', 'error'); }
-                }
-            });
-        }
-
-        /* 5. РАССЫЛКА СООБЩЕНИЙ */
-        function renderAdminBroadcast() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = `
-                <div class="profile-card" style="padding:14px;">
-                    <div class="profile-title">Рассылка сообщений перевозчикам</div>
-                    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-                        Сообщение будет отправлено всем активным пользователям в личный чат с ботом.
-                    </div>
-                    <div class="form-group">
-                        <label>Текст сообщения</label>
-                        <textarea id="broadcastTextInput" placeholder="Введите важное уведомление..." rows="5"></textarea>
-                    </div>
-                    <button class="btn btn-primary" style="width:100%; height:36px; font-weight:700;" onclick="submitAdminBroadcast()">
-                        Отправить рассылку
-                    </button>
-                </div>
-            `;
-        }
-
-        async function submitAdminBroadcast() {
-            let text = document.getElementById('broadcastTextInput').value.trim();
-            if (!text) return showToast('Введите текст рассылки', 'error');
-
-            askConfirm('Отправить данное сообщение всем перевозчикам?', async (conf) => {
-                if (conf) {
-                    showToast('Отправка рассылки...', 'info');
-                    try {
-                        let res = await fetch('/api/admin/broadcast', {
-                            method: 'POST',
-                            headers: getAdminHeaders(),
-                            body: JSON.stringify({ text: text })
-                        });
-                        let data = await res.json();
-                        if (res.ok) {
-                            showToast(`Рассылка завершена! Доставлено: ${data.sent_count} чел.`, 'success');
-                            document.getElementById('broadcastTextInput').value = '';
-                        } else { showToast(data.error || 'Ошибка рассылки', 'error'); }
-                    } catch(e) { showToast('Ошибка сети', 'error'); }
-                }
-            });
-        }
-        let directSelectedFiles = [];
-        let lastNotifId = 0;
-        let userVerificationStatus = 'UNVERIFIED';
-
-        /* Минималистичный векторный грузовик */
-        const emptyStateHTML = `
-            <div class="empty-state">
-                <div class="empty-illustration-container">
-                    <svg viewBox="0 0 120 60" class="empty-illustration">
-                        <g fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="5" y1="52" x2="115" y2="52" stroke="var(--border)" stroke-width="1.5" class="animated-road" stroke-dasharray="6 5" />
-                            <g class="animated-truck-body">
-                                <rect x="12" y="10" width="62" height="36" rx="2" fill="var(--surface-solid)" />
-                                <line x1="22" y1="20" x2="58" y2="20" opacity="0.35" stroke-width="1.2" />
-                                <line x1="22" y1="26" x2="58" y2="26" opacity="0.35" stroke-width="1.2" />
-                                <path d="M 74,46 L 74,18 L 92,18 C 97,18 101,24 104,31 L 104,46 Z" fill="var(--surface-solid)" />
-                                <rect x="77" y="22" width="5" height="10" stroke-width="1.2" opacity="0.6" />
-                                <path d="M 84,22 L 90,22 C 93,22 96,25 98,30 L 84,30 Z" stroke-width="1.2" opacity="0.6" />
-                                <line x1="80" y1="36" x2="84" y2="36" stroke-width="1.2" opacity="0.8" />
-                                <line x1="10" y1="46" x2="106" y2="46" stroke-width="1.5" />
-                            </g>
-                            <g transform="translate(31, 46)">
-                                <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="6.5" fill="var(--surface-solid)" />
-                                    <circle cx="0" cy="0" r="2" fill="var(--primary)" stroke="none" />
-                                </g>
-                            </g>
-                            <g transform="translate(88, 46)">
-                                <g class="animated-wheel">
-                                    <circle cx="0" cy="0" r="6.5" fill="var(--surface-solid)" />
-                                    <circle cx="0" cy="0" r="2" fill="var(--primary)" stroke="none" />
-                                </g>
-                            </g>
-                        </g>
-                    </svg>
-                </div>
-                <div class="empty-title">Активных заявок пока нет</div>
-                <div class="empty-desc">Новые предложения публикуются автоматически. Следите за обновлениями.</div>
-            </div>
-        `;
-
-        function handleLogoLoad(success) {
-            const img = document.getElementById('headerLogoImg');
-            const fallback = document.getElementById('brandFallback');
-            const titleText = document.getElementById('headerTitleText');
-            if (success) {
-                img.style.display = 'block';
-                fallback.style.display = 'none';
-                if (titleText) titleText.style.display = 'none';
-            } else {
-                img.style.display = 'none';
-                fallback.style.display = 'flex';
-                if (titleText) titleText.style.display = 'flex';
-            }
-        }
-
-
-        function downloadAdminExcel() {
-            let uid = getUserId();
-            let key = localStorage.getItem('admin_key') || '';
-            let downloadUrl = `/api/admin/export_excel?user_id=${uid}&admin_key=${encodeURIComponent(key)}`;
-
-            // Скачивание файла напрямую без открытия пустых окон в браузере
-            let a = document.createElement('a');
-            a.href = downloadUrl;
-            a.setAttribute('download', `deals_report_${Date.now()}.xlsx`);
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            showToast('Скачивание отчёта Excel...', 'info');
-        }
-
-        function setTheme(theme) {
-            localStorage.setItem('theme_preference', theme);
-            applyTheme();
-            showToast(theme === 'system' ? 'Системная тема' : (theme === 'dark' ? 'Тёмная тема' : 'Светлая тема'), 'info');
-        }
-
-        function applyTheme() {
-            const pref = localStorage.getItem('theme_preference') || 'system';
-            let effectiveTheme = pref;
-            if (pref === 'system') {
-                const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                effectiveTheme = systemDark ? 'dark' : 'light';
-            }
-            document.documentElement.setAttribute('data-theme', effectiveTheme);
-            updateThemeButtons(pref);
-        }
-
-        function updateThemeButtons(pref) {
-            const sysBtn = document.getElementById('theme-btn-system');
-            const lightBtn = document.getElementById('theme-btn-light');
-            const darkBtn = document.getElementById('theme-btn-dark');
-            if (sysBtn && lightBtn && darkBtn) {
-                sysBtn.className = pref === 'system' ? 'btn btn-primary' : 'btn btn-secondary';
-                lightBtn.className = pref === 'light' ? 'btn btn-primary' : 'btn btn-secondary';
-                darkBtn.className = pref === 'dark' ? 'btn btn-primary' : 'btn btn-secondary';
-            }
-        }
-
-        applyTheme();
-        if (window.matchMedia) {
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-                if ((localStorage.getItem('theme_preference') || 'system') === 'system') applyTheme();
-            });
-        }
-
-        function toggleSortDirection() {
-            sortAscending = !sortAscending;
-            document.getElementById('sortDirBtn').classList.toggle('asc', sortAscending);
-            loadData(false);
-        }
-
-        function toggleAdminSortDirection() {
-            adminSortAscending = !adminSortAscending;
-            document.getElementById('adminSortDirBtn').classList.toggle('asc', adminSortAscending);
-            applyAdminFilters();
-        }
-
-        function toggleSearchInput() {
-            const searchBox = document.getElementById('expandableSearch');
-            const searchInput = document.getElementById('searchInput');
-            const icon = document.getElementById('searchBtnIcon');
-            searchBox.classList.toggle('open');
-            if (searchBox.classList.contains('open')) {
-                searchInput.focus();
-                icon.innerHTML = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
-            } else {
-                searchInput.value = '';
-                loadData(false);
-                icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
-            }
-        }
-
-        
-        function toggleAdminSearchInput() {
-            const searchBox = document.getElementById('adminExpandableSearch');
-            const searchInput = document.getElementById('adminSearchInput');
-            const icon = document.getElementById('adminSearchBtnIcon');
-            searchBox.classList.toggle('open');
-            if (searchBox.classList.contains('open')) {
-                searchInput.focus();
-                icon.innerHTML = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
-            } else {
-                searchInput.value = '';
-                applyAdminFilters();
-                icon.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
-            }
-        }
-
-        function showToast(message, type = 'info', duration = 1500) {
-            const container = document.getElementById('toastContainer');
-            if (!container) return;
-            const toast = document.createElement('div');
-            toast.className = 'toast';
-            toast.innerHTML = `<span>${message}</span>`;
-            toast.style.pointerEvents = 'auto';
-            toast.onclick = () => toast.remove();
-            container.appendChild(toast);
-            while (container.children.length > 3) {
-                container.firstElementChild.remove();
-            }
-            setTimeout(() => {
-                toast.classList.add('hide');
-                setTimeout(() => toast.remove(), 260);
-            }, duration);
-        }
-
-        function closeModal(id) {
-            const el = document.getElementById(id);
-            if (el) el.classList.remove('active');
-        }
-
-        function askConfirm(text, callback) {
-            const modal = document.getElementById('confirmModal');
-            document.getElementById('confirmModalText').textContent = text;
-            const yesBtn = document.getElementById('confirmModalYesBtn');
-            const handleYes = () => {
-                closeModal('confirmModal');
-                yesBtn.removeEventListener('click', handleYes);
-                callback(true);
-            };
-            yesBtn.onclick = handleYes;
-            modal.classList.add('active');
-        }
-
-        function handleHeaderClick() {
-            // Скрытый вход по кликам отключен для безопасности
-        }
-
-        function getAdminHeaders() {
-            let key = localStorage.getItem('admin_key') || '';
-            return {
-                'Content-Type': 'application/json',
-                'X-Admin-Key': key
-            };
-        }
-
-        function adminLogout() {
-            localStorage.removeItem('admin_key');
-            localStorage.removeItem('admin_authed');
-            closeModal('adminPanelModal');
-            showToast('Вы вышли из режима администратора', 'info');
-            setTimeout(() => {
-                window.location.href = '/webapp?tab=catalog';
-            }, 400);
-        }
-
-        async function submitAdminPassword() {
-            let pass = document.getElementById('adminPassInput').value.trim();
-            if (!pass) return showToast('Введите ключ', 'error');
-            let userId = getUserId();
-            try {
-                let res = await fetch('/api/admin/verify_pass', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({password: pass, user_id: userId})
-                });
-                let data = await res.json();
-                if (res.ok) {
-                    localStorage.setItem('admin_key', data.admin_key || pass);
-                    localStorage.setItem('admin_authed', 'true');
-                    closeModal('adminPassModal');
-                    openAdminPanel();
-                    showToast('Доступ подтвержден!', 'success');
-                } else {
-                    showToast(data.error || 'Неверный ключ', 'error');
-                }
-            } catch(e) {
-                showToast('Ошибка проверки ключа', 'error');
-            }
-        }
-
-        function openAdminPanel() {
-            document.getElementById('adminPanelModal').classList.add('active');
-            loadAdminData();
-        }
-
-        async function loadAdminData(isSilent = false) {
-            try {
-                let uid = getUserId();
-                let headers = getAdminHeaders();
-                let [cRes, dRes, lRes, kRes] = await Promise.all([
-                    fetch(`/api/admin/carriers?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/confirmed_deals?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/loads?user_id=${uid}&t=` + Date.now(), { headers }),
-                    fetch(`/api/admin/keys?user_id=${uid}&t=` + Date.now(), { headers })
-                ]);
-
-                if (cRes.status === 403 || dRes.status === 403 || lRes.status === 403 || kRes.status === 403) {
-                    if (!isSilent) {
-                        closeModal('adminPanelModal');
-                        document.getElementById('adminPassModal').classList.add('active');
-                        showToast('Требуется админ-ключ', 'error');
-                    }
-                    return;
-                }
-
-                let cData = cRes.ok ? await cRes.json() : {};
-                let dData = dRes.ok ? await dRes.json() : {};
-                let lData = lRes.ok ? await lRes.json() : {};
-                let kData = kRes.ok ? await kRes.json() : {};
-
-                let newAdminCarriers = cData.carriers || [];
-                let newAdminDeals = dData.deals || [];
-                let newAdminLoads = lData.loads || [];
-                let newAdminKeys = kData.keys || [];
-
-                // Сравниваем данные, чтобы не перерисовывать экран впустую, если ничего не изменилось
-                let newAdminHash = JSON.stringify([newAdminCarriers, newAdminDeals, newAdminLoads, newAdminKeys]);
-                if (isSilent && newAdminHash === window._lastAdminHash) {
-                    return;
-                }
-                window._lastAdminHash = newAdminHash;
-
-                allAdminCarriersArray = newAdminCarriers;
-                allAdminDeals = newAdminDeals;
-                allAdminLoadsArray = newAdminLoads;
-                allAdminKeysArray = newAdminKeys;
-                adminBotUsername = kData.bot_username || '';
-                adminRenderUrl = kData.render_url || '';
-
-                // Обновляем бейджи с количеством
-                const bLoads = document.getElementById('badgeAdmLoadsCount');
-                const bDeals = document.getElementById('badgeAdmDealsCount');
-                const bCarriers = document.getElementById('badgeAdmCarriersCount');
-                const bKeys = document.getElementById('badgeAdmKeysCount');
-                if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
-                if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
-                if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
-                if (bKeys) bKeys.textContent = `(${allAdminKeysArray.length})`;
-
-                populateAdminCarrierFilter();
-                applyAdminFilters();
-            } catch(e) {
-                if (!isSilent) showToast('Ошибка загрузки данных админки', 'error');
-            }
-        }
 
         let adminBotUsername = '';
         let adminRenderUrl = '';
-
-        /* Отрисовка вкладки "Ключи доступа" в админке */
-        function renderAdminKeys() {
-            let body = document.getElementById('adminContentBody');
-            body.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                    <div>
-                        <div style="font-weight:700; font-size:13px;">Ключи компаний и сотрудников</div>
-                        <div style="font-size:11px; color:var(--text-muted);">Копируйте ссылки в 1 клик и управляйте доступом сотрудников</div>
-                    </div>
-                    <button class="btn btn-primary" style="width:auto; padding:7px 12px; font-size:11px;" onclick="openGenKeyModal()">
-                        ➕ Сгенерировать ключ
-                    </button>
-                </div>
-                <div class="table-container">
-                    ${allAdminKeysArray.length === 0 ? '<div class="loader">Ключей пока нет. Нажмите «Сгенерировать ключ»</div>' : allAdminKeysArray.map(k => {
-                        let isBlocked = (k.status === 'BLOCKED');
-                        let isUnused = (k.status === 'UNUSED');
-                        let statusBadge = isBlocked 
-                            ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fee2e2; color:#b91c1c;">Заблокирован</span>`
-                            : (isUnused 
-                                ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fef3c7; color:#d97706;">Свободен</span>`
-                                : `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d;">Активен</span>`);
-                        
-                        let tgLink = adminBotUsername ? `https://t.me/${adminBotUsername}?start=key_${k.key_code}` : '';
-                        let webLink = `${adminRenderUrl || window.location.origin}/webapp?key=${k.key_code}`;
-
-                        let employeesListHTML = (k.employees && k.employees.length > 0) ? `
-                            <div style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--border); font-size:10.5px;">
-                                <div style="font-weight:700; color:var(--text-muted); margin-bottom:4px;">Сотрудники компании (${k.employees.length} из ${k.max_users || 5}):</div>
-                                ${k.employees.map(emp => `
-                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; background:var(--bg); padding:3px 6px; border-radius:4px; gap:4px;">
-                                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">👤 <b>${emp.name}</b> (${emp.phone || 'без тел.'}) <small style="color:var(--text-muted);">#${emp.user_id}</small></span>
-                                        <div style="display:flex; gap:4px; flex-shrink:0;">
-                                            <button class="btn btn-secondary" style="padding:1px 6px; font-size:9.5px; height:22px;" onclick="openEditCarrierModal(${emp.user_id}, true)">
-                                                ✏️ Ред.
-                                            </button>
-                                            <button class="btn btn-danger" style="padding:1px 5px; font-size:9.5px; height:22px;" onclick="unlinkEmployee(${emp.user_id})">
-                                                ✕
-                                            </button>
-                                        </div>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        ` : `<div style="font-size:10px; color:var(--text-muted); margin-top:4px;">Сотрудников пока нет (лимит: ${k.max_users || 5})</div>`;
-
-                        return `
-                            <div style="padding:10px 12px; border-bottom:1px solid var(--border);">
-                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">
-                                    <div>
-                                        <b style="font-size:14px; letter-spacing:1px; color:var(--primary);">${k.key_code}</b>
-                                        <span style="margin-left:8px; font-weight:700; font-size:12px;">${k.company}</span>
-                                    </div>
-                                    <div style="display:flex; align-items:center; gap:6px;">
-                                        ${statusBadge}
-                                        <button class="btn ${isBlocked ? 'btn-success' : 'btn-danger'}" style="padding:2px 8px; font-size:10px; height:24px;" onclick="toggleKeyStatus(${k.id})">
-                                            ${isBlocked ? 'Разблок.' : 'Заблок.'}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0;">
-                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${k.key_code}')">
-                                        📋 Код
-                                    </button>
-                                    ${tgLink ? `
-                                        <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${tgLink}')">
-                                            🚀 TG ссылка
-                                        </button>
-                                    ` : ''}
-                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${webLink}')">
-                                        🌐 Web ссылка
-                                    </button>
-                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="openEditKeyModal(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}', ${k.max_users || 5})">
-                                        ✏️ Редактировать
-                                    </button>
-                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="rotateCompanyKey(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}')" title="Аннулировать старый ключ и выдать новый">
-                                        🔄 Сменить ключ
-                                    </button>
-                                    <button class="btn btn-danger" style="padding:3px 8px; font-size:10px; height:24px;" onclick="deleteCompanyKey(${k.id}, '${k.key_code}')">
-                                        🗑 Удалить
-                                    </button>
-                                </div>
-
-                                ${employeesListHTML}
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            `;
-        }
 
         function openGenKeyModal() {
             document.getElementById('genKeyCompanyInput').value = '';
@@ -3454,9 +2662,8 @@
             closeModal('adminGenKeyModal');
 
             try {
-                let res = await fetch('/api/admin/generate_key', {
+                let res = await adminFetch('/api/admin/generate_key', {
                     method: 'POST',
-                    headers: getAdminHeaders(),
                     body: JSON.stringify({ company: comp, max_users: limit })
                 });
                 let data = await res.json();
@@ -3484,9 +2691,8 @@
             closeModal('adminEditKeyModal');
 
             try {
-                let res = await fetch('/api/admin/edit_key', {
+                let res = await adminFetch('/api/admin/edit_key', {
                     method: 'POST',
-                    headers: getAdminHeaders(),
                     body: JSON.stringify({ id: keyId, company: company, max_users: limit })
                 });
                 let data = await res.json();
@@ -3505,9 +2711,8 @@
             askConfirm(`Удалить ключ ${keyCode}?\nСотрудники будут отвязаны от этого ключа.`, async (confirmed) => {
                 if (confirmed) {
                     try {
-                        let res = await fetch('/api/admin/delete_key', {
+                        let res = await adminFetch('/api/admin/delete_key', {
                             method: 'POST',
-                            headers: getAdminHeaders(),
                             body: JSON.stringify({ id: keyId })
                         });
                         let data = await res.json();
@@ -3528,9 +2733,8 @@
             askConfirm('Отвязать этого сотрудника от компании?', async (confirmed) => {
                 if (confirmed) {
                     try {
-                        let res = await fetch('/api/admin/unlink_employee', {
+                        let res = await adminFetch('/api/admin/unlink_employee', {
                             method: 'POST',
-                            headers: getAdminHeaders(),
                             body: JSON.stringify({ user_id: userId })
                         });
                         if (res.ok) {
@@ -3546,9 +2750,8 @@
 
         async function toggleKeyStatus(keyId) {
             try {
-                let res = await fetch('/api/admin/toggle_key_status', {
+                let res = await adminFetch('/api/admin/toggle_key_status', {
                     method: 'POST',
-                    headers: getAdminHeaders(),
                     body: JSON.stringify({ id: keyId })
                 });
                 if (res.ok) {
@@ -3560,7 +2763,6 @@
             } catch(e) { showToast('Ошибка сети', 'error'); }
         }
 
-        /* Надежное копирование на любых смартфонах iPhone и Android */
         function copyTextToClipboard(text) {
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(text).then(() => {
@@ -3589,7 +2791,6 @@
             textArea.remove();
         }
 
-        /* Выход перевозчика из компании */
         function carrierLogout() {
             askConfirm('Выйти из профиля компании на этом устройстве?', (confirmed) => {
                 if (confirmed) {
@@ -3601,14 +2802,12 @@
             });
         }
 
-        /* Смена ключа для конкретной компании (старый сгорает, текущие сотрудники остаются) */
         async function rotateCompanyKey(keyId, companyName) {
             askConfirm(`Сгенерировать новый ключ для «${companyName}»?\nСтарый ключ сгорит, но все работающие сейчас сотрудники останутся в системе.`, async (confirmed) => {
                 if (confirmed) {
                     try {
-                        let res = await fetch('/api/admin/rotate_company_key', {
+                        let res = await adminFetch('/api/admin/rotate_company_key', {
                             method: 'POST',
-                            headers: getAdminHeaders(),
                             body: JSON.stringify({ id: keyId })
                         });
                         let data = await res.json();
@@ -3624,7 +2823,6 @@
             });
         }
 
-        /* Активация ключа перевозчиком */
         async function submitCarrierKeyActivation() {
             let key = document.getElementById('carrierInputKey').value.trim();
             let company = document.getElementById('carrierInputCompany').value.trim();
@@ -3655,7 +2853,6 @@
             }
         }
 
-        /* Привязка ключа к Telegram-аккаунту из Личного кабинета */
         async function submitLinkCarrierKey() {
             let keyInput = document.getElementById('linkKeyInput');
             let key = keyInput ? keyInput.value.trim() : '';
@@ -3699,121 +2896,7 @@
             if (currentVal) select.value = currentVal;
         }
 
-        function switchAdminSubTab(tab) {
-            adminSubTab = tab;
-            document.getElementById('admTabExchange').classList.toggle('active', tab === 'exchange');
-            document.getElementById('admTabDeals').classList.toggle('active', tab === 'deals');
-            document.getElementById('admTabCarriers').classList.toggle('active', tab === 'carriers');
-            const tabKeys = document.getElementById('admTabKeys');
-            if (tabKeys) tabKeys.classList.toggle('active', tab === 'keys');
-
-            const carrierFilterBox = document.getElementById('adminCarrierFilterBox');
-            if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
-
-            const filterContainer = document.getElementById('admin-sort-search-container');
-            if (filterContainer) filterContainer.style.display = (tab === 'keys') ? 'none' : 'flex';
-
-            applyAdminFilters();
-        }
-
-        function applyAdminFilters() {
-            if (adminSubTab === 'exchange') renderAdminLoads();
-            else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
-            else if (adminSubTab === 'carriers') renderAdminCarriers();
-            else if (adminSubTab === 'keys') renderAdminKeys();
-        }
-
-        /* 1. ОТРИСОВКА ВКЛАДКИ "БИРЖА" */
-        function renderAdminLoads() {
-            let body = document.getElementById('adminContentBody');
-            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
-            let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
-
-            let list = [...allAdminLoadsArray];
-
-            if (selectedDirection !== 'ALL') {
-                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
-                list = list.filter(l => {
-                    let countryStr = (l.destination_country || '').toLowerCase();
-                    let routeStr = (l.route || '').toLowerCase();
-                    return countryStr.includes(cleanDir) || routeStr.includes(cleanDir);
-                });
-            }
-
-            if (searchQuery) {
-                list = list.filter(l => `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment} ${l.destination_country} ${l.status}`.toLowerCase().includes(searchQuery));
-            }
-
-            if (list.length === 0) {
-                body.innerHTML = '<div class="loader">Грузов на Бирже не найдено</div>';
-                return;
-            }
-
-            body.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <div style="font-weight:700; font-size:12px; color:var(--text-muted); text-transform:uppercase;">Грузы на бирже (${list.length})</div>
-                    <button class="btn btn-primary" style="width:auto; padding:6px 12px; font-size:11px;" onclick="openAdminAddLoadModal()">
-                        ➕ Добавить груз
-                    </button>
-                </div>
-                <div class="table-container">
-                    <div class="t-head">
-                        <div>Дата</div>
-                        <div>Маршрут</div>
-                        <div style="text-align: center;">Статус</div>
-                        <div style="text-align: right;">Ставка</div>
-                        <div></div>
-                    </div>
-                    ${list.map(l => {
-                        let isActive = (l.status === 'ACTIVE');
-                        let statusBadge = isActive 
-                            ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d; border-color:#86efac;">Активен</span>` 
-                            : `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Выключен</span>`;
-                        return `
-                        <div class="t-row" id="row-adm-load-${l.id}" onclick="toggleRow('adm-load-${l.id}')" style="${!isActive ? 'opacity: 0.6;' : ''}">
-                            <div class="col-date"><div>${l.date}</div></div>
-                            <div class="col-route">
-                                <div class="marquee-box"><span class="marquee-text">${l.route}</span></div>
-                            </div>
-                            <div class="col-truck">
-                                ${statusBadge}
-                            </div>
-                            ${formatPriceHTML(l.price)}
-                            <div class="col-arrow">
-                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-                            </div>
-                        </div>
-                        <div class="t-details" id="details-adm-load-${l.id}">
-                            <div class="info-grid">
-                                <div class="info-item"><span>Груз ID</span><b>#${l.id}</b></div>
-                                <div class="info-item"><span>Статус</span><b>${isActive ? 'Активен' : 'Выключен'}</b></div>
-                                <div class="info-item"><span>Доступно авто</span><b>${l.cars} авто</b></div>
-                                <div class="info-item"><span>Тип ТС</span><b>${l.car_type || 'Тент'}</b></div>
-                                <div class="info-item"><span>Тип груза</span><b>${l.cargo_type || 'ТНП'}</b></div>
-                                <div class="info-item"><span>Вес / Объем</span><b>${l.weight || '22т'}</b></div>
-                                <div class="info-item"><span>Забравшие</span><b>${l.carrier_info || 'Не забран'}</b></div>
-                            </div>
-                            ${l.admin_comment ? `<div class="admin-comment" style="margin-top:6px;"><b>Коммент:</b> ${l.admin_comment}</div>` : ''}
-
-                            <div class="buttons" style="margin-top:10px;">
-                                <button class="btn btn-primary" style="padding:6px 10px;" onclick="openAdminEditLoadModal(${l.id})">
-                                    ✏️ Редактировать
-                                </button>
-                                <button class="btn ${isActive ? 'btn-secondary' : 'btn-success'}" style="padding:6px 10px;" onclick="toggleAdminLoadStatus(${l.id})">
-                                    ${isActive ? '⏸ Выключить' : '▶️ Включить'}
-                                </button>
-                                <button class="btn btn-danger" style="padding:6px 10px;" onclick="hardDeleteAdminLoad(${l.id})">
-                                    ❌ Удалить
-                                </button>
-                            </div>
-                        </div>
-                    `}).join('')}
-                </div>
-            `;
-            updateMarquees();
-        }
-
-        /* 2. ОТРИСОВКА ВКЛАДКИ "ВСЕ ЗАКАЗЫ" */
+     
         function renderAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
