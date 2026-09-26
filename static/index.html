@@ -2057,6 +2057,594 @@
         let allAdminKaitenArray = [];
         let allAdminBlacklistArray = [];
 
+        // Универсальный защищенный запрос от имени администратора
+        async function adminFetch(url, options = {}) {
+            let uid = getUserId();
+            let key = localStorage.getItem('admin_key') || '';
+            let sep = url.includes('?') ? '&' : '?';
+            let finalUrl = `${url}${sep}user_id=${uid}&admin_key=${encodeURIComponent(key)}&t=${Date.now()}`;
+            options.headers = {
+                'Content-Type': 'application/json',
+                'X-Admin-Key': key,
+                ...(options.headers || {})
+            };
+            return fetch(finalUrl, options);
+        }
+
+        async function loadAdminData(isSilent = false) {
+            try {
+                let [sRes, bRes, cRes, dRes, lRes, kRes] = await Promise.all([
+                    adminFetch('/api/admin/stats'),
+                    adminFetch('/api/admin/bids'),
+                    adminFetch('/api/admin/carriers'),
+                    adminFetch('/api/admin/confirmed_deals'),
+                    adminFetch('/api/admin/loads'),
+                    adminFetch('/api/admin/keys')
+                ]);
+
+                if (sRes.status === 403 || cRes.status === 403) {
+                    if (!isSilent) {
+                        closeModal('adminPanelModal');
+                        document.getElementById('adminPassModal').classList.add('active');
+                        showToast('Требуется ключ администратора', 'error');
+                    }
+                    return;
+                }
+
+                allAdminStats = sRes.ok ? await sRes.json() : {};
+                let bData = bRes.ok ? await bRes.json() : {};
+                let cData = cRes.ok ? await cRes.json() : {};
+                let dData = dRes.ok ? await dRes.json() : {};
+                let lData = lRes.ok ? await lRes.json() : {};
+                let kData = kRes.ok ? await kRes.json() : {};
+
+                allAdminBidsArray = bData.bids || [];
+                allAdminCarriersArray = cData.carriers || [];
+                allAdminDeals = dData.deals || [];
+                allAdminLoadsArray = lData.loads || [];
+                allAdminKeysArray = kData.keys || [];
+                adminBotUsername = kData.bot_username || '';
+                adminRenderUrl = kData.render_url || '';
+
+                const bBids = document.getElementById('badgeAdmBidsCount');
+                const bLoads = document.getElementById('badgeAdmLoadsCount');
+                const bDeals = document.getElementById('badgeAdmDealsCount');
+                const bCarriers = document.getElementById('badgeAdmCarriersCount');
+                if (bBids) bBids.textContent = allAdminBidsArray.length > 0 ? `(${allAdminBidsArray.length})` : '';
+                if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
+                if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
+                if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
+
+                populateAdminCarrierFilter();
+                applyAdminFilters();
+            } catch(e) {
+                if (!isSilent) showToast('Ошибка загрузки админ-панели', 'error');
+            }
+        }
+
+        function switchAdminSubTab(tab) {
+            adminSubTab = tab;
+            const tabs = ['overview', 'bids', 'exchange', 'deals', 'kaiten', 'carriers', 'keys', 'blacklist', 'broadcast'];
+            tabs.forEach(t => {
+                const el = document.getElementById(`admTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                if (el) el.classList.toggle('active', tab === t);
+            });
+
+            const filterBox = document.getElementById('admin-sort-search-container');
+            const carrierFilterBox = document.getElementById('adminCarrierFilterBox');
+            const dirFilterBox = document.getElementById('adminDirectionFilterBox');
+
+            if (tab === 'exchange' || tab === 'deals') {
+                if (filterBox) filterBox.style.display = 'flex';
+                if (carrierFilterBox) carrierFilterBox.style.display = (tab === 'deals') ? 'block' : 'none';
+                if (dirFilterBox) dirFilterBox.style.display = 'block';
+            } else if (tab === 'carriers') {
+                if (filterBox) filterBox.style.display = 'flex';
+                if (carrierFilterBox) carrierFilterBox.style.display = 'none';
+                if (dirFilterBox) dirFilterBox.style.display = 'block';
+            } else {
+                if (filterBox) filterBox.style.display = 'none';
+            }
+
+            applyAdminFilters();
+        }
+
+        function applyAdminFilters() {
+            if (adminSubTab === 'overview') renderAdminOverview();
+            else if (adminSubTab === 'bids') renderAdminBids();
+            else if (adminSubTab === 'exchange') renderAdminLoads();
+            else if (adminSubTab === 'deals') renderAdminConfirmedDeals();
+            else if (adminSubTab === 'kaiten') renderAdminKaiten();
+            else if (adminSubTab === 'carriers') renderAdminCarriers();
+            else if (adminSubTab === 'keys') renderAdminKeys();
+            else if (adminSubTab === 'blacklist') renderAdminBlacklist();
+            else if (adminSubTab === 'broadcast') renderAdminBroadcast();
+        }
+
+        /* 1. СВОДКА */
+        function renderAdminOverview() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = `
+                <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:10px; margin-bottom:14px;">
+                    <div class="profile-card" style="margin-bottom:0; padding:12px; cursor:pointer;" onclick="switchAdminSubTab('exchange')">
+                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">На бирже</span>
+                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.active_loads || 0}</div>
+                        <span style="font-size:10px; color:var(--text-muted);">активных грузов</span>
+                    </div>
+                    <div class="profile-card" style="margin-bottom:0; padding:12px; cursor:pointer;" onclick="switchAdminSubTab('bids')">
+                        <span style="font-size:10.5px; color:var(--warning); font-weight:700; text-transform:uppercase;">На согласовании</span>
+                        <div style="font-size:22px; font-weight:700; color:var(--warning); margin-top:2px;">${allAdminStats.pending_bids || 0}</div>
+                        <span style="font-size:10px; color:var(--text-muted);">требуют решения</span>
+                    </div>
+                    <div class="profile-card" style="margin-bottom:0; padding:12px; cursor:pointer;" onclick="switchAdminSubTab('deals')">
+                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">В рейсе</span>
+                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.in_transit || 0}</div>
+                        <span style="font-size:10px; color:var(--text-muted);">машин едут / на погрузке</span>
+                    </div>
+                    <div class="profile-card" style="margin-bottom:0; padding:12px; cursor:pointer;" onclick="switchAdminSubTab('deals')">
+                        <span style="font-size:10.5px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Ожидают оплаты</span>
+                        <div style="font-size:22px; font-weight:700; color:var(--text); margin-top:2px;">${allAdminStats.awaiting_pay || 0}</div>
+                        <span style="font-size:10px; color:var(--text-muted);">выгружены</span>
+                    </div>
+                </div>
+
+                <div class="profile-card" style="margin-bottom:12px; padding:14px;">
+                    <div class="profile-title" style="margin-bottom:8px;">Быстрые действия</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                        <button class="btn btn-secondary admin-head-btn" style="margin-left:0; flex:1;" onclick="downloadAdminExcel()">
+                            Выгрузить отчёт Excel
+                        </button>
+                        <button class="btn btn-secondary admin-head-btn" style="margin-left:0; flex:1;" onclick="triggerAdminBackup()">
+                            Резервная копия базы данных
+                        </button>
+                        <button class="btn btn-primary admin-head-btn" style="margin-left:0; flex:1;" onclick="openAdminAddLoadModal()">
+                            Добавить груз на биржу
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function triggerAdminBackup() {
+            showToast('Создание копии базы...', 'info');
+            try {
+                let res = await adminFetch('/api/admin/trigger_backup', { method: 'POST' });
+                let data = await res.json();
+                if (data.status === 'success') {
+                    showToast('Копия базы сохранена и закреплена в канале', 'success');
+                } else {
+                    showToast(data.message || 'Ошибка создания копии', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        /* 2. СОГЛАСОВАНИЕ (БРОНИ И СТАВКИ) */
+        function renderAdminBids() {
+            let body = document.getElementById('adminContentBody');
+            if (!allAdminBidsArray || allAdminBidsArray.length === 0) {
+                body.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-title">Нет заявок на согласовании</div>
+                        <div class="empty-desc">Все бронирования и предложения ставок обработаны.</div>
+                    </div>`;
+                return;
+            }
+
+            body.innerHTML = `
+                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
+                    Заявки, требующие ответа (${allAdminBidsArray.length})
+                </div>
+                <div class="table-container">
+                    ${allAdminBidsArray.map(b => {
+                        let isReserve = b.is_reservation;
+                        let badgeHTML = isReserve
+                            ? `<span class="badge" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Бронь (снят с биржи)</span>`
+                            : `<span class="badge" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Своя ставка</span>`;
+
+                        return `
+                        <div style="padding:12px; border-bottom:1px solid var(--border);">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                                <div>
+                                    <div style="font-weight:700; font-size:13px; color:var(--text);">${b.route}</div>
+                                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Дата: ${b.date} • ${b.cars} авто • Ставка: <b>${b.rate}</b></div>
+                                </div>
+                                ${badgeHTML}
+                            </div>
+                            <div style="background:var(--bg); padding:6px 10px; border-radius:var(--radius-sm); font-size:11px; margin-bottom:8px;">
+                                <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
+                                ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-success admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
+                                    Подтвердить
+                                </button>
+                                <button class="btn btn-danger admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
+                                    ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
+                                </button>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        async function submitBidDecision(bidId, action) {
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({ bid_id: bidId, action: action })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(action === 'accept' ? 'Заявка подтверждена' : 'Заявка отклонена', 'info');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка действия', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        /* 3. БИРЖА (АККУРАТНАЯ КНОПКА ДОБАВИТЬ ГРУЗ) */
+        function renderAdminLoads() {
+            let body = document.getElementById('adminContentBody');
+            let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
+            let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
+
+            let list = [...allAdminLoadsArray];
+
+            if (selectedDirection !== 'ALL') {
+                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
+                list = list.filter(l => {
+                    let countryStr = (l.destination_country || '').toLowerCase();
+                    let routeStr = (l.route || '').toLowerCase();
+                    return countryStr.includes(cleanDir) || routeStr.includes(cleanDir);
+                });
+            }
+
+            if (searchQuery) {
+                list = list.filter(l => `${l.route} ${l.date} ${l.price} ${l.car_type} ${l.cargo_type} ${l.weight} ${l.admin_comment} ${l.destination_country} ${l.status}`.toLowerCase().includes(searchQuery));
+            }
+
+            body.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <div style="font-weight:700; font-size:12px; color:var(--text-muted); text-transform:uppercase;">Грузы на бирже (${list.length})</div>
+                    <button class="btn btn-primary admin-head-btn" onclick="openAdminAddLoadModal()">
+                        Добавить груз
+                    </button>
+                </div>
+                <div class="table-container">
+                    <div class="t-head">
+                        <div>Дата</div>
+                        <div>Маршрут</div>
+                        <div style="text-align: center;">Статус</div>
+                        <div style="text-align: right;">Ставка</div>
+                        <div></div>
+                    </div>
+                    ${list.length === 0 ? '<div class="loader">Грузов не найдено</div>' : list.map(l => {
+                        let isActive = (l.status === 'ACTIVE');
+                        let statusBadge = isActive 
+                            ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d; border-color:#86efac;">Активен</span>` 
+                            : `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Выключен</span>`;
+                        return `
+                        <div class="t-row" id="row-adm-load-${l.id}" onclick="toggleRow('adm-load-${l.id}')" style="${!isActive ? 'opacity: 0.6;' : ''}">
+                            <div class="col-date"><div>${l.date}</div></div>
+                            <div class="col-route">
+                                <div class="marquee-box"><span class="marquee-text">${l.route}</span></div>
+                            </div>
+                            <div class="col-truck">
+                                ${statusBadge}
+                            </div>
+                            ${formatPriceHTML(l.price)}
+                            <div class="col-arrow">
+                                <svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                            </div>
+                        </div>
+                        <div class="t-details" id="details-adm-load-${l.id}">
+                            <div class="info-grid">
+                                <div class="info-item"><span>Груз ID</span><b>#${l.id}</b></div>
+                                <div class="info-item"><span>Статус</span><b>${isActive ? 'Активен' : 'Выключен'}</b></div>
+                                <div class="info-item"><span>Доступно авто</span><b>${l.cars} авто</b></div>
+                                <div class="info-item"><span>Тип ТС</span><b>${l.car_type || 'Тент'}</b></div>
+                                <div class="info-item"><span>Тип груза</span><b>${l.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем</span><b>${l.weight || '22т'}</b></div>
+                                <div class="info-item"><span>Забравшие</span><b>${l.carrier_info || 'Не забран'}</b></div>
+                            </div>
+                            ${l.admin_comment ? `<div class="admin-comment" style="margin-top:6px;"><b>Коммент:</b> ${l.admin_comment}</div>` : ''}
+
+                            <div class="buttons" style="margin-top:10px;">
+                                <button class="btn btn-primary admin-head-btn" style="margin-left:0;" onclick="openAdminEditLoadModal(${l.id})">
+                                    Редактировать
+                                </button>
+                                <button class="btn ${isActive ? 'btn-secondary' : 'btn-success'} admin-head-btn" style="margin-left:0;" onclick="toggleAdminLoadStatus(${l.id})">
+                                    ${isActive ? 'Приостановить' : 'Активировать'}
+                                </button>
+                                <button class="btn btn-danger admin-head-btn" style="margin-left:0;" onclick="hardDeleteAdminLoad(${l.id})">
+                                    Удалить
+                                </button>
+                            </div>
+                        </div>
+                    `}).join('')}
+                </div>
+            `;
+            updateMarquees();
+        }
+
+        /* 4. KAITEN ГРУЗЫ */
+        async function renderAdminKaiten() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = '<div class="loader"><div class="spinner"></div>Запрос карточек из Kaiten...</div>';
+            try {
+                let res = await adminFetch('/api/admin/kaiten_cards');
+                let data = await res.json();
+                allAdminKaitenArray = data.cards || [];
+
+                if (allAdminKaitenArray.length === 0) {
+                    body.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-title">В Kaiten нет грузов в колонке «Загрузки»</div>
+                            <div class="empty-desc">Карточки появляются автоматически при создании в Kaiten.</div>
+                        </div>`;
+                    return;
+                }
+
+                body.innerHTML = `
+                    <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px;">
+                        Карточки Kaiten (${allAdminKaitenArray.length})
+                    </div>
+                    <div class="table-container">
+                        ${allAdminKaitenArray.map(c => `
+                            <div style="padding:10px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                                <div>
+                                    <b style="font-size:13px; color:var(--text);">${c.date} ${c.route}</b>
+                                    <span class="badge" style="margin-left:6px; font-size:9.5px;">${c.region}</span>
+                                    <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">#${c.id} • ${c.hint}</div>
+                                </div>
+                                <button class="btn btn-primary admin-head-btn" onclick="publishKaitenCardFromWeb(${c.id})">
+                                    Опубликовать
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } catch(e) {
+                body.innerHTML = '<div class="loader">Ошибка загрузки карточек Kaiten</div>';
+            }
+        }
+
+        async function publishKaitenCardFromWeb(cardId) {
+            showToast('Анализ ИИ и публикация на биржу...', 'info');
+            try {
+                let res = await adminFetch(`/api/admin/kaiten_publish?id=${cardId}`, { method: 'POST' });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast('Груз успешно опубликован на бирже!', 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка публикации', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
+
+        /* 5. КЛЮЧИ (АККУРАТНАЯ КНОПКА СОЗДАТЬ КЛЮЧ) */
+        function renderAdminKeys() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div>
+                        <div style="font-weight:700; font-size:13px;">Ключи компаний и сотрудников</div>
+                        <div style="font-size:11px; color:var(--text-muted);">Управление доступом к корпоративным профилям</div>
+                    </div>
+                    <button class="btn btn-primary admin-head-btn" onclick="openGenKeyModal()">
+                        Создать ключ
+                    </button>
+                </div>
+                <div class="table-container">
+                    ${allAdminKeysArray.length === 0 ? '<div class="loader">Ключей пока нет. Нажмите «Создать ключ»</div>' : allAdminKeysArray.map(k => {
+                        let isBlocked = (k.status === 'BLOCKED');
+                        let isUnused = (k.status === 'UNUSED');
+                        let statusBadge = isBlocked 
+                            ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fee2e2; color:#b91c1c;">Заблокирован</span>`
+                            : (isUnused 
+                                ? `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fef3c7; color:#d97706;">Свободен</span>`
+                                : `<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d;">Активен</span>`);
+                        
+                        let tgLink = adminBotUsername ? `https://t.me/${adminBotUsername}?start=key_${k.key_code}` : '';
+                        let webLink = `${adminRenderUrl || window.location.origin}/webapp?key=${k.key_code}`;
+
+                        let employeesListHTML = (k.employees && k.employees.length > 0) ? `
+                            <div style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--border); font-size:10.5px;">
+                                <div style="font-weight:700; color:var(--text-muted); margin-bottom:4px;">Сотрудники компании (${k.employees.length} из ${k.max_users || 5}):</div>
+                                ${k.employees.map(emp => `
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; background:var(--bg); padding:3px 6px; border-radius:4px; gap:4px;">
+                                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><b>${emp.name}</b> (${emp.phone || 'без тел.'}) <small style="color:var(--text-muted);">#${emp.user_id}</small></span>
+                                        <div style="display:flex; gap:4px; flex-shrink:0;">
+                                            <button class="btn btn-secondary" style="padding:1px 6px; font-size:9.5px; height:22px;" onclick="openEditCarrierModal(${emp.user_id}, true)">
+                                                Ред.
+                                            </button>
+                                            <button class="btn btn-danger" style="padding:1px 5px; font-size:9.5px; height:22px;" onclick="unlinkEmployee(${emp.user_id})">
+                                                ✕
+                                            </button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : `<div style="font-size:10px; color:var(--text-muted); margin-top:4px;">Сотрудников пока нет (лимит: ${k.max_users || 5})</div>`;
+
+                        return `
+                            <div style="padding:10px 12px; border-bottom:1px solid var(--border);">
+                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">
+                                    <div>
+                                        <b style="font-size:14px; letter-spacing:1px; color:var(--primary);">${k.key_code}</b>
+                                        <span style="margin-left:8px; font-weight:700; font-size:12px;">${k.company}</span>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        ${statusBadge}
+                                        <button class="btn ${isBlocked ? 'btn-success' : 'btn-danger'}" style="padding:2px 8px; font-size:10px; height:24px;" onclick="toggleKeyStatus(${k.id})">
+                                            ${isBlocked ? 'Разблокировать' : 'Заблокировать'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0;">
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${k.key_code}')">
+                                        Копировать код
+                                    </button>
+                                    ${tgLink ? `
+                                        <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${tgLink}')">
+                                            TG ссылка
+                                        </button>
+                                    ` : ''}
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="copyTextToClipboard('${webLink}')">
+                                        Web ссылка
+                                    </button>
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="openEditKeyModal(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}', ${k.max_users || 5})">
+                                        Редактировать
+                                    </button>
+                                    <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; height:24px;" onclick="rotateCompanyKey(${k.id}, '${(k.company || '').replace(/'/g, "\\'")}')" title="Аннулировать старый ключ и выдать новый">
+                                        Сменить ключ
+                                    </button>
+                                    <button class="btn btn-danger" style="padding:3px 8px; font-size:10px; height:24px;" onclick="deleteCompanyKey(${k.id}, '${k.key_code}')">
+                                        Удалить
+                                    </button>
+                                </div>
+
+                                ${employeesListHTML}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        /* 6. СТОП-ЛИСТ */
+        async function renderAdminBlacklist() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = '<div class="loader"><div class="spinner"></div>Загрузка стоп-листа...</div>';
+            try {
+                let res = await adminFetch('/api/admin/blacklist');
+                let data = await res.json();
+                allAdminBlacklistArray = data.blacklist || [];
+
+                body.innerHTML = `
+                    <div class="profile-card" style="margin-bottom:12px; padding:12px;">
+                        <div class="profile-title" style="margin-bottom:8px;">Внести в стоп-лист</div>
+                        <div style="display:grid; grid-template-columns: 120px 1fr 1fr auto; gap:6px;">
+                            <select id="blTypeInput">
+                                <option value="VEHICLE">Авто / Прицеп</option>
+                                <option value="DRIVER">Водитель / Тел.</option>
+                            </select>
+                            <input type="text" id="blValInput" placeholder="Номер ТС или ФИО" />
+                            <input type="text" id="blReasonInput" placeholder="Причина внесения" />
+                            <button class="btn btn-danger admin-head-btn" style="margin-left:0; height:34px;" onclick="submitAddBlacklist()">
+                                Добавить
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
+                        Записи стоп-листа (${allAdminBlacklistArray.length})
+                    </div>
+                    <div class="table-container">
+                        ${allAdminBlacklistArray.length === 0 ? '<div class="loader">Стоп-лист пуст</div>' : allAdminBlacklistArray.map(item => `
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border-bottom:1px solid var(--border);">
+                                <div>
+                                    <span class="badge" style="font-size:9px; margin-right:6px;">${item.item_type === 'VEHICLE' ? 'Авто' : 'Водитель'}</span>
+                                    <b style="font-size:12px;">${item.value}</b>
+                                    <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">— ${item.reason}</span>
+                                </div>
+                                <button class="btn btn-secondary" style="padding:2px 8px; font-size:10px; height:24px; color:var(--error);" onclick="submitDelBlacklist(${item.id})">
+                                    Удалить
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } catch(e) {
+                body.innerHTML = '<div class="loader">Ошибка загрузки стоп-листа</div>';
+            }
+        }
+
+        async function submitAddBlacklist() {
+            let t = document.getElementById('blTypeInput').value;
+            let v = document.getElementById('blValInput').value.trim();
+            let r = document.getElementById('blReasonInput').value.trim();
+            if (!v || !r) return showToast('Заполните значение и причину', 'error');
+
+            try {
+                let res = await adminFetch('/api/admin/blacklist/add', {
+                    method: 'POST',
+                    body: JSON.stringify({ type: t, value: v, reason: r })
+                });
+                if (res.ok) {
+                    showToast('Внесено в стоп-лист', 'success');
+                    renderAdminBlacklist();
+                } else { showToast('Ошибка добавления', 'error'); }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitDelBlacklist(id) {
+            askConfirm('Удалить запись из стоп-листа?', async (conf) => {
+                if (conf) {
+                    try {
+                        let res = await adminFetch('/api/admin/blacklist/del', {
+                            method: 'POST',
+                            body: JSON.stringify({ id: id })
+                        });
+                        if (res.ok) {
+                            showToast('Запись удалена', 'info');
+                            renderAdminBlacklist();
+                        }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
+            });
+        }
+
+        /* 7. РАССЫЛКА */
+        function renderAdminBroadcast() {
+            let body = document.getElementById('adminContentBody');
+            body.innerHTML = `
+                <div class="profile-card" style="padding:14px;">
+                    <div class="profile-title">Рассылка сообщений перевозчикам</div>
+                    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+                        Сообщение будет отправлено всем активным пользователям в личный чат с ботом.
+                    </div>
+                    <div class="form-group">
+                        <label>Текст сообщения</label>
+                        <textarea id="broadcastTextInput" placeholder="Введите важное уведомление..." rows="5"></textarea>
+                    </div>
+                    <button class="btn btn-primary" style="width:100%; height:36px; font-weight:700;" onclick="submitAdminBroadcast()">
+                        Отправить рассылку
+                    </button>
+                </div>
+            `;
+        }
+
+        async function submitAdminBroadcast() {
+            let text = document.getElementById('broadcastTextInput').value.trim();
+            if (!text) return showToast('Введите текст рассылки', 'error');
+
+            askConfirm('Отправить данное сообщение всем перевозчикам?', async (conf) => {
+                if (conf) {
+                    showToast('Отправка рассылки...', 'info');
+                    try {
+                        let res = await adminFetch('/api/admin/broadcast', {
+                            method: 'POST',
+                            body: JSON.stringify({ text: text })
+                        });
+                        let data = await res.json();
+                        if (res.ok) {
+                            showToast(`Рассылка завершена! Доставлено: ${data.sent_count} чел.`, 'success');
+                            document.getElementById('broadcastTextInput').value = '';
+                        } else { showToast(data.error || 'Ошибка рассылки', 'error'); }
+                    } catch(e) { showToast('Ошибка сети', 'error'); }
+                }
+            });
+        }
+
         async function loadAdminData(isSilent = false) {
             try {
                 let uid = getUserId();
