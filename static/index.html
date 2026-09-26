@@ -3291,7 +3291,9 @@
             try {
                 let uid = getUserId();
                 let headers = getAdminHeaders();
-                let [cRes, dRes, lRes, kRes] = await Promise.all([
+                let [sRes, bRes, cRes, dRes, lRes, kRes] = await Promise.all([
+                    fetch(`/api/admin/stats?user_id=${uid}&t=` + Date.now(), { headers }),
+                    fetch(`/api/admin/bids?user_id=${uid}&t=` + Date.now(), { headers }),
                     fetch(`/api/admin/carriers?user_id=${uid}&t=` + Date.now(), { headers }),
                     fetch(`/api/admin/confirmed_deals?user_id=${uid}&t=` + Date.now(), { headers }),
                     fetch(`/api/admin/loads?user_id=${uid}&t=` + Date.now(), { headers }),
@@ -3307,35 +3309,28 @@
                     return;
                 }
 
+                let sData = sRes.ok ? await sRes.json() : {};
+                let bData = bRes.ok ? await bRes.json() : {};
                 let cData = cRes.ok ? await cRes.json() : {};
                 let dData = dRes.ok ? await dRes.json() : {};
                 let lData = lRes.ok ? await lRes.json() : {};
                 let kData = kRes.ok ? await kRes.json() : {};
 
-                let newAdminCarriers = cData.carriers || [];
-                let newAdminDeals = dData.deals || [];
-                let newAdminLoads = lData.loads || [];
-                let newAdminKeys = kData.keys || [];
-
-                // Сравниваем данные, чтобы не перерисовывать экран впустую, если ничего не изменилось
-                let newAdminHash = JSON.stringify([newAdminCarriers, newAdminDeals, newAdminLoads, newAdminKeys]);
-                if (isSilent && newAdminHash === window._lastAdminHash) {
-                    return;
-                }
-                window._lastAdminHash = newAdminHash;
-
-                allAdminCarriersArray = newAdminCarriers;
-                allAdminDeals = newAdminDeals;
-                allAdminLoadsArray = newAdminLoads;
-                allAdminKeysArray = newAdminKeys;
+                allAdminStats = sData || {};
+                allAdminBidsArray = bData.bids || [];
+                allAdminCarriersArray = cData.carriers || [];
+                allAdminDeals = dData.deals || [];
+                allAdminLoadsArray = lData.loads || [];
+                allAdminKeysArray = kData.keys || [];
                 adminBotUsername = kData.bot_username || '';
                 adminRenderUrl = kData.render_url || '';
 
-                // Обновляем бейджи с количеством
+                const bBids = document.getElementById('badgeAdmBidsCount');
                 const bLoads = document.getElementById('badgeAdmLoadsCount');
                 const bDeals = document.getElementById('badgeAdmDealsCount');
                 const bCarriers = document.getElementById('badgeAdmCarriersCount');
                 const bKeys = document.getElementById('badgeAdmKeysCount');
+                if (bBids) bBids.textContent = allAdminBidsArray.length > 0 ? `(${allAdminBidsArray.length})` : '';
                 if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
                 if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
                 if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
