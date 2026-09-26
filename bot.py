@@ -3894,8 +3894,8 @@ def get_cargo_hint(card_text: str) -> str:
 def parse_kaiten_card_title(raw_title: str, due_date: str = "") -> tuple[str, str, str]:
     """
     Разбирает название карточки Kaiten:
-    Пример: '108 / 2482012 Верхняя Пышма - Караганда // Сибур'
-    Возвращает: (дата, чистый_маршрут, триггер_клиента)
+    Пример: '09.10 ZPL - 024048 Абовян - Радумля'
+    Возвращает: ('09.10', 'Абовян - Радумля', '')
     """
     if not raw_title:
         return "Срочно", "Маршрут не указан", ""
@@ -3903,26 +3903,20 @@ def parse_kaiten_card_title(raw_title: str, due_date: str = "") -> tuple[str, st
     text = raw_title.strip()
     client_trigger = ""
 
-    # 1. Извлекаем клиента/триггер после / или // в конце строки
+    # 1. Извлекаем клиента/триггер после / или // или | в конце строки (например: // Сибур)
     parts = re.split(r'\s*(?:\/{1,2}|\|)\s*', text)
     if len(parts) > 1:
         last_part = parts[-1].strip()
-        # Если в хвосте нет тире и это не чисто номер - значит это клиент/подсказка (например: "Сибур")
-        if not re.search(r'^\d{5,}$', last_part) and not any(sep in last_part for sep in ['-', '—', '→']):
+        if not re.search(r'^\d{4,}$', last_part) and not any(sep in last_part for sep in ['-', '—', '→']):
             client_trigger = last_part
-            # Удаляем хвостик клиента из названия маршрута
             text = re.sub(r'\s*(?:\/{1,2}|\|)\s*' + re.escape(last_part) + r'\s*$', '', text).strip()
 
-    # 2. Отрезаем ведущие номера и слэши заказа (например: "108 / 2482012 ", "931234 / ")
-    text = re.sub(r'^\s*#?\d+\s*(?:\/\s*\d+)?\s*(?:\/|\/\/)?\s*', '', text).strip()
-    text = re.sub(r'^\s*#?\d{3,8}\b\s*', '', text).strip(' -/\\_')
-
-    # 3. Извлекаем дату (если есть в тексте: 25.09) или берем из срока карточки Kaiten
+    # 2. Извлекаем дату (например: 09.10, 15.05, 12-15.08)
     extracted_date = ""
     date_match = re.search(r'\b(\d{1,2}[\./]\d{1,2}(?:\s*[-—–]\s*\d{1,2}[\./]\d{1,2})?)\b', text)
     if date_match:
         extracted_date = date_match.group(1).replace('/', '.')
-        text = text.replace(date_match.group(0), '').strip(' -/\\_')
+        text = text.replace(date_match.group(0), ' ').strip()
     elif due_date:
         m_due = re.search(r'\d{4}-(\d{2})-(\d{2})', due_date)
         if m_due:
@@ -3932,10 +3926,18 @@ def parse_kaiten_card_title(raw_title: str, due_date: str = "") -> tuple[str, st
     else:
         extracted_date = "Срочно"
 
-    # 4. Очищаем маршрут от лишних слэшей и нормализуем тире
+    # 3. Удаляем префиксы заявок и номера заказов (например: "ZPL - 024048", "ЗПЛ 12345", "108 / 2482012")
+    text = re.sub(r'(?i)\b(?:zpl|зпл|zp|зп|tr|тр|заказ|заявка|order|номер|№|id)\b\s*[-—–/\\:_]*\s*\d+\b', '', text)
+    text = re.sub(r'(?i)\b(?:zpl|зпл|zp|зп|tr|тр)\b', '', text)
+    text = re.sub(r'\b\d{4,10}\b', '', text)
+    text = re.sub(r'^\s*#?\d+\s*[\/\\|]\s*', '', text)
+
+    # 4. Очищаем маршрут от лишних слэшей и нормализуем тире между городами
     clean_route = re.sub(r'[\/\\|]+', ' ', text)
-    clean_route = re.sub(r'\s*[-—→]+\s*', ' - ', clean_route)
-    clean_route = re.sub(r'\s+', ' ', clean_route).strip(' -.,_')
+    clean_route = re.sub(r'\s*[-—–→]+\s*', ' - ', clean_route)
+    clean_route = re.sub(r'^\s*[-—–.,_ ]+', '', clean_route)
+    clean_route = re.sub(r'\s*[-—–.,_ ]+$', '', clean_route)
+    clean_route = re.sub(r'\s+', ' ', clean_route).strip()
 
     if not clean_route:
         clean_route = "Маршрут не указан"
