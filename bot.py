@@ -1975,8 +1975,12 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
 5. Не добавляй, не удаляй и не переформатируй поля, не описывай внутреннюю логику промта в ответе.
 
 ==================================================
-РАЗРЕШЁННЫЕ НОРМАЛИЗАЦИИ (единственные допустимые изменения)
+РАЗРЕШЁННЫЕ НОРМАЛИЗАЦИИ И СТРОГИЕ ПРАВИЛА OCR
 ==================================================
+- **КРИТИЧЕСКИ ВАЖНО — ЗАПРЕТ НА ПУТАНИЦУ СИМВОЛОВ (2 vs Z, 0 vs O, 8 vs B):**
+  * Внимательно различай цифру «2» и латинскую букву «Z». Цифра «2» имеет округлый верх и плавный изгиб, буква «Z» состоит строго из прямых угловатых линий.
+  * В номерных знаках (госномерах), VIN-кодах, сериях/номерах паспортов и прав: если на позиции ожидается ЦИФРА — это ВСЕГДА цифра «2», а НЕ буква «Z»! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать букву «Z» там, где стоит цифра «2».
+  * Также строго различай: «0» (цифра ноль) и «O» (буква); «8» (восемь) и «B» (буква); «1» (один) и «I»/«L».
 - **Телефоны:** удалять пробелы, скобки, тире; оставлять только цифры и ведущий '+'. Возвращать только уникальные номера (без дублей). Сортировку по приоритету (+7, +375) выполняет бэкенд.
 - **Номера документов (паспорт, ВУ):** удалять символы "№" и внутренние пробелы между серией и номером.
 - **VIN:** удалять пробелы и дефисы перед валидацией длины. Нормализация символов в VIN: 'I'→'1', 'O'→'0', 'Q'→'0' (только в VIN). Если после нормализации длина = 17 — VIN считается валидным.
@@ -2140,16 +2144,19 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
     )
 
     models_to_try = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-3-flash",
-        "gemini-2.5-flash",
         "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
         "gemini-3.1-pro",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash",
         "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
     ]
 
     response = None
@@ -5614,6 +5621,7 @@ async def direct_upload_docs_api(request):
     try:
         reader = await request.multipart()
         phone_input = ""
+        comment_input = ""
         raw_files = []
 
         while True:
@@ -5626,6 +5634,8 @@ async def direct_upload_docs_api(request):
                 user_id = int(await field.text())
             elif field.name == 'phone':
                 phone_input = (await field.text()).strip()
+            elif field.name in ['comment', 'notes']:
+                comment_input = (await field.text()).strip()
             elif field.name == 'files':
                 filename = field.filename or "file"
                 content = await field.read()
@@ -5635,8 +5645,8 @@ async def direct_upload_docs_api(request):
         if not deal_id or not user_id:
             return web.json_response({"error": "Ошибка валидации параметров"}, status=400)
 
-        if not raw_files and not phone_input:
-            return web.json_response({"error": "Укажите номер телефона или прикрепите файлы"}, status=400)
+        if not raw_files and not phone_input and not comment_input:
+            return web.json_response({"error": "Укажите номер телефона, комментарий или прикрепите файлы"}, status=400)
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
@@ -5669,13 +5679,23 @@ async def direct_upload_docs_api(request):
 
         user_info = format_carrier_info(user_id)
 
+        # Объединяем телефон и введённый пользователем текст-комментарий
+        combined_notes_parts = []
+        if phone_input:
+            combined_notes_parts.append(f"Телефон: {phone_input}")
+        if comment_input:
+            combined_notes_parts.append(f"Текстовые данные от пользователя:\n{comment_input}")
+        combined_notes = "\n".join(combined_notes_parts)
+
         if raw_files:
-            contents = ["Изучи документы. ФИО извлекай СТРОГО из ПАСПОРТА. Номер телефона: " + (phone_input or "Нет")]
+            contents = [
+                "Изучи прикреплённые документы и текстовые данные. ФИО извлекай СТРОГО из ПАСПОРТА.\n" + (combined_notes or "Доп. данных нет")
+            ]
             for fname, content in raw_files:
                 mime = detect_mime_type(content, fname)
                 contents.append(genai_types.Part.from_bytes(data=content, mime_type=mime))
 
-            ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, phone_input, is_polyethylene=is_polyethylene, route_str=route_str)
+            ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, combined_notes, is_polyethylene=is_polyethylene, route_str=route_str)
             
             raw_json = raw_json if isinstance(raw_json, dict) else {}
             t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
