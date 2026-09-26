@@ -4438,6 +4438,30 @@
             }
         }
 
+        async function setArrivedLoading(dealId, event) {
+            if (event) event.stopPropagation();
+            askConfirm('Водитель прибыл на загрузку? Рейс будет перенесён в колонку «Едут».', async (confirmed) => {
+                if (confirmed) {
+                    try {
+                        let res = await fetch('/api/set_arrived_loading', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ deal_id: dealId, user_id: getUserId() })
+                        });
+                        if (res.ok) {
+                            showToast('Водитель на загрузке! Рейс перенесён в «Едут»', 'success');
+                            loadData(false);
+                        } else {
+                            let d = await res.json();
+                            showToast(d.error || 'Ошибка', 'error');
+                        }
+                    } catch(e) {
+                        showToast('Ошибка сети', 'error');
+                    }
+                }
+            });
+        }
+
         async function setUnloadDate(dealId, event) {
             if (event) event.stopPropagation();
             let dateInput = document.getElementById(`unload-date-${dealId}`);
@@ -5079,40 +5103,31 @@
                     </div>
                 `;
             } else {
-                // Расчет кнопок звонка и WhatsApp ДО формирования текста карточки
+                // Расчет кнопок звонка и WhatsApp с чистой векторной графикой (без смайлов)
                 let cleanPhone = (d.driver_phone || '').replace(/[^\d+]/g, '');
                 let waDigits = (d.driver_phone || '').replace(/\D/g, '');
                 let phoneBtnsHTML = '';
                 if (cleanPhone && cleanPhone.length >= 7) {
-                    phoneBtnsHTML = '<div style="display:flex; gap:4px; margin-top:6px; width:100%;" onclick="event.stopPropagation()">' +
-                        '<a href="tel:' + cleanPhone + '" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:3px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">📞 Набрать</a>' +
-                        '<a href="https://wa.me/' + waDigits + '" target="_blank" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; justify-content:center; gap:3px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">💬 WhatsApp</a>' +
-                        '</div>';
+                    phoneBtnsHTML = `
+                        <div style="display:flex; gap:4px; margin-top:6px; width:100%;" onclick="event.stopPropagation()">
+                            <a href="tel:${cleanPhone}" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:4px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">
+                                <svg class="icon" viewBox="0 0 24 24" style="width:11px; height:11px;"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                                <span>Набрать</span>
+                            </a>
+                            <a href="https://wa.me/${waDigits}" target="_blank" class="btn btn-secondary" style="flex:1; min-width:0; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; justify-content:center; gap:4px; font-weight:700; white-space:nowrap; border-radius:var(--radius-sm);">
+                                <svg class="icon" viewBox="0 0 24 24" style="width:11px; height:11px;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                                <span>WhatsApp</span>
+                            </a>
+                        </div>
+                    `;
                 }
 
                 detailsHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <div>
-                            ${d.is_today ? `<span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span>` : ''}
-                        </div>
-                        <button class="info-toggle-btn" style="margin-bottom:0;" onclick="toggleCargoExtraInfo('${d.id}', event)">
-                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="8"/></svg>
-                            <span>Информация о грузе</span>
-                        </button>
-                    </div>
+                    ${d.is_today ? `<div style="margin-bottom:8px;"><span class="badge badge-today" style="margin-bottom:0;">ПОГРУЗКА СЕГОДНЯ</span></div>` : ''}
                     ${statusBoxHTML}
                     ${formattedMissingDocs}
 
-                    <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none;">
-                        <div class="info-grid" style="margin-bottom:0;">
-                            <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
-                            <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
-                            <div class="info-item"><span>Вес / Объем</span><b>${d.weight || 'до 22т'}</b></div>
-                            <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
-                        </div>
-                    </div>
-                    
-                    <div class="info-grid">
+                    <div class="info-grid" style="margin-bottom:8px;">
                         <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
                         <div class="info-item"><span>Взял(а) рейс</span><b>${d.booked_by_name || 'Сотрудник'}${d.booked_by_phone ? ' (' + d.booked_by_phone + ')' : ''}</b></div>
                         <div class="info-item">
@@ -5123,6 +5138,31 @@
                         </div>
                         <div class="info-item"><span>Тягач / Прицеп</span><b>${d.truck_plate || '—'} / ${d.trailer_plate || '—'}</b></div>
                     </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <button class="info-toggle-btn" style="width: 100%; justify-content: center; height: 28px; border-radius: var(--radius-sm);" onclick="toggleCargoExtraInfo('${d.id}', event)">
+                            <svg class="icon" viewBox="0 0 24 24" style="width:13px; height:13px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <span>Информация о грузе</span>
+                        </button>
+
+                        <div class="cargo-extra-box" id="extra-info-${d.id}" style="display: none; margin-top: 8px; margin-bottom: 0;">
+                            <div class="info-grid" style="margin-bottom:0;">
+                                <div class="info-item"><span>Тип ТС</span><b>${d.car_type || 'Тент'}</b></div>
+                                <div class="info-item"><span>Тип груза</span><b>${d.cargo_type || 'ТНП'}</b></div>
+                                <div class="info-item"><span>Вес / Объем</span><b>${d.weight || 'до 22т'}</b></div>
+                                <div class="info-item"><span>Доп. инфо</span><b>${d.details || '—'}</b></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${(mySubTab === 'active' && (d.is_today || d.can_load) && !d.is_loaded) ? `
+                        <div style="margin-bottom: 8px;">
+                            <button class="btn btn-success" style="width: 100%; height: 34px; font-weight: 700; font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-sm);" onclick="setArrivedLoading('${d.deal_id || d.id}', event)">
+                                <svg class="icon" viewBox="0 0 24 24" style="width: 13px; height: 13px;"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+                                <span>Приехал на загрузку</span>
+                            </button>
+                        </div>
+                    ` : ''}
 
                     ${(mySubTab === 'active' || mySubTab === 'transit') ? `
                         <div class="action-buttons-group">
