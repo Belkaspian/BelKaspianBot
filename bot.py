@@ -7043,18 +7043,30 @@ async def admin_export_excel_api(request):
     )
 
 async def admin_get_confirmed_deals_api(request):
-    """Возвращает все подтвержденные заказы в админку."""
+    """Возвращает все подтвержденные заказы в админку с полной информацией о водителе, ТС и заявке."""
     if not is_admin_authorized(request):
         return web.json_response({"error": "Доступ запрещен. Требуется админ-ключ."}, status=403)
 
-    
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, cd.details, cd.user_id,
+        SELECT cd.id, cd.load_id, cd.date, cd.route, cd.cars, cd.price, COALESCE(cd.details, ''), cd.user_id,
                COALESCE(u.company, 'Не указана'), COALESCE(u.name, 'Пользователь'), COALESCE(u.phone, 'Не указан'),
                COALESCE(u.status, 'ACTIVE'),
-               COALESCE(l.destination_country, '')
+               COALESCE(l.destination_country, ''),
+               COALESCE(cd.order_number, ''),
+               COALESCE(cd.last_truck_plate, ''),
+               COALESCE(cd.last_trailer_plate, ''),
+               COALESCE(cd.last_driver_name, ''),
+               COALESCE(cd.driver_phone, ''),
+               COALESCE(cd.unload_date, ''),
+               COALESCE(cd.is_unloaded, 0),
+               COALESCE(cd.is_loaded, 0),
+               COALESCE(cd.is_paid, 0),
+               COALESCE(cd.paid_amount, ''),
+               COALESCE(cd.paid_date, ''),
+               COALESCE(cd.pay_docs_status, 'NONE'),
+               COALESCE(cd.planned_payment_date, '')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
         LEFT JOIN loads l ON cd.load_id = l.load_id
@@ -7065,7 +7077,20 @@ async def admin_get_confirmed_deals_api(request):
     deals = [{
         "deal_id": r[0], "load_id": r[1], "date": r[2], "route": r[3], "cars": r[4], 
         "price": r[5], "details": r[6], "user_id": r[7], "company": r[8], 
-        "name": r[9], "phone": r[10], "carrier_status": r[11], "destination_country": r[12]
+        "name": r[9], "phone": r[10], "carrier_status": r[11], "destination_country": r[12],
+        "order_number": r[13],
+        "truck_plate": r[14],
+        "trailer_plate": r[15],
+        "driver_name": r[16],
+        "driver_phone": r[17],
+        "unload_date": r[18],
+        "is_unloaded": bool(r[19]),
+        "is_loaded": bool(r[20]),
+        "is_paid": bool(r[21]),
+        "paid_amount": r[22],
+        "paid_date": r[23],
+        "pay_docs_status": r[24],
+        "planned_payment_date": r[25]
     } for r in rows]
     return web.json_response({"deals": deals})
 
