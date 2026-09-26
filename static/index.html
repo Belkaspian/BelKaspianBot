@@ -2246,14 +2246,14 @@
                 body.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-title">Нет заявок на согласовании</div>
-                        <div class="empty-desc">Все бронирования и предложения ставок обработаны.</div>
+                        <div class="empty-desc">Все бронирования и ставки обработаны.</div>
                     </div>`;
                 return;
             }
 
             body.innerHTML = `
                 <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
-                    Заявки, требующие ответа (${allAdminBidsArray.length})
+                    Заявки, требующие решения (${allAdminBidsArray.length})
                 </div>
                 <div class="table-container">
                     ${allAdminBidsArray.map(b => {
@@ -2275,20 +2275,20 @@
                                 <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
                                 ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
                             </div>
-                            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-                                <button class="btn btn-success admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
+                            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
                                     Подтвердить
                                 </button>
                                 ${b.cars > 1 ? `
-                                    <button class="btn btn-warning admin-head-btn" style="margin-left:0;" onclick="submitBidPartial(${b.bid_id}, ${b.cars})">
+                                    <button class="btn btn-warning" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidPartial(${b.bid_id}, ${b.cars})">
                                         Часть (${b.cars})
                                     </button>
                                 ` : ''}
-                                <button class="btn btn-secondary admin-head-btn" style="margin-left:0;" onclick="submitBidCounter(${b.bid_id}, ${b.cars}, '${(b.rate || '').replace(/'/g, "\\'")}')">
+                                <button class="btn btn-secondary" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidCounter(${b.bid_id}, ${b.cars}, '${(b.rate || '').replace(/'/g, "\\'")}')">
                                     Своя ставка
                                 </button>
-                                <button class="btn btn-danger admin-head-btn" style="margin-left:0;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
-                                    ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
+                                <button class="btn btn-danger" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
+                                    ${isReserve ? 'Отклонить' : 'Отклонить'}
                                 </button>
                             </div>
                         </div>`;
@@ -2312,6 +2312,67 @@
                     showToast(data.error || 'Ошибка действия', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidPartial(bidId, maxCars) {
+            let input = prompt(`Сколько авто подтвердить из ${maxCars}?`, '1');
+            if (input === null) return;
+            let count = parseInt(input);
+            if (isNaN(count) || count <= 0) {
+                return showToast('Укажите корректное число авто', 'error');
+            }
+            if (count > maxCars) count = maxCars;
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({ bid_id: bidId, action: 'partial', cars: count })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Подтверждено авто: ${count} из ${maxCars}`, 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка действия', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidCounter(bidId, maxCars, currentRate) {
+            let promptRate = prompt(`Текущая ставка: ${currentRate}\nВведите вашу встречную ставку (например: 2500 USD или 260 000 RUB):`);
+            if (!promptRate || !promptRate.trim()) return;
+
+            let carsCount = maxCars;
+            if (maxCars > 1) {
+                let promptCars = prompt(`Сколько авто предложить по этой ставке? (всего запрошено: ${maxCars}):`, String(maxCars));
+                if (promptCars) {
+                    let parsed = parseInt(promptCars);
+                    if (!isNaN(parsed) && parsed > 0) carsCount = Math.min(parsed, maxCars);
+                }
+            }
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        bid_id: bidId,
+                        action: 'counter',
+                        rate: promptRate.trim(),
+                        cars: carsCount
+                    })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Встречная ставка ${promptRate} отправлена!`, 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка отправки', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
         }
 
         async function submitBidPartial(bidId, maxCars) {
@@ -2518,14 +2579,14 @@
                 </div>
                 <div class="table-container">
                     ${allAdminKaitenArray.map(c => `
-                        <div style="padding:10px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                            <div>
-                                <b style="font-size:13px; color:var(--text);">${c.date} ${c.route}</b>
-                                <span class="badge" style="margin-left:6px; font-size:9.5px;">${c.region}</span>
-                                <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">#${c.id} • ${c.hint}</div>
+                        <div style="padding:10px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:12px;">
+                            <div style="min-width:0; flex:1 1 auto; overflow:hidden;">
+                                <b style="font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;">${c.date} ${c.route}</b>
+                                <span class="badge" style="font-size:9.5px; margin-top:3px;">${c.region}</span>
+                                <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">#${c.id} • ${c.hint}</div>
                             </div>
-                            <button class="btn btn-primary admin-head-btn" onclick="publishKaitenCardFromWeb(${c.id})">
-                                Опубликовать
+                            <button class="btn btn-primary" style="width:175px !important; min-width:175px !important; max-width:175px !important; flex:0 0 175px !important; height:34px; font-size:11px; font-weight:600; padding:0 8px; white-space:nowrap; justify-content:center; text-align:center;" onclick="publishKaitenCardFromWeb(${c.id})">
+                                Опубликовать на биржу
                             </button>
                         </div>
                     `).join('')}
@@ -2970,12 +3031,20 @@
                                 <div><b>Перевозчик:</b> ${b.company} (${b.name}, ${b.phone})</div>
                                 ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
                             </div>
-                            <div style="display:flex; gap:8px;">
-                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
+                            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
                                     Подтвердить
                                 </button>
-                                <button class="btn btn-danger" style="padding:6px 12px; font-size:11px;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
-                                    ${isReserve ? 'Отклонить (вернуть на биржу)' : 'Отклонить'}
+                                ${b.cars > 1 ? `
+                                    <button class="btn btn-warning" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidPartial(${b.bid_id}, ${b.cars})">
+                                        Часть (${b.cars})
+                                    </button>
+                                ` : ''}
+                                <button class="btn btn-secondary" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidCounter(${b.bid_id}, ${b.cars}, '${(b.rate || '').replace(/'/g, "\\'")}')">
+                                    Своя ставка
+                                </button>
+                                <button class="btn btn-danger" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'decline')">
+                                    ${isReserve ? 'Отклонить' : 'Отклонить'}
                                 </button>
                             </div>
                         </div>`;
@@ -2986,9 +3055,8 @@
 
         async function submitBidDecision(bidId, action) {
             try {
-                let res = await fetch('/api/admin/bid_action', {
+                let res = await adminFetch('/api/admin/bid_action', {
                     method: 'POST',
-                    headers: getAdminHeaders(),
                     body: JSON.stringify({ bid_id: bidId, action: action })
                 });
                 let data = await res.json();
@@ -3000,6 +3068,67 @@
                     showToast(data.error || 'Ошибка действия', 'error');
                 }
             } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidPartial(bidId, maxCars) {
+            let input = prompt(`Сколько авто подтвердить из ${maxCars}?`, '1');
+            if (input === null) return;
+            let count = parseInt(input);
+            if (isNaN(count) || count <= 0) {
+                return showToast('Укажите корректное число авто', 'error');
+            }
+            if (count > maxCars) count = maxCars;
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({ bid_id: bidId, action: 'partial', cars: count })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Подтверждено авто: ${count} из ${maxCars}`, 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка действия', 'error');
+                }
+            } catch(e) { showToast('Ошибка сети', 'error'); }
+        }
+
+        async function submitBidCounter(bidId, maxCars, currentRate) {
+            let promptRate = prompt(`Текущая ставка: ${currentRate}\nВведите вашу встречную ставку (например: 2500 USD или 260 000 RUB):`);
+            if (!promptRate || !promptRate.trim()) return;
+
+            let carsCount = maxCars;
+            if (maxCars > 1) {
+                let promptCars = prompt(`Сколько авто предложить по этой ставке? (всего запрошено: ${maxCars}):`, String(maxCars));
+                if (promptCars) {
+                    let parsed = parseInt(promptCars);
+                    if (!isNaN(parsed) && parsed > 0) carsCount = Math.min(parsed, maxCars);
+                }
+            }
+
+            try {
+                let res = await adminFetch('/api/admin/bid_action', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        bid_id: bidId,
+                        action: 'counter',
+                        rate: promptRate.trim(),
+                        cars: carsCount
+                    })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(`Встречная ставка ${promptRate} отправлена!`, 'success');
+                    loadAdminData();
+                    loadData(false);
+                } else {
+                    showToast(data.error || 'Ошибка отправки', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
         }
 
         /* 3. KAITEN ГРУЗЫ */
@@ -3968,48 +4097,168 @@
             updateMarquees();
         }
 
-        /* 2. ОТРИСОВКА ВКЛАДКИ "ВСЕ ЗАКАЗЫ" */
+        /* 2. ОТРИСОВКА ВКЛАДКИ "ВСЕ ЗАКАЗЫ" С ПОДВКЛАДКАМИ */
+        let adminDealSubTab = 'all';
+
+        function switchAdminDealSubTab(sub) {
+            adminDealSubTab = sub;
+            renderAdminConfirmedDeals();
+        }
+
+        // Проверка: прошло ли не более 10 дней с момента оплаты
+        function isPaidWithin10Days(paidDateStr) {
+            if (!paidDateStr) return true;
+            let parts = paidDateStr.trim().split('.');
+            let pDate;
+            if (parts.length === 3) {
+                pDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+            } else {
+                pDate = new Date(paidDateStr);
+            }
+            if (isNaN(pDate.getTime())) return true;
+            let diffDays = (new Date() - pDate) / (1000 * 60 * 60 * 24);
+            return diffDays >= 0 && diffDays <= 10;
+        }
+
         function renderAdminConfirmedDeals() {
             let body = document.getElementById('adminContentBody');
             let searchQuery = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
             let selectedCarrier = document.getElementById('adminCarrierFilter')?.value || 'ALL';
             let selectedDirection = document.getElementById('adminDirectionFilter')?.value || 'ALL';
 
-            let filtered = [...allAdminDeals];
-
-            if (selectedCarrier !== 'ALL') {
-                filtered = filtered.filter(d => String(d.user_id) === String(selectedCarrier));
-            }
-
-            if (selectedDirection !== 'ALL') {
-                let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
-                filtered = filtered.filter(d => {
+            // Базовая фильтрация по перевозчику и направлению
+            let baseList = allAdminDeals.filter(d => {
+                if (selectedCarrier !== 'ALL' && String(d.user_id) !== String(selectedCarrier)) return false;
+                if (selectedDirection !== 'ALL') {
+                    let cleanDir = selectedDirection.split(' ')[0].toLowerCase().trim();
                     let countryStr = (d.destination_country || '').toLowerCase();
                     let routeStr = (d.route || '').toLowerCase();
-                    return countryStr.includes(cleanDir) || routeStr.includes(cleanDir);
-                });
-            }
+                    if (!countryStr.includes(cleanDir) && !routeStr.includes(cleanDir)) return false;
+                }
+                return true;
+            });
+
+            // Подсчет количества заказов для каждой подвкладки
+            let countInWork = 0, countTransit = 0, countUnloaded = 0, countAwaitingPay = 0, countArchive = 0;
+
+            baseList.forEach(d => {
+                let isPaid = Boolean(d.is_paid);
+                let isUnloaded = Boolean(d.is_unloaded);
+                let isLoaded = Boolean(d.is_loaded);
+
+                if (isPaid) {
+                    if (isPaidWithin10Days(d.paid_date)) countArchive++;
+                } else if (isUnloaded) {
+                    countUnloaded++;
+                    let hasPayDocs = (d.pay_docs_status === 'IN_ACCOUNTING' || d.pay_docs_status === 'ACCEPTED' || d.planned_payment_date);
+                    if (hasPayDocs) countAwaitingPay++;
+                } else if (isLoaded) {
+                    countTransit++;
+                } else {
+                    countInWork++;
+                }
+            });
+
+            // Фильтрация по выбранной подвкладке
+            let filtered = baseList.filter(d => {
+                let isPaid = Boolean(d.is_paid);
+                let isUnloaded = Boolean(d.is_unloaded);
+                let isLoaded = Boolean(d.is_loaded);
+
+                if (adminDealSubTab === 'archive') {
+                    return isPaid && isPaidWithin10Days(d.paid_date);
+                }
+                if (adminDealSubTab === 'in_work') {
+                    return !isLoaded && !isUnloaded && !isPaid;
+                }
+                if (adminDealSubTab === 'in_transit') {
+                    return isLoaded && !isUnloaded && !isPaid;
+                }
+                if (adminDealSubTab === 'unloaded') {
+                    return isUnloaded && !isPaid;
+                }
+                if (adminDealSubTab === 'awaiting_payment') {
+                    let hasPayDocs = (d.pay_docs_status === 'IN_ACCOUNTING' || d.pay_docs_status === 'ACCEPTED' || d.planned_payment_date);
+                    return isUnloaded && !isPaid && hasPayDocs;
+                }
+                // 'all': показываем все активные, а также архивные в пределах 10 дней
+                if (isPaid) return isPaidWithin10Days(d.paid_date);
+                return true;
+            });
 
             if (searchQuery) {
-                filtered = filtered.filter(d => `${d.deal_id} ${d.route} ${d.date} ${d.price} ${d.company} ${d.name} ${d.phone}`.toLowerCase().includes(searchQuery));
+                filtered = filtered.filter(d => `${d.deal_id} ${d.order_number} ${d.route} ${d.date} ${d.price} ${d.company} ${d.name} ${d.phone} ${d.truck_plate} ${d.trailer_plate} ${d.driver_name} ${d.driver_phone}`.toLowerCase().includes(searchQuery));
             }
 
+            let subNavHTML = `
+                <div class="sub-nav" style="margin-bottom: 8px; overflow-x: auto; white-space: nowrap; gap: 4px; padding-bottom: 4px;">
+                    <div class="sub-nav-btn ${adminDealSubTab === 'all' ? 'active' : ''}" onclick="switchAdminDealSubTab('all')">
+                        Все (${baseList.length})
+                    </div>
+                    <div class="sub-nav-btn ${adminDealSubTab === 'in_work' ? 'active' : ''}" onclick="switchAdminDealSubTab('in_work')">
+                        В работе (${countInWork})
+                    </div>
+                    <div class="sub-nav-btn ${adminDealSubTab === 'in_transit' ? 'active' : ''}" onclick="switchAdminDealSubTab('in_transit')">
+                        Едут (${countTransit})
+                    </div>
+                    <div class="sub-nav-btn ${adminDealSubTab === 'unloaded' ? 'active' : ''}" onclick="switchAdminDealSubTab('unloaded')">
+                        Выгружены (${countUnloaded})
+                    </div>
+                    <div class="sub-nav-btn ${adminDealSubTab === 'awaiting_payment' ? 'active' : ''}" onclick="switchAdminDealSubTab('awaiting_payment')">
+                        Ждут оплату (${countAwaitingPay})
+                    </div>
+                    <div class="sub-nav-btn ${adminDealSubTab === 'archive' ? 'active' : ''}" onclick="switchAdminDealSubTab('archive')">
+                        Архив (${countArchive})
+                    </div>
+                </div>
+            `;
+
             if (filtered.length === 0) {
-                body.innerHTML = '<div class="loader">Заказы не найдены</div>';
+                body.innerHTML = subNavHTML + '<div class="loader">В этом разделе заказов пока нет</div>';
                 return;
             }
 
-            body.innerHTML = `
+            body.innerHTML = subNavHTML + `
                 <div class="table-container">
                     <div class="t-head">
                         <div>Дата</div>
                         <div>Маршрут</div>
-                        <div style="text-align: center;">Перевозчик</div>
+                        <div style="text-align: center;">ТС / Статус</div>
                         <div style="text-align: right;">Ставка</div>
                         <div></div>
                     </div>
                     ${filtered.map(d => {
                         let isBlocked = (d.carrier_status === 'BLOCKED');
+                        let cleanTruck = d.truck_plate ? d.truck_plate.trim() : '—';
+                        let cleanTrailer = d.trailer_plate ? d.trailer_plate.trim() : '';
+
+                        let stageBadge = '<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#f1f5f9; color:#475569;">В работе</span>';
+                        if (d.is_paid) {
+                            stageBadge = '<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#dcfce7; color:#15803d;">Оплачен</span>';
+                        } else if (d.is_unloaded) {
+                            stageBadge = '<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#e0e7ff; color:#3730a3;">Выгружен</span>';
+                        } else if (d.is_loaded) {
+                            stageBadge = '<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fef3c7; color:#d97706;">Едет</span>';
+                        }
+
+                        let cleanDriverPhone = (d.driver_phone || '').replace(/[^\d+]/g, '');
+                        let waDigits = (d.driver_phone || '').replace(/\D/g, '');
+                        let adminPhoneBtnsHTML = '';
+                        if (cleanDriverPhone && cleanDriverPhone.length >= 7) {
+                            adminPhoneBtnsHTML = `
+                                <div style="display:flex; gap:4px; margin-top:6px; width:100%;" onclick="event.stopPropagation()">
+                                    <a href="tel:${cleanDriverPhone}" class="btn btn-secondary" style="flex:1; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:4px; font-weight:700; border-radius:var(--radius-sm);">
+                                        <svg class="icon" viewBox="0 0 24 24" style="width:11px; height:11px;"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                                        <span>Набрать</span>
+                                    </a>
+                                    <a href="https://wa.me/${waDigits}" target="_blank" class="btn btn-secondary" style="flex:1; padding:3px 2px; font-size:9.5px; height:24px; text-decoration:none; color:#16a34a; border-color:#86efac; display:inline-flex; align-items:center; justify-content:center; gap:4px; font-weight:700; border-radius:var(--radius-sm);">
+                                        <svg class="icon" viewBox="0 0 24 24" style="width:11px; height:11px;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                                        <span>WhatsApp</span>
+                                    </a>
+                                </div>
+                            `;
+                        }
+
                         return `
                         <div class="t-row" id="row-adm-deal-${d.deal_id}" onclick="toggleRow('adm-deal-${d.deal_id}')">
                             <div class="col-date"><div>${d.date}</div></div>
@@ -4017,8 +4266,8 @@
                                 <div class="marquee-box"><span class="marquee-text">${d.route}</span></div>
                             </div>
                             <div class="col-truck">
-                                <span style="font-weight:700; color:var(--text);">${d.company}</span>
-                                <span style="font-size:9px; color:var(--text-muted);">${d.name}</span>
+                                <span style="font-weight:700; color:var(--text); font-size:10px;">${cleanTruck}</span>
+                                ${stageBadge}
                             </div>
                             ${formatPriceHTML(d.price)}
                             <div class="col-arrow">
@@ -4027,10 +4276,25 @@
                         </div>
                         <div class="t-details" id="details-adm-deal-${d.deal_id}">
                             <div class="info-grid">
+                                <div class="info-item"><span>Номер заявки</span><b>${d.order_number || 'Не присвоен'}</b></div>
                                 <div class="info-item"><span>Заказ ID</span><b>#${d.deal_id}</b></div>
                                 <div class="info-item"><span>Перевозчик</span><b>${d.company} (${d.name})</b></div>
-                                <div class="info-item"><span>Телефон</span><b>${d.phone}</b></div>
-                                <div class="info-item"><span>Количество авто</span><b>${d.cars} авто</b></div>
+                                <div class="info-item"><span>Телефон перевозчика</span><b>${d.phone}</b></div>
+                                <div class="info-item">
+                                    <span>Водитель</span>
+                                    <b>${d.driver_name || 'Не указан'}</b>
+                                    <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">${d.driver_phone || 'Без тел.'}</div>
+                                    ${adminPhoneBtnsHTML}
+                                </div>
+                                <div class="info-item">
+                                    <span>Тягач / Прицеп</span>
+                                    <b>${cleanTruck} ${cleanTrailer ? '/ ' + cleanTrailer : ''}</b>
+                                </div>
+                                <div class="info-item"><span>Дата выгрузки</span><b>${d.unload_date || 'Не выгружен'}</b></div>
+                                <div class="info-item">
+                                    <span>Статус оплаты</span>
+                                    <b>${d.is_paid ? 'Оплачен (' + (d.paid_amount || '') + ' ' + (d.paid_date || '') + ')' : (d.planned_payment_date ? 'План: ' + d.planned_payment_date : 'Ожидает')}</b>
+                                </div>
                             </div>
                             ${d.details ? `<div class="admin-comment" style="margin-top:6px;"><b>Детали:</b> ${d.details}</div>` : ''}
 
