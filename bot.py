@@ -6594,14 +6594,14 @@ async def accept_counter_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT load_id, user_id, cars, counter_rate FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
+        cursor.execute("SELECT load_id, user_id, cars, counter_rate, user_message_id FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
         bid = cursor.fetchone()
 
         if not bid:
             conn.close()
             return web.json_response({"error": "Заявка не найдена"}, status=404)
 
-        load_id, user_id, requested_cars, counter_rate = bid
+        load_id, user_id, requested_cars, counter_rate, user_msg_id = bid
         cursor.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
         load = cursor.fetchone()
 
@@ -6625,13 +6625,11 @@ async def accept_counter_api(request):
             conn.close()
 
             # Снимаем кнопки из сообщения в личном чате перевозчика
-            cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
-            u_msg_row = cursor.fetchone()
-            if u_msg_row and u_msg_row[0]:
+            if user_msg_id:
                 try:
                     await bot.edit_message_text(
                         chat_id=user_id,
-                        message_id=u_msg_row[0],
+                        message_id=user_msg_id,
                         text=f"✅ Вы приняли встречную ставку {counter_rate} по рейсу «{route_str}» через приложение.",
                         reply_markup=None
                     )
@@ -6672,34 +6670,32 @@ async def decline_counter_api(request):
 
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT load_id, user_id, counter_rate FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
+        cursor.execute("SELECT load_id, user_id, counter_rate, user_message_id FROM bids WHERE bid_id = ? AND user_id = ?", (bid_id, user_id))
         bid = cursor.fetchone()
 
         if not bid:
             conn.close()
             return web.json_response({"error": "Заявка не найдена"}, status=404)
 
-        load_id, user_id, counter_rate = bid
+        load_id, user_id, counter_rate, user_msg_id = bid
         cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
         l_row = cursor.fetchone()
         route_str = l_row[0] if l_row else "Груз"
 
-        cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
-        u_msg_row = cursor.fetchone()
-        if u_msg_row and u_msg_row[0]:
+        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        conn.close()
+
+        if user_msg_id:
             try:
                 await bot.edit_message_text(
                     chat_id=user_id,
-                    message_id=u_msg_row[0],
+                    message_id=user_msg_id,
                     text=f"❌ Вы отклонили встречную ставку по рейсу «{route_str}».",
                     reply_markup=None
                 )
             except Exception:
                 pass
-
-        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
-        conn.commit()
-        conn.close()
 
         carrier_link = format_carrier_info(user_id)
         admin_notification = (
