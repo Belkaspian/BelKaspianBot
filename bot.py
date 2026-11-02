@@ -7438,7 +7438,8 @@ async def admin_get_confirmed_deals_api(request):
                COALESCE(cd.planned_payment_date, ''),
                COALESCE(cd.kaiten_card_id, 0),
                COALESCE(cd.docs_status, 'NONE'),
-               COALESCE(cd.missing_docs, '')
+               COALESCE(cd.missing_docs, ''),
+               COALESCE(cd.pay_docs_error, '')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
         LEFT JOIN loads l ON cd.load_id = l.load_id
@@ -7465,7 +7466,8 @@ async def admin_get_confirmed_deals_api(request):
         "planned_payment_date": r[25],
         "kaiten_card_id": r[26],
         "docs_status": r[27],
-        "missing_docs": r[28]
+        "missing_docs": r[28],
+        "pay_docs_error": r[29]
     } for r in rows]
     return web.json_response({"deals": deals})
 
@@ -8282,6 +8284,10 @@ async def submit_pay_docs_direct_api(request):
 
         ord_num, truck_plate, route_str, date_str, price_str = row
 
+        # Фиксируем статус обработки, чтобы перевозчик сразу видел индикатор загрузки
+        cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'PROCESSING', pay_docs_error = '' WHERE id = ?", (deal_id,))
+        conn.commit()
+
         contents_list = ["Изучи пакет документов на оплату:"]
         for fn, file_bytes in raw_files:
             mime = detect_mime_type(file_bytes, fn)
@@ -8782,6 +8788,74 @@ async def admin_profile_changes_action_api(request):
     conn.close()
     return web.json_response({"error": "Неизвестное действие"}, status=400)
 
+async def admin_force_accounting_approval_api(request):
+    """Принудительная передача документов на оплату в бухгалтерию администратором вручную."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    deal_id = int(data.get("deal_id", 0))
+    if not deal_id:
+        return web.json_response({"error": "ID сделки не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, route, order_number, date FROM confirmed_deals WHERE id = ?", (deal_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return web.json_response({"error": "Сделка не найдена"}, status=404)
+
+    user_id, route_str, ord_num, date_str = row
+
+    today_dt = datetime.now(timezone.utc).date()
+    planned_pay_dt = calculate_payment_date(today_dt, 11)
+    planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE confirmed_deals 
+        SET pay_docs_status = 'IN_ACCOUNTING',
+            pay_docs_error = '',
+            pay_docs_submitted_at = ?,
+            planned_payment_date = ?
+        WHERE id = ?
+    """, (today_iso, planned_pay_str, deal_id))
+    conn.commit()
+    conn.close()
+
+    # Оповещение перевозчика
+    add_notification(
+        user_id,
+        "Документы приняты в бухгалтерию",
+        f"Документы по заявке {ord_num or deal_id} согласованы логистом вручную и приняты к оплате. План оплаты: {planned_pay_str}"
+    )
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"✅ Закрывающие документы по рейсу «{route_str}» ({ord_num or 'б/н'}) согласованы логистом вручную и переданы в бухгалтерию!\n\n🗓 Плановая дата оплаты: **{planned_pay_str}**",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    # Информирование бухгалтерского канала
+    try:
+        await bot.send_message(
+            chat_id=PAYMENT_DOCS_CHANNEL_ID,
+            text=f"📋 **Заказ #{ord_num or deal_id} ({route_str})**\nЛогист согласовал закрывающие документы вручную (в обход замечаний ИИ).\nПередано на проверку в бухгалтерию. План оплаты: {planned_pay_str}"
+        )
+    except Exception:
+        pass
+
+    return web.json_response({
+        "status": "success",
+        "planned_payment_date": planned_pay_str
+    })
+
 
 async def admin_verify_carrier_direct_api(request):
     """Прямое подтверждение верификации перевозчика из админки."""
@@ -8876,6 +8950,7 @@ async def web_server():
     app.router.add_get("/api/loads", get_loads_api)
     app.router.add_get("/api/my_loads", my_loads_api)
     app.router.add_post("/api/set_arrived_loading", set_arrived_loading_api)
+    app.router.add_post("/api/admin/force_accounting_approval", admin_force_accounting_approval_api)
     app.router.add_post("/api/set_unload_date", set_unload_date_api)
     app.router.add_get("/api/notifications", notifications_get_api)
     app.router.add_post("/api/notifications/read", notifications_read_api)
