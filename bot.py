@@ -84,6 +84,35 @@ def add_business_days(start_date: date, num_days: int) -> date:
             added += 1
     return cur_date
 
+def format_date_dd_mm_yyyy(d_str: str) -> str:
+    """Приводит дату к формату ДД.ММ.ГГГГ. Если дата не определена, возвращает прочерк '—'."""
+    if not d_str or str(d_str).strip() in ["—", "-", "Не указана", "Не распознана", "None", "null", ""]:
+        return "—"
+    s = str(d_str).strip()
+    m_iso = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
+    if m_iso:
+        return f"{m_iso.group(3)}.{m_iso.group(2)}.{m_iso.group(1)}"
+    m_ru = re.match(r'^(\d{1,2})[\./](\d{1,2})[\./](\d{2,4})$', s)
+    if m_ru:
+        day = m_ru.group(1).zfill(2)
+        month = m_ru.group(2).zfill(2)
+        year = m_ru.group(3)
+        if len(year) == 2:
+            year = "20" + year
+        return f"{day}.{month}.{year}"
+    return s
+
+def format_payment_docs_caption(order_number: str, loading_date: str, unloading_date: str) -> str:
+    """Формирует строгую подпись к документам для бухгалтерии с прочерками вместо пустых значений."""
+    ord_clean = order_number.strip() if order_number and order_number.strip() not in ["б/н", "Не указан", "—", "-"] else "—"
+    load_clean = format_date_dd_mm_yyyy(loading_date)
+    unload_clean = format_date_dd_mm_yyyy(unloading_date)
+    return (
+        f"Заказ: {ord_clean}\n"
+        f"Дата загрузки: {load_clean}\n"
+        f"Дата выгрузки: {unload_clean}"
+    )
+
 def calculate_payment_date(start_date: date, num_days: int = 11) -> date:
     """
     Добавляет 11 обычных календарных дней от даты подачи документов.
@@ -165,7 +194,7 @@ def is_convert_allowed(user: types.User) -> bool:
 
 # ==================== ОПРЕДЕЛЕНИЕ ТИПА ФАЙЛА ПО MAGIC BYTES ====================
 def detect_mime_type(file_bytes: bytes, file_path: str = "") -> str:
-    if file_bytes.startswith(b'%PDF'):
+    if b'%PDF' in file_bytes[:1024]:
         return "application/pdf"
     elif file_bytes.startswith(b'\x89PNG'):
         return "image/png"
@@ -582,7 +611,11 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0",
         "ALTER TABLE bids ADD COLUMN admin_chat_id INTEGER",
         "ALTER TABLE bids ADD COLUMN admin_message_id INTEGER",
-        "ALTER TABLE bids ADD COLUMN user_message_id INTEGER"
+        "ALTER TABLE bids ADD COLUMN user_message_id INTEGER",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_pdf BLOB",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_loading_date TEXT DEFAULT ''",
+        "ALTER TABLE confirmed_deals ADD COLUMN pay_docs_unloading_date TEXT DEFAULT ''"
+    ]
     ]
     for migration in migrations:
         try:
@@ -2526,10 +2559,13 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
     for file_path, file_bytes in valid_files:
         mime = detect_mime_type(file_bytes, file_path)
         if mime == "application/pdf":
-            # Разворачиваем все страницы PDF в качественные изображения
             pdf_pages = convert_pdf_to_images(file_bytes)
-            for page_bytes in pdf_pages:
-                contents.append(genai_types.Part.from_bytes(data=page_bytes, mime_type="image/jpeg"))
+            if pdf_pages:
+                for page_bytes in pdf_pages:
+                    contents.append(genai_types.Part.from_bytes(data=page_bytes, mime_type="image/jpeg"))
+            else:
+                # Если конвертация в картинки не удалась — передаем PDF в Gemini напрямую
+                contents.append(genai_types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"))
         else:
             try:
                 pil_img = Image.open(io.BytesIO(file_bytes))
@@ -6094,8 +6130,12 @@ async def direct_upload_docs_api(request):
                 mime = detect_mime_type(content, fname)
                 if mime == "application/pdf":
                     pdf_pages = convert_pdf_to_images(content)
-                    for page_bytes in pdf_pages:
-                        contents.append(genai_types.Part.from_bytes(data=page_bytes, mime_type="image/jpeg"))
+                    if pdf_pages:
+                        for page_bytes in pdf_pages:
+                            contents.append(genai_types.Part.from_bytes(data=page_bytes, mime_type="image/jpeg"))
+                    else:
+                        # Если конвертация в картинки не удалась — передаем PDF в Gemini напрямую
+                        contents.append(genai_types.Part.from_bytes(data=content, mime_type="application/pdf"))
                 else:
                     try:
                         pil_img = Image.open(io.BytesIO(content))
@@ -8211,25 +8251,39 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
     date_str = deal_info[1] if deal_info else ""
     price_str = deal_info[2] if deal_info else ""
 
-    caption_text = (
-        f"Заказ: {ord_num or 'б/н'}\n"
-        f"Дата загрузки: {result.cmr_loading_date or 'Не указана'}\n"
-        f"Дата выгрузки: {result.cmr_unloading_date or 'Не указана'}"
-    )
+    raw_file_tuples = []
+    for fid in all_files:
+        try:
+            f_info = await bot.get_file(fid)
+            buf_f = io.BytesIO()
+            await bot.download_file(f_info.file_path, destination=buf_f)
+            raw_file_tuples.append((f_info.file_path or "doc", buf_f.getvalue()))
+        except Exception:
+            pass
+
+    pdf_bytes = await generate_single_pdf_bytes(raw_file_tuples, route_str, date_str, price_str, "", "")
+    pdf_filename = f"{ord_num or 'Заказ'}.pdf"
+    c_load_date = result.cmr_loading_date or ""
+    c_unload_date = result.cmr_unloading_date or ""
+
+    # Сохраняем PDF и даты в БД для возможности ручного согласования логистом
+    try:
+        conn_save = sqlite3.connect("cargo_bot.db")
+        conn_save.execute("""
+            UPDATE confirmed_deals 
+            SET pay_docs_pdf = ?,
+                pay_docs_loading_date = ?,
+                pay_docs_unloading_date = ?
+            WHERE id = ?
+        """, (pdf_bytes, c_load_date, c_unload_date, deal_id))
+        conn_save.commit()
+        conn_save.close()
+    except Exception as save_err:
+        logging.error(f"Error saving payment pdf to db: {save_err}")
+
+    caption_text = format_payment_docs_caption(ord_num, c_load_date, c_unload_date)
 
     try:
-        raw_file_tuples = []
-        for fid in all_files:
-            try:
-                f_info = await bot.get_file(fid)
-                buf_f = io.BytesIO()
-                await bot.download_file(f_info.file_path, destination=buf_f)
-                raw_file_tuples.append((f_info.file_path or "doc", buf_f.getvalue()))
-            except Exception: pass
-
-        pdf_bytes = await generate_single_pdf_bytes(raw_file_tuples, route_str, date_str, price_str, "", "")
-        pdf_filename = f"{ord_num or 'Заявка'}.pdf"
-
         if pdf_bytes:
             pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
             await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
@@ -8293,11 +8347,28 @@ async def submit_pay_docs_direct_api(request):
             mime = detect_mime_type(file_bytes, fn)
             contents_list.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime))
 
+        # Генерируем единый PDF файл пакета документов
+        pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, "", "")
+        pdf_filename = f"{ord_num or 'Заказ'}.pdf"
+
         # Вызываем ИИ-агента для проверки
         result = await verify_payment_docs_with_ai(contents_list, expected_order_num=ord_num, expected_truck=truck_plate)
 
+        c_load_date = result.cmr_loading_date or ""
+        c_unload_date = result.cmr_unloading_date or ""
+
+        # Всегда сохраняем скомпилированный PDF и распознанные даты в базу (для возможности ручного согласования)
+        cursor.execute("""
+            UPDATE confirmed_deals 
+            SET pay_docs_pdf = ?,
+                pay_docs_loading_date = ?,
+                pay_docs_unloading_date = ?
+            WHERE id = ?
+        """, (pdf_bytes, c_load_date, c_unload_date, deal_id))
+        conn.commit()
+
         if not result.is_valid:
-            err_msg = " Ошибки в документах:\n• " + "\n• ".join(result.errors)
+            err_msg = "Ошибки в документах:\n• " + "\n• ".join(result.errors)
             cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ?", (err_msg, deal_id))
             conn.commit()
             conn.close()
@@ -8305,7 +8376,7 @@ async def submit_pay_docs_direct_api(request):
             add_notification(user_id, "Ошибки в документах на оплату", err_msg)
             return web.json_response({"status": "error", "error": err_msg}, status=400)
 
-        # Если все хорошо: рассчитываем плановую дату оплаты (+11 рабочих дней от сегодня)
+        # Если ошибок нет: фиксируем статус и отправляем документ в канал бухгалтерии
         today_dt = datetime.now(timezone.utc).date()
         planned_pay_dt = calculate_payment_date(today_dt, 11)
         planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
@@ -8319,16 +8390,7 @@ async def submit_pay_docs_direct_api(request):
         conn.commit()
         conn.close()
 
-        # Генерируем 1 объединенный PDF файл
-        pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, "", "")
-        pdf_filename = f"{ord_num or 'Заявка'}.pdf"
-
-        # Отправляем в канал документов на оплату
-        caption_text = (
-            f"Заказ: {ord_num or 'б/н'}\n"
-            f"Дата загрузки: {result.cmr_loading_date or 'Не указана'}\n"
-            f"Дата выгрузки: {result.cmr_unloading_date or 'Не указана'}"
-        )
+        caption_text = format_payment_docs_caption(ord_num, c_load_date, c_unload_date)
 
         if pdf_bytes:
             pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
@@ -8803,13 +8865,19 @@ async def admin_force_accounting_approval_api(request):
 
     conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, route, order_number, date FROM confirmed_deals WHERE id = ?", (deal_id,))
+    cursor.execute("""
+        SELECT user_id, route, order_number, date, pay_docs_pdf,
+               COALESCE(pay_docs_loading_date, ''), COALESCE(pay_docs_unloading_date, ''),
+               COALESCE(unload_date, '')
+        FROM confirmed_deals 
+        WHERE id = ?
+    """, (deal_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return web.json_response({"error": "Сделка не найдена"}, status=404)
 
-    user_id, route_str, ord_num, date_str = row
+    user_id, route_str, ord_num, date_str, saved_pdf, load_date, unload_date_cmr, unload_date_deal = row
 
     today_dt = datetime.now(timezone.utc).date()
     planned_pay_dt = calculate_payment_date(today_dt, 11)
@@ -8842,14 +8910,21 @@ async def admin_force_accounting_approval_api(request):
     except Exception:
         pass
 
-    # Информирование бухгалтерского канала
+    # Определяем даты для подписи (с прочерками, если не распознаны)
+    final_load_date = load_date or ""
+    final_unload_date = unload_date_cmr or unload_date_deal or ""
+    caption_text = format_payment_docs_caption(ord_num, final_load_date, final_unload_date)
+
+    # Отправляем скомпилированный PDF в бухгалтерский канал с текстом по образцу
     try:
-        await bot.send_message(
-            chat_id=PAYMENT_DOCS_CHANNEL_ID,
-            text=f"📋 **Заказ #{ord_num or deal_id} ({route_str})**\nЛогист согласовал закрывающие документы вручную (в обход замечаний ИИ).\nПередано на проверку в бухгалтерию. План оплаты: {planned_pay_str}"
-        )
-    except Exception:
-        pass
+        if saved_pdf and len(saved_pdf) > 100:
+            pdf_filename = f"{ord_num or 'Заказ'}.pdf"
+            pdf_file = types.BufferedInputFile(saved_pdf, filename=pdf_filename)
+            await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+        else:
+            await bot.send_message(chat_id=PAYMENT_DOCS_CHANNEL_ID, text=caption_text)
+    except Exception as e:
+        logging.error(f"Error sending pay docs to channel during manual approval: {e}")
 
     return web.json_response({
         "status": "success",
