@@ -1723,41 +1723,41 @@ async def parse_cargos_with_ai(raw_text: str) -> list[dict]:
 
 
 class VehicleDetails(BaseModel):
-    brand: Optional[str] = Field(description="Марка ТС как на документе (VOLVO, SCHMITZ). null, если не видно")
-    model: Optional[str] = Field(description="Модель ТС. null, если не видно")
-    plate: Optional[str] = Field(description="Гос. номер без пробелов, например 10486QCA. null, если не видно")
-    vin: Optional[str] = Field(description="VIN ровно 17 символов, иначе null")
-    country: Optional[str] = Field(description="Страна регистрации ТС, полное название на русском. null, если не видно")
+    brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
+    model: Optional[str] = Field(default="", description="Модель ТС")
+    plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
+    vin: Optional[str] = Field(default="Не распознан", description="VIN номер")
+    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации")
 
 class DocumentDetails(BaseModel):
-    full_name: Optional[str] = Field(description="ФИО владельца документа. null, если не видно")
-    number: Optional[str] = Field(description="Номер документа без пробелов и знака №")
-    issue_date: Optional[str] = Field(description="Дата выдачи ДД.ММ.ГГГГ")
-    expiry_date: Optional[str] = Field(description="Срок действия ДД.ММ.ГГГГ или INDEFINITE")
-    authority: Optional[str] = Field(description="Краткое наименование или код органа выдачи")
-    country: Optional[str] = Field(description="Страна выдачи, полное название на русском")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта")
+    number: Optional[str] = Field(default="Не распознан", description="Номер документа")
+    issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
+    expiry_date: Optional[str] = Field(default="Не указана", description="Срок действия документа")
+    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи")
+    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(description="ФИО водителя строго из паспорта")
-    birth_date: Optional[str] = Field(description="Дата рождения ДД.ММ.ГГГГ")
-    phones: Optional[str] = Field(description="Уникальные телефоны строкой через запятую. null, если нет")
-    passport: Optional[DocumentDetails] = Field(description="Данные паспорта. null, если паспорта нет")
-    license: Optional[DocumentDetails] = Field(description="Данные водительского удостоверения. null, если его нет")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта")
+    birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
+    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
+    passport: Optional[DocumentDetails] = None
+    license: Optional[DocumentDetails] = None
 
 class ImageClassification(BaseModel):
-    image_index: int = Field(description="Номер изображения, начиная с 0 (текстовое сообщение не считается)")
-    category: str = Field(description="Одно из: PASSPORT_FRONT, PASSPORT_BACK, DRIVERS_LICENSE_FRONT, DRIVERS_LICENSE_BACK, TRUCK_REGISTRATION, TRAILER_REGISTRATION, OTHER")
+    image_index: int = Field(description="Порядковый номер")
+    category: str = Field(description="Категория документа")
 
 class FullCargoSubmission(BaseModel):
-    truck: Optional[VehicleDetails] = Field(description="Данные тягача. null, если документа нет")
-    trailer: Optional[VehicleDetails] = Field(description="Данные прицепа. null, если документа нет")
-    driver: Optional[DriverDetails] = Field(description="Данные водителя")
-    image_roles: list[ImageClassification] = Field(description="Роль каждого изображения по порядку")
+    truck: Optional[VehicleDetails] = None
+    trailer: Optional[VehicleDetails] = None
+    driver: Optional[DriverDetails] = None
+    image_roles: Optional[list[ImageClassification]] = None
 
 class OrderPdfInfo(BaseModel):
-    order_number: Optional[str] = Field(description="Номер договора-заявки или номер заявки. null, если не виден")
-    truck_plate: Optional[str] = Field(description="Гос. номер тягача без пробелов. null, если не виден")
-    trailer_plate: Optional[str] = Field(description="Гос. номер прицепа без пробелов. null, если не указан")
+    order_number: Optional[str] = Field(default="", description="Номер договора-заявки или номер заявки")
+    truck_plate: Optional[str] = Field(default="", description="Гос. номер грузового автомобиля / тягача")
+    trailer_plate: Optional[str] = Field(default="", description="Гос. номер полуприцепа / прицепа (если указан)")
 
 
 class PaymentDocsVerificationResult(BaseModel):
@@ -1782,112 +1782,9 @@ class PaymentDocsVerificationResult(BaseModel):
     is_valid: bool = Field(description="Выполнены ли абсолютно все требования без ошибок")
     errors: list[str] = Field(default=[], description="Список найденных ошибок на русском языке")
 
-class PaymentDocsExtraction(BaseModel):
-    """Только факты, которые ИИ видит на документах. Вердикт считает код (_build_payment_verdict)."""
-    has_cmr: bool = Field(description="В пакете есть ЦМР (CMR)")
-    has_invoice: bool = Field(description="В пакете есть счёт на оплату")
-    has_act: bool = Field(description="В пакете есть акт выполненных работ или оказанных услуг")
-    has_signed_application: bool = Field(description="Есть договор-заявка с подписью или печатью хотя бы одной стороны")
-    app_signed_by_both: bool = Field(description="На заявке есть подпись или печать и заказчика, и перевозчика")
-    app_order_number: str = Field(description="Номер заявки без слова «Заявка» и знака №; пустая строка, если не виден")
-    app_truck_plate: str = Field(description="Гос. номер тягача из заявки; пустая строка, если не виден")
-    cmr_loading_date: str = Field(description="Дата загрузки ДД.ММ.ГГГГ; пустая строка, если не читается")
-    cmr_unloading_date: str = Field(description="Дата выгрузки из графы 24 ДД.ММ.ГГГГ; пустая строка, если не читается")
-    cmr_truck_plate: str = Field(description="Гос. номер тягача из ЦМР; пустая строка, если не виден")
-    cmr_box16_stamp: bool = Field(description="В графе 16 ЦМР есть печать или подпись")
-    cmr_box23_stamp: bool = Field(description="В графе 23 ЦМР есть печать или подпись")
-    cmr_box24_stamp: bool = Field(description="В графе 24 ЦМР есть и печать, и подпись получателя груза")
-    act_date: str = Field(description="Дата акта из заголовка ДД.ММ.ГГГГ; пустая строка, если не читается")
-
-
-_PAY_CYR_TO_LAT = str.maketrans({
-    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H",
-    "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X",
-})
-_PAY_BLANK = {"", "не указан", "не указана", "не распознан", "не распознана", "—", "-", "none", "null", "б/н"}
-
-def _pay_is_blank(value) -> bool:
-    return str(value or "").strip().lower() in _PAY_BLANK
-
-def _pay_norm(value) -> str:
-    """Верхний регистр, кириллические двойники → латиница, только буквы и цифры."""
-    s = str(value or "").upper().translate(_PAY_CYR_TO_LAT)
-    return re.sub(r"[^A-Z0-9]", "", s)
-
-def _pay_plate_match(expected, found) -> bool:
-    e, f = _pay_norm(expected), _pay_norm(found)
-    return bool(e and f and e in f)  # «in» — чтобы «тягач/прицеп» в одной строке не ломал сравнение
-
-def _pay_order_match(expected, found) -> bool:
-    e, f = _pay_norm(expected), _pay_norm(found)
-    return bool(e and f and (e == f or (min(len(e), len(f)) >= 3 and (e in f or f in e))))
-
-def _pay_parse_date(value):
-    m = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})", str(value or ""))
-    if not m:
-        return None
-    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    if y < 100:
-        y += 2000
-    try:
-        return date(y, mo, d)
-    except ValueError:
-        return None
-
-def _build_payment_verdict(x: PaymentDocsExtraction, expected_order_num, expected_truck) -> PaymentDocsVerificationResult:
-    errors = []
-    exp_order = "" if _pay_is_blank(expected_order_num) else str(expected_order_num).strip()
-    exp_truck = "" if _pay_is_blank(expected_truck) else str(expected_truck).strip()
-
-    if not x.has_cmr:
-        errors.append("Не найден ЦМР (CMR)")
-    if not x.has_invoice:
-        errors.append("Не найден счёт на оплату")
-    if not x.has_act:
-        errors.append("Не найден акт выполненных работ")
-    if not x.has_signed_application:
-        errors.append("Не найден подписанный договор-заявка")
-    elif not x.app_signed_by_both:
-        errors.append("Заявка должна быть подписана и скреплена печатями с двух сторон (заказчик и перевозчик)")
-
-    if x.has_signed_application:
-        if exp_order and not _pay_is_blank(x.app_order_number) and not _pay_order_match(exp_order, x.app_order_number):
-            errors.append(f"Номер заявки в документе ({x.app_order_number}) не совпадает с ожидаемым ({exp_order})")
-        if exp_truck and not _pay_is_blank(x.app_truck_plate) and not _pay_plate_match(exp_truck, x.app_truck_plate):
-            errors.append(f"Номер авто в заявке ({x.app_truck_plate}) не совпадает с ожидаемым ({exp_truck})")
-
-    unload_dt = None
-    if x.has_cmr:
-        load_dt = _pay_parse_date(x.cmr_loading_date)
-        unload_dt = _pay_parse_date(x.cmr_unloading_date)
-        if not load_dt:
-            errors.append("В ЦМР не удалось прочитать дату загрузки (графа 21)")
-        if not unload_dt:
-            errors.append("В ЦМР не удалось прочитать дату выгрузки (графа 24)")
-        if load_dt and unload_dt and unload_dt < load_dt:
-            errors.append("В ЦМР дата выгрузки раньше даты загрузки")
-        if exp_truck and not _pay_is_blank(x.cmr_truck_plate) and not _pay_plate_match(exp_truck, x.cmr_truck_plate):
-            errors.append(f"Номер авто в ЦМР ({x.cmr_truck_plate}) не совпадает с ожидаемым ({exp_truck})")
-        if not x.cmr_box16_stamp:
-            errors.append("В ЦМР нет печати или подписи перевозчика в графе 16")
-        if not x.cmr_box23_stamp:
-            errors.append("В ЦМР нет печати или подписи в графе 23")
-        if not x.cmr_box24_stamp:
-            errors.append("В ЦМР нет печати и подписи получателя груза в графе 24")
-
-    if x.has_act:
-        act_dt = _pay_parse_date(x.act_date)
-        if not act_dt:
-            errors.append("В акте не удалось прочитать дату")
-        elif unload_dt and act_dt != unload_dt:
-            errors.append(f"Дата акта ({x.act_date}) должна совпадать с датой выгрузки в графе 24 ЦМР ({x.cmr_unloading_date})")
-
-    return PaymentDocsVerificationResult(**x.model_dump(), is_valid=not errors, errors=errors)
-
-
 async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expected_truck="") -> PaymentDocsVerificationResult:
     """
-    Проверяет пакет документов на оплату: ИИ извлекает факты, а сравнения и итоговый вердикт делает код.
+    Проверяет пакет документов на оплату через Gemini API.
     """
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
         return PaymentDocsVerificationResult(
@@ -1897,57 +1794,31 @@ async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expe
         )
 
     system_prompt = (
-        "Ты — внимательный специалист бухгалтерии транспортной компании. Тебе передан пакет сканов и фото документов на оплату "
-        "(страницы могут идти в любом порядке, в одном файле может быть несколько страниц). "
-        "Твоя задача — ТОЛЬКО извлечь факты в JSON по схеме. Решение «принять или отклонить» принимает программа, "
-        "поэтому ничего не оценивай и не угадывай.\n\n"
-
-        "ДОКУМЕНТЫ (отметь, какие есть в пакете)\n"
-        "- has_cmr: ЦМР (CMR) — международная товарно-транспортная накладная с надписью CMR и пронумерованными графами.\n"
-        "- has_invoice: «Счёт на оплату» или Invoice.\n"
-        "- has_act: «Акт выполненных работ» или «Акт оказанных услуг».\n"
-        "- has_signed_application: договор-заявка на перевозку, на котором видна подпись или печать хотя бы одной стороны. "
-        "Пустой неподписанный бланк — false.\n\n"
-
-        "ЗАЯВКА\n"
-        "- app_signed_by_both: true только если в блоке подписей (обычно на последней странице) есть подпись или печать "
-        "И заказчика, И перевозчика.\n"
-        "- app_order_number: номер заявки из заголовка, только номер.\n"
-        "- app_truck_plate: гос. номер тягача из заявки.\n\n"
-
-        "ЦМР\n"
-        "- cmr_loading_date: дата в графе 21 («Составлена в … дата»); если графа пуста — дата в графе 4 (место и дата погрузки).\n"
-        "- cmr_unloading_date: дата рядом с отметкой получателя в графе 24 («Груз получил»). Если дат несколько — самая поздняя.\n"
-        "- cmr_truck_plate: гос. номер тягача из графы 22; если там номера нет — из граф 16–18 или 23, где вписаны данные ТС.\n"
-        "- cmr_box16_stamp: в графе 16 (перевозчик) есть печать или подпись.\n"
-        "- cmr_box23_stamp: в графе 23 есть печать или подпись перевозчика.\n"
-        "- cmr_box24_stamp: в графе 24 есть и печать, и подпись получателя груза. "
-        "Подпись и печать отправителя (графа 22) сюда не относятся.\n\n"
-
-        "АКТ\n"
-        "- act_date: дата акта из заголовка («Акт № … от …»). Не путай с периодом оказания услуг и с датами у подписей.\n\n"
-
-        "ОБЩИЕ ПРАВИЛА\n"
-        "- Печать — это оттиск (круглый или прямоугольный), подпись — рукописный росчерк. "
-        "Печатный текст формы, рамки и пустые линии подписью не считаются. Если сомневаешься — false.\n"
-        "- Даты записывай как ДД.ММ.ГГГГ (например, «15 марта 2026 г.» → 15.03.2026). "
-        "Если дату нельзя прочитать уверенно — пустая строка. Не угадывай.\n"
-        "- Гос. номера записывай без пробелов, как они видны на документе.\n"
-        "- Нет данных — пустая строка или false."
+        "Ты — эксперт финансовой службы и бухгалтерии транспортной компании. Твоя задача — тщательно проверить пакет документов на оплату:\n"
+        "1. Проверь наличие всех 4 типов документов: ЦМР (CMR), Счет, Акт выполненных работ, Подписанная заявка.\n"
+        f"2. Заявка: Должна быть подписана и скреплена печатями С 2-Х СТОРОН (заказчик и перевозчик). "
+        f"Сверь номер заявки (Ожидаемый: '{expected_order_num}') и номер авто (Ожидаемый: '{expected_truck}').\n"
+        "3. ЦМР (CMR):\n"
+        "   - Графа 21: Извлеки дату загрузки.\n"
+        "   - Графа 24: Извлеки дату выгрузки/отпуска авто (если несколько дат, бери последнюю когда авто отпустили).\n"
+        f"   - Графа 22: Сверь номер авто с ожидаемым '{expected_truck}'.\n"
+        "   - Проверь наличие печатей/подписей в Графе 16 и Графе 23.\n"
+        "   - Графа 24 (или рядом): ОБЯЗАТЕЛЬНО должна быть печать и подпись ПОЛУЧАТЕЛЯ ГРУЗА (подтверждение приемки).\n"
+        "4. Акт выполненных работ: Дата акта ДОЛЖНА СТРОГО СОВПАДАТЬ с датой выгрузки из графы 24 ЦМР.\n"
+        "5. Если есть хоть одно нарушение — установи is_valid=False и опиши подробную причину в списке errors."
     )
 
     config = genai_types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",
-        response_schema=PaymentDocsExtraction,
-        temperature=0.0
+        response_schema=PaymentDocsVerificationResult,
+        temperature=0.1
     )
 
-    # Для печатей и подписей сильные модели в приоритете, lite — в самом конце
     models_to_try = [
+        "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
         "gemini-2.5-flash"
     ]
 
@@ -1963,8 +1834,8 @@ async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expe
                 if "```" in raw_text:
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.MULTILINE)
                     raw_text = re.sub(r"\s*```$", "", raw_text, flags=re.MULTILINE)
-                extraction = PaymentDocsExtraction(**json.loads(raw_text))
-                return _build_payment_verdict(extraction, expected_order_num, expected_truck)
+                raw_json = json.loads(raw_text)
+                return PaymentDocsVerificationResult(**raw_json)
         except Exception as e:
             logging.warning(f"⚠️ Ошибка проверки документов на оплату моделью {model_name}: {e}")
 
@@ -2191,49 +2062,187 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
         return fallback_text, {}
 
-        system_prompt = """Ты — аудитор транспортных документов. Тебе передан набор изображений: паспорт водителя, водительское удостоверение, свидетельства о регистрации (СТС) тягача и прицепа. Извлеки данные и верни JSON строго по заданной схеме.
+    system_prompt = """Ты — высокоточный OCR‑аудитор транспортных документов. Извлекай данные строго по визуальному слою изображений (Visual Ground Truth). Никаких догадок, автозамен, исправлений или использования скрытого текста, за исключением явных разрешённых нормализаций, описанных ниже.
 
-ОБЩИЕ ПРАВИЛА
-1. Читай только то, что реально видно: символ в символ. Ничего не додумывай и не «исправляй».
-2. Нечитаемое, отсутствующее или сомнительное поле = null. Лучше null, чем неверное значение.
-3. MRZ (строки с символом «<») не использовать.
-4. Изображения нумеруются с 0 в порядке получения. Текстовое сообщение не считается.
-5. Если в пакете несколько паспортов или прав — бери первый по порядку.
-6. Рукописный текст с сомнением хотя бы в одном символе = null.
-7. Коды стран (RUS, BY, KZ, UZ, PL и т.д.) всегда переводи в полное название на русском.
+==================================================
+КРАТКИЕ ПРАВИЛА
+==================================================
+1. Читай только то, что видно: буква в букву, цифра в цифру.
+2. Полный запрет на MRZ (строки с '<'), скрытые PDF‑слои, сторонний OCR и словарные исправления.
+3. Если поле нечитаемо или отсутствует — возвращай null; фиксируй причину в review_reasons.
+4. Страницы нумеруются по порядку переданных изображений: Page 1, Page 2, ...
+5. Не добавляй, не удаляй и не переформатируй поля, не описывай внутреннюю логику промта в ответе.
 
-РАСПОЗНАВАНИЕ СИМВОЛОВ (самая частая ошибка)
-- 8 / 6 / 9: на СТС есть мелкая защитная сетка, она может «разрывать» верх цифры. У «8» два замкнутых кольца, у «6» верх — открытый хвост. Сравнивай соседние цифры между собой: «486» нельзя читать как «466».
-- 2 / Z: «2» с округлым верхом, «Z» из прямых линий. Если по формату номера на позиции должна быть цифра — это «2».
-- 0 / O / D, 1 / I / L, 8 / B, 3 / 8: решай по формату номера (на позиции цифра или буква). Если по формату неясно — null.
-- Номера Узбекистана: тягач — 2 цифры региона + 3 цифры + 3 латинские буквы (10 486 QCA → 10486QCA); прицеп — 2 цифры региона + 4 цифры + 2 латинские буквы (10 4987 BA → 104987BA). Номер пункта «1.» к номеру ТС не относится.
+==================================================
+РАЗРЕШЁННЫЕ НОРМАЛИЗАЦИИ И СТРОГИЕ ПРАВИЛА OCR
+==================================================
+- **КРИТИЧЕСКИ ВАЖНО — ЗАПРЕТ НА ПУТАНИЦУ СИМВОЛОВ (2 vs Z, 0 vs O, 8 vs 6, 8 vs B):**
+  * **СТРОЖАЙШИЙ КОНТРОЛЬ «8» vs «6» и «8» vs «9»:**
+    - На свидетельствах о регистрации (СТС Узбекистана, РФ, Казахстана, Беларуси) нанесена мелкая синяя фоновая защитная сетка (гильош). Она пересекает цифры и может создавать иллюзию, будто верхнее кольцо разомкнуто. НЕ ПОДДАВАЙСЯ на эту иллюзию!
+    - Цифра «8» имеет ДВА замкнутых овала (и сверху, и снизу). Даже если верхний овал пересечен фоновым узором или тоньше нижнего — это «8»!
+    - Цифра «6» замкнута ТОЛЬКО снизу, а сверху у неё длинный открытый изогнутый хвост.
+    - Если в госномере стоят похожие цифры подряд (например, комбинация «486»): сравнивай вторую и третью цифру между собой! Если у первой есть замкнутый верх, а у второй хвост открыт — это СТРОГО «486», писать «466» КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО!
+  * **СТРОЖАЙШИЙ КОНТРОЛЬ «2» vs «Z»:**
+    - Внимательно различай цифру «2» и латинскую букву «Z». Цифра «2» имеет округлый верх и плавный изгиб, буква «Z» состоит строго из прямых угловатых линий.
+    - В номерных знаках (госномерах), VIN-кодах, сериях/номерах паспортов и прав: если на позиции ожидается ЦИФРА — это ВСЕГДА цифра «2», а НЕ буква «Z»!
+  * **ДРУГИЕ ПАРЫ:**
+    - «0» (цифра ноль) и «O»/«D» (буква); «8» (восемь) и «B» (буква); «1» (один) и «I»/«L»; «3» (три) и «8» (восемь).
+  * **ФОРМАТ НОМЕРОВ УЗБЕКИСТАНА:**
+    - У тягачей/грузовых авто юрлиц формат строго: [2 цифры региона] [3 цифры] [3 латинские буквы], например: «10 486 QCA». Исключай номер пункта «1.» из номера ТС.
+    - У прицепов формат строго: [2 цифры региона] [4 цифры] [2 латинские буквы], например: «10 4987 BA».
+- **Телефоны:** удалять пробелы, скобки, тире; оставлять только цифры и ведущий '+'. Возвращать только уникальные номера (без дублей). Сортировку по приоритету (+7, +375) выполняет бэкенд.
+- **Номера документов (паспорт, ВУ):** удалять символы "№" и внутренние пробелы между серией и номером.
+- **VIN:** удалять пробелы и дефисы перед валидацией длины. Нормализация символов в VIN: 'I'→'1', 'O'→'0', 'Q'→'0' (только в VIN). Если после нормализации длина = 17 — VIN считается валидным.
+- **Коды стран:** конвертировать коды (RUS, BY, KZ, PL и т.д.) в полные названия на русском.
+- **Даты:** приводить к формату ДД.ММ.ГГГГ, если дата явно распознаваема.
+- **Двузначные годы:** для expiry_date/issue_date/date_of_birth дополнять двухзначный год по правилу 00–40 → 20XX; 41–99 → 19XX. Если контекст неоднозначен — поле = null и добавлять review_reasons "Дата указана только месяц/год или двузначный год неоднозначен".
+- Любые другие изменения, исправления или транслитерации запрещены.
 
-ПАСПОРТ (driver.passport)
-- full_name: ФИО из паспорта (фамилия, имя, отчество), регистр как в документе. Это же значение запиши в driver.full_name. ФИО с водительского удостоверения брать запрещено; если паспорта нет — оба поля null.
-- number: серия и номер слитно, без «№» и пробелов.
-- issue_date, expiry_date: ДД.ММ.ГГГГ. Бессрочный — "INDEFINITE". Если указаны только месяц и год или двузначный год неоднозначен — null. Двузначный год: 00–40 → 20XX, 41–99 → 19XX.
-- authority: только краткое название или код органа выдачи (например «МВД 02001», «MIA», «ИИБ»). Область, район, город и место рождения органом выдачи не являются.
-- country: гражданство или страна выдачи, полное название на русском.
-- driver.birth_date: ДД.ММ.ГГГГ из поля «Дата рождения». Если нет дня или месяца — null.
+==================================================
+ПРАВИЛА ПОЛЕЙ (ЯСНО И ОДНОЗНАЧНО)
+==================================================
+driver.full_name
+- Источник: СТРОГО И ИСКЛЮЧИТЕЛЬНО страница ПАСПОРТА (Surname / Given names / Patronymic).
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО брать ФИО с Водительского удостоверения (В/У)! Если паспорта нет — driver.full_name = null.
+- MRZ (строка с '<') категорически запрещено использовать; в таком случае full_name = null.
+- Сохранять регистр символов как на документе.
 
-ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ (driver.license)
-- number: без «№» и пробелов.
-- issue_date, expiry_date: ДД.ММ.ГГГГ по тем же правилам, что у паспорта.
-- country: страна выдачи, полное название на русском.
-- full_name и authority для прав = null.
+passport.issuing_authority
+- Считывать ТОЛЬКО краткое наименование или код органа выдачи (например: 'МВД 02001', 'MVD TJ', 'УВД', 'MIA', 'ИИБ').
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать область, регион, район, город или место рождения (например: 'FERGANA REGION', 'SUGHD REGION', 'OBLAST', 'DISTRICT')! Место жительства/рождения — это НЕ орган выдачи.
+- Заменять переносы строк и повторяющиеся пробелы на один одиночный пробел.
+- Если поле отсутствует — passport.issuing_authority = null.
 
-ТЕЛЕФОНЫ (driver.phones)
-- Телефоны, видимые на документах или указанные в текстовом сообщении. Одной строкой через запятую, без дублей, только цифры и ведущий «+». Если телефонов нет — null.
+passport.date_of_birth
+- Источник: поле "Date of birth / Дата рождения" на странице паспорта.
+- Формат вывода: "ДД.ММ.ГГГГ".
+- Если указаны только день и месяц без года — date_of_birth = null и добавлять review_reasons "Дата рождения неполная".
+- Если год указан двумя цифрами — дополнять по правилу 00–40 → 20XX; 41–99 → 19XX; при сомнении — null + review_reasons "Двузначный год в дате рождения неоднозначен".
+- MRZ категорически не использовать для извлечения даты рождения; если основное поле нечитаемо — date_of_birth = null и needs_human_review = true.
 
-ТРАНСПОРТ (truck — тягач, trailer — прицеп)
-- Определяй по СТС: СЕДЕЛЬНЫЙ ТЯГАЧ, ГРУЗОВОЙ, TRACTOR → truck; ПРИЦЕП, ПОЛУПРИЦЕП, YARIM TIRKAMA, TRAILER → trailer. Если документа нет — весь блок null.
-- plate: без пробелов и дефисов. Буквы пиши так, как они напечатаны на документе: для России — кириллица (А В Е К М Н О Р С Т У Х), для остальных стран (Беларусь, Казахстан, Узбекистан, Кыргызстан, Грузия, Армения, Азербайджан, Европа) — латиница.
-- vin: без пробелов и дефисов, ровно 17 символов. Допустимая замена: I→1, O→0, Q→0. Иначе null.
-- brand, model: как на документе (VOLVO, SCHMITZ).
-- country: страна регистрации ТС.
+passport.issue_date
+- Источник: поле "Issued on / Выдан" или штамп/подпись рядом с меткой органа выдачи.
+- Формат вывода: "ДД.ММ.ГГГГ".
+- Если указаны только месяц и год — issue_date = null и добавлять review_reasons "Дата выдачи указана только месяц/год".
+- Применять правило дополнения двухзначного года 00–40 → 20XX; 41–99 → 19XX; при сомнении — null + review_reasons.
+- Заменять переносы строк и повторяющиеся пробелы на один пробел при сохранении.
 
-image_roles
-- Для КАЖДОГО изображения: image_index (с 0) и category — строго одно из: PASSPORT_FRONT, PASSPORT_BACK, DRIVERS_LICENSE_FRONT, DRIVERS_LICENSE_BACK, TRUCK_REGISTRATION, TRAILER_REGISTRATION, OTHER.
+driver.country
+- Источник: поле "Гражданство / Citizenship" в паспорте (если есть) — возвращать полное название страны на русском.
+- Если в паспорте поле отсутствует или нечитаемо — country = null.
+
+country (общая)
+- Всегда возвращать полное название страны на русском языке.
+- Если на бланке указан код (RUS, BY, KZ, PL и т.д.) — конвертировать код в полное название на русском.
+- Если страны нет или нечитаема — country = null.
+
+expiry_date
+- Формат: "ДД.ММ.ГГГГ".
+- Если на документе указан только месяц и год — expiry_date = null и добавлять review_reasons "Дата указана только месяц/год".
+- Если бессрочно — "INDEFINITE".
+- Если отсутствует/нечитаема — expiry_date = null.
+
+driver.phones
+- Возвращать массив cleaned уникальных телефонов (только цифры и ведущий '+').
+- Сортировку по приоритету (+7, +375) выполняет бэкенд.
+- Если телефонов нет — phones = [].
+
+vehicles (массив объектов)
+- Если на изображении присутствуют СТС / регистрационные документы ТС, для КАЖДОГО документа ДОЛЖЕН создаваться объект в массиве "vehicles" (даже если VIN или госномер не распознаны).
+- brand: марка по визуальному слою или null.
+- model: модель по визуальному слою или null.
+- plate_number: гос. номер по визуальному слою (убрать пробелы при записи) или null.
+- **Алфавит для plate_number (явно):**
+  * Если страна регистрации ТС в {Россия, Беларусь, Казахстан} — для визуально совпадающих графем записывать кириллические символы: **А, В, Е, К, М, Н, О, Р, С, Т, У, Х** (использовать соответствующие Unicode‑символы кириллицы).
+  * Если страна регистрации — европейская или явно латинская — записывать латиницей.
+  * Если country = null и plate_number состоит только из перечисленных совпадающих графем и цифр — записывать эти графемы кириллицей и добавлять review_reasons "country не определена, применена кириллица по эвристике".
+  * **Позиционная логика:** если формат/шаблон номера для страны предполагает цифру в конкретной позиции — трактовать символ как цифру; если позиция предполагает букву — трактовать как букву. Не заменять букву 'O' на цифру '0' (и наоборот) автоматически, если позиционная логика не подтверждает замену.
+  * **Неоднозначность:** если в plate_number встречаются неоднозначные графемы (O/0, I/1, S/5 и т.п.) и позиционная логика не однозначна — не менять автоматически; ставить needs_human_review = true и добавлять review_reasons "Неоднозначные графемы в plate_number".
+- country: страна регистрации ТС — полное название на русском или null.
+- type: одно из TRUCK, TRAILER, UNKNOWN.
+  * Примеры: YARIM TIRKAMA / ПРИЦЕП / ПОЛУПРИЦЕП → TRAILER; СЕДЕЛЬНЫЙ ТЯГАЧ / ГРУЗОВОЙ → TRUCK.
+  * Если документ явно указывает легковой автомобиль (SEDAN, PASSENGER) и ваша бизнес‑логика требует отдельного типа — интегратор может расширить типы; по умолчанию для не‑грузовых/не‑прицепных ТС возвращать UNKNOWN.
+- plate_number и vin принадлежат объекту vehicle (vin внутри каждого элемента vehicles).
+
+VIN
+- Перед проверкой удалить пробелы и дефисы.
+- После очистки VIN должен состоять ровно из 17 символов.
+- Допустимая нормализация: 'I'→'1', 'O'→'0', 'Q'→'0'.
+- Если после нормализации длина = 17 — vin считается валидным.
+- Если после очистки/нормализации длина ≠ 17 — vin = null.
+
+Рукописный текст
+- Если текст в поле написан от руки и есть сомнения хотя бы в одном символе — ставь null и добавляй review_reasons "Рукописный текст/нечитаемо".
+
+==================================================
+verification_flags
+==================================================
+- needs_human_review = true и добавлять строки в review_reasons (без дубликатов), если:
+  * На изображении есть Паспорт, но full_name = null → reason: "Отсутствует или нечитаемо ФИО на паспорте".
+  * На изображении есть СТС/регистрационный документ, но VIN = null → reason: "VIN не найден или некорректен".
+  * Изображение размыто, обрезано или нечитаемо → reason: "Размыто/обрезано".
+  * На документе указана только месяц/год в дате или двузначный год неоднозначен → reason: "Дата указана только месяц/год".
+  * Текст рукописный и есть сомнения → reason: "Рукописный текст/нечитаемо".
+  * Неоднозначные графемы в plate_number (O/0, I/1, S/5 и т.п.) → reason: "Неоднозначные графемы в plate_number".
+  * Орган выдачи частично нечитаем → reason: "Орган выдачи частично нечитаем".
+  * Есть явные сомнения в символах → reason: краткая причина на русском.
+- review_reasons — массив уникальных строк на русском; если причин нет — [].
+
+==================================================
+ПОВЕДЕНИЕ ПРИ МНОГОСТРАНИЧНОСТИ
+==================================================
+- Страницы нумеруются по порядку переданных изображений: Page 1, Page 2, ...
+- В image_roles должны быть описаны ВСЕ переданные страницы по порядку.
+- Если в пакете несколько паспортов, driver = данные из первого обнаруженного паспорта (по порядку страниц).
+- Если документов на ТС нет совсем — возвращать "vehicles": [].
+- Для поддержки нескольких водителей интеграция должна передавать отдельные пакеты или оборачивать driver в массив на уровне интеграции.
+
+==================================================
+КАТЕГОРИИ И КАЧЕСТВО
+==================================================
+category: PASSPORT_FRONT | PASSPORT_BACK | DRIVERS_LICENSE_FRONT | DRIVERS_LICENSE_BACK | TRUCK_REGISTRATION | TRAILER_REGISTRATION | OTHER
+quality: EXCELLENT | GOOD | POOR | UNREADABLE
+
+==================================================
+ФОРМАТ ВЫВОДА (СТРОГО)
+==================================================
+Выводи строго валидный JSON без тегов <analysis>, markdown-разметки или пояснений:
+{ 
+  "image_roles":[{"image_index":0,"category":"truck_front"}],
+  "driver":{
+    "full_name": "ФИО водителя строго из паспорта",
+    "birth_date": "ДД.ММ.ГГГГ",
+    "phones": "номер телефона если есть",
+    "passport":{
+      "full_name": "ФИО владельца",
+      "number": "серия и номер паспорта",
+      "issue_date": "ДД.ММ.ГГГГ",
+      "expiry_date": "ДД.ММ.ГГГГ",
+      "authority": "орган выдачи",
+      "country": "страна выдачи"
+    },
+    "license":{
+      "number": "номер В/У",
+      "issue_date": "ДД.ММ.ГГГГ",
+      "expiry_date": "ДД.ММ.ГГГГ",
+      "country": "страна выдачи"
+    }
+  },
+  "truck":{
+    "brand": "марка тягача (например FAW / VOLVO)",
+    "model": "модель тягача",
+    "plate": "госномер тягача (например 10467QCA)",
+    "vin": "VIN тягача 17 знаков",
+    "country": "страна регистрации тягача"
+  },
+  "trailer":{
+    "brand": "марка прицепа (например SCHMITZ)",
+    "model": "модель прицепа",
+    "plate": "госномер прицепа (например 105198BA)",
+    "vin": "VIN прицепа",
+    "country": "страна регистрации прицепа"
+  }
+}
 """
 
     config = genai_types.GenerateContentConfig(
