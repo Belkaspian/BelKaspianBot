@@ -1913,14 +1913,20 @@
         </div>
     </div>
 
-    <!-- Модальное окно ручного добавления груза на Биржу -->
+    <!-- Модальное окно ручного добавления / назначения груза -->
     <div class="modal-overlay" id="adminAddLoadModal" style="z-index: 2600 !important;">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Добавить груз на Биржу</div>
+                <div class="modal-title" id="addLoadModalTitle">Добавить груз на Биржу</div>
                 <div class="modal-close" onclick="closeModal('adminAddLoadModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
+            </div>
+            <div class="form-group">
+                <label>Назначение груза</label>
+                <select id="addLoadCarrierSelect" onchange="handleAddLoadCarrierChange()">
+                    <option value="0">Опубликовать на Бирже (для всех)</option>
+                </select>
             </div>
             <div class="form-group">
                 <label>Направление (Страна назначения):</label>
@@ -1970,7 +1976,7 @@
                 <textarea id="addLoadComment" placeholder="Дополнительная информация для перевозчика..."></textarea>
             </div>
             <div class="buttons">
-                <button class="btn btn-primary" onclick="submitAdminAddLoad()">Опубликовать на Бирже</button>
+                <button class="btn btn-primary" id="addLoadSubmitBtn" onclick="submitAdminAddLoad()">Опубликовать на Бирже</button>
                 <button class="btn btn-secondary" onclick="closeModal('adminAddLoadModal')">Отмена</button>
             </div>
         </div>
@@ -3664,6 +3670,12 @@
             }
 
             let subNavHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Заказы</div>
+                    <button class="btn btn-primary admin-head-btn" onclick="openAdminAddLoadModal()">
+                        Назначить заказ
+                    </button>
+                </div>
                 <div class="sub-nav" style="margin-bottom: 8px; overflow-x: auto; white-space: nowrap; gap: 4px; padding-bottom: 4px;">
                     <div class="sub-nav-btn ${adminDealSubTab === 'all' ? 'active' : ''}" onclick="switchAdminDealSubTab('all')">
                         Все (${baseList.length})
@@ -3869,6 +3881,9 @@
                                 </span>
                             </div>
                             <div style="display:flex; gap:4px; align-items:center; justify-content:flex-end;" onclick="event.stopPropagation()">
+                                <button class="btn btn-primary" style="padding:2px 7px; font-size:10px; height:26px; min-height:26px;" onclick="openAdminAddLoadModal(${c.user_id}); event.stopPropagation();" title="Назначить груз этому перевозчику">
+                                    + Рейс
+                                </button>
                                 ${c.verification_status !== 'VERIFIED' ? `
                                     <button class="btn btn-success" style="padding:2px 7px; font-size:10px; height:26px; min-height:26px;" onclick="directVerifyCarrier(${c.user_id}, event)" title="Подтвердить верификацию">
                                         Подтвердить
@@ -4059,7 +4074,21 @@
             }
         }
 
-        function openAdminAddLoadModal() {
+        function handleAddLoadCarrierChange() {
+            let select = document.getElementById('addLoadCarrierSelect');
+            let val = select ? select.value : '0';
+            let titleEl = document.getElementById('addLoadModalTitle');
+            let btnEl = document.getElementById('addLoadSubmitBtn');
+            if (val !== '0') {
+                if (titleEl) titleEl.textContent = 'Назначить груз перевозчику';
+                if (btnEl) btnEl.textContent = 'Назначить перевозчику';
+            } else {
+                if (titleEl) titleEl.textContent = 'Добавить груз на Биржу';
+                if (btnEl) btnEl.textContent = 'Опубликовать на Бирже';
+            }
+        }
+
+        function openAdminAddLoadModal(preselectedCarrierId = 0) {
             document.getElementById('addLoadRoute').value = '';
             document.getElementById('addLoadDate').value = '';
             document.getElementById('addLoadPrice').value = '';
@@ -4069,6 +4098,21 @@
             document.getElementById('addLoadWeight').value = 'до 22т';
             document.getElementById('addLoadDetails').value = '';
             document.getElementById('addLoadComment').value = '';
+
+            // Заполняем список перевозчиков
+            let carrierSelect = document.getElementById('addLoadCarrierSelect');
+            if (carrierSelect) {
+                carrierSelect.innerHTML = '<option value="0">Опубликовать на Бирже (для всех)</option>';
+                allAdminCarriersArray.forEach(c => {
+                    let opt = document.createElement('option');
+                    opt.value = String(c.user_id);
+                    opt.textContent = `${c.company} (${c.name || 'Сотрудник'})`;
+                    carrierSelect.appendChild(opt);
+                });
+                carrierSelect.value = String(preselectedCarrierId || 0);
+            }
+
+            handleAddLoadCarrierChange();
             document.getElementById('adminAddLoadModal').classList.add('active');
         }
 
@@ -4083,6 +4127,7 @@
             let weight = document.getElementById('addLoadWeight').value.trim();
             let details = document.getElementById('addLoadDetails').value.trim();
             let admin_comment = document.getElementById('addLoadComment').value.trim();
+            let targetCarrierId = parseInt(document.getElementById('addLoadCarrierSelect')?.value || '0');
 
             if (!route) {
                 return showToast('Укажите маршрут груза', 'error');
@@ -4095,12 +4140,17 @@
                     body: JSON.stringify({
                         route, date, price, cars,
                         destination_country: country,
-                        car_type, cargo_type, weight, details, admin_comment
+                        car_type, cargo_type, weight, details, admin_comment,
+                        target_carrier_id: targetCarrierId
                     })
                 });
                 let data = await res.json();
                 if (res.ok) {
-                    showToast('Груз успешно опубликован на Бирже!', 'success');
+                    if (targetCarrierId > 0) {
+                        showToast('Груз успешно назначен перевозчику!', 'success');
+                    } else {
+                        showToast('Груз успешно опубликован на Бирже!', 'success');
+                    }
                     closeModal('adminAddLoadModal');
                     loadAdminData();
                     loadData(false);
