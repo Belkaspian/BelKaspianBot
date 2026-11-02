@@ -691,6 +691,29 @@ def build_kaiten_admin_keyboard(deal_id: int):
     return builder.as_markup()
 
 
+def sanitize_to_russian_cyrillic(text: str) -> str:
+    """Заменяет специфические буквы тюркских алфавитов (казахский и др.) на русские аналоги."""
+    if not text:
+        return ""
+    replacements = {
+        'Ә': 'А', 'ә': 'а',
+        'Ғ': 'Г', 'ғ': 'г',
+        'Қ': 'К', 'қ': 'к',
+        'Ң': 'Н', 'ң': 'н',
+        'Ө': 'О', 'ө': 'о',
+        'Ұ': 'У', 'ұ': 'у',
+        'Ү': 'У', 'ү': 'у',
+        'Һ': 'Х', 'һ': 'х',
+        'І': 'И', 'і': 'и',
+        'Җ': 'Ж', 'җ': 'ж',
+        'Ў': 'У', 'ў': 'у',
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return text
+
+
+
 def extract_surname_and_name(full_name: str) -> str:
     if not full_name or full_name.lower().strip() in ["не распознан", "не указан"]:
         return "Не распознан"
@@ -1415,13 +1438,33 @@ async def get_kaiten_type_id(type_name_query: str):
         types_list = await kaiten_api_request("GET", "/types")
 
     if types_list and isinstance(types_list, list):
+        # 1. Заполняем кэш точных названий
         for t in types_list:
             name = (t.get("name") or t.get("title") or "").strip().lower()
             t_id = t.get("id")
-            if t_id:
+            if t_id and name:
                 KAITEN_TYPE_CACHE[name] = t_id
-                if key in name or name in key:
+
+        if key in KAITEN_TYPE_CACHE:
+            return KAITEN_TYPE_CACHE[key]
+
+        # 2. Если требуются частичные данные (ЖЕЛТЫЙ цвет карточки)
+        if "частич" in key:
+            for t in types_list:
+                name = (t.get("name") or t.get("title") or "").strip().lower()
+                if "частич" in name:
+                    t_id = t.get("id")
                     KAITEN_TYPE_CACHE[key] = t_id
+                    return t_id
+
+        # 3. Если требуются полные данные (ЗЕЛЕНЫЙ цвет карточки)
+        if "внесены" in key and "частич" not in key:
+            for t in types_list:
+                name = (t.get("name") or t.get("title") or "").strip().lower()
+                if "внесены" in name and "не внесены" not in name and "частич" not in name:
+                    t_id = t.get("id")
+                    KAITEN_TYPE_CACHE[key] = t_id
+                    return t_id
 
     return KAITEN_TYPE_CACHE.get(key)
 
@@ -1508,8 +1551,9 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
             f"Дата рождения: Не распознана"
         )
 
-    # 2. Определение типа карточки в Кайтен
-    target_type_name = "Данные внесены" if docs_status == "FULL" else "Данные внесены частично"
+    # 2. Определение типа карточки в Кайтен (Зеленый - полные, Желтый - частичные)
+    is_full = (docs_status == "FULL")
+    target_type_name = "Данные внесены" if is_full else "Данные внесены частично"
     type_id = await get_kaiten_type_id(target_type_name)
 
     patch_payload = {"description": description_text}
@@ -2073,8 +2117,8 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
    - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА / удостоверения личности (Фамилия Имя Отчество). Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
      СТРОГИЙ ПРИОРИТЕТ ЯЗЫКА ДЛЯ full_name:
      1) Если в паспорте / удостоверении личности есть РУССКИЙ ЯЗЫК (кириллица) — ОБЯЗАТЕЛЬНО извлекай ФИО на РУССКОМ языке (например: "ИВАНОВ ИВАН ИВАНОВИЧ").
-     2) Если русского языка в документе нет — используй АНГЛИЙСКИЙ ЯЗЫК / латинскую транслитерацию (например: "IVANOV IVAN").
-     3) Если нет ни русского, ни английского (латиницы) — используй исходный НАЦИОНАЛЬНЫЙ ЯЗЫК документа (казахский, азербайджанский, узбекский и т.д.).
+     2) Если русского языка в документе нет — используй АНГЛИЙСКИЙ ЯЗЫК / латинскую транслитерацию (например: "IVANOV IVAN"). 
+     3) И ТОЛЬКО Если нет ни русского, ни английского (латиницы) — используй исходный НАЦИОНАЛЬНЫЙ ЯЗЫК документа (казахский, азербайджанский, узбекский и т.д.).
    - country: гражданство водителя по паспорту (полное название на русском). Если паспорта нет — null.
    - phones: массив очищенных уникальных номеров телефона. Если нет — [].
 
@@ -6832,7 +6876,8 @@ async def admin_get_carriers_api(request):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT user_id, company, name, phone, status, subscriptions, 
-               COALESCE(verification_status, 'UNVERIFIED'), COALESCE(company_key, '')
+               COALESCE(verification_status, 'UNVERIFIED'), COALESCE(company_key, ''),
+               COALESCE(pending_company, ''), COALESCE(pending_name, ''), COALESCE(pending_phone, '')
         FROM users ORDER BY user_id DESC
     """)
     rows = cursor.fetchall()
@@ -6845,7 +6890,10 @@ async def admin_get_carriers_api(request):
         "status": r[4] or "ACTIVE", 
         "subscriptions": r[5] or "",
         "verification_status": r[6] or "UNVERIFIED",
-        "company_key": r[7] or ""
+        "company_key": r[7] or "",
+        "pending_company": r[8] or "",
+        "pending_name": r[9] or "",
+        "pending_phone": r[10] or ""
     } for r in rows]
     return web.json_response({"carriers": carriers})
 
@@ -7267,7 +7315,10 @@ async def admin_get_confirmed_deals_api(request):
                COALESCE(cd.paid_amount, ''),
                COALESCE(cd.paid_date, ''),
                COALESCE(cd.pay_docs_status, 'NONE'),
-               COALESCE(cd.planned_payment_date, '')
+               COALESCE(cd.planned_payment_date, ''),
+               COALESCE(cd.kaiten_card_id, 0),
+               COALESCE(cd.docs_status, 'NONE'),
+               COALESCE(cd.missing_docs, '')
         FROM confirmed_deals cd
         LEFT JOIN users u ON cd.user_id = u.user_id
         LEFT JOIN loads l ON cd.load_id = l.load_id
@@ -7291,7 +7342,10 @@ async def admin_get_confirmed_deals_api(request):
         "paid_amount": r[22],
         "paid_date": r[23],
         "pay_docs_status": r[24],
-        "planned_payment_date": r[25]
+        "planned_payment_date": r[25],
+        "kaiten_card_id": r[26],
+        "docs_status": r[27],
+        "missing_docs": r[28]
     } for r in rows]
     return web.json_response({"deals": deals})
 
@@ -8541,6 +8595,60 @@ async def admin_trigger_backup_api(request):
     return web.json_response({"status": "success" if success else "error", "message": result_text})
 
 
+async def admin_profile_changes_action_api(request):
+    """Подтверждение или отклонение изменения информации о перевозчике из админки."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    target_uid = int(data.get("user_id", 0))
+    action = data.get("action", "")
+    if not target_uid:
+        return web.json_response({"error": "ID пользователя не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+
+    if action == "approve":
+        cursor.execute("""
+            UPDATE users SET 
+                company = CASE WHEN pending_company != '' THEN pending_company ELSE company END,
+                name = CASE WHEN pending_name != '' THEN pending_name ELSE name END,
+                phone = CASE WHEN pending_phone != '' THEN pending_phone ELSE phone END,
+                pending_company = '',
+                pending_name = '',
+                pending_phone = ''
+            WHERE user_id = ?
+        """, (target_uid,))
+        conn.commit()
+        conn.close()
+
+        add_notification(target_uid, "Изменения подтверждены", "Изменения вашего профиля утверждены логистом.")
+        try:
+            await bot.send_message(chat_id=target_uid, text="✅ Изменения вашего профиля успешно утверждены администратором.")
+        except Exception:
+            pass
+        return web.json_response({"status": "success", "message": "Изменения утверждены"})
+
+    elif action == "reject":
+        cursor.execute("UPDATE users SET pending_company = '', pending_name = '', pending_phone = '' WHERE user_id = ?", (target_uid,))
+        conn.commit()
+        conn.close()
+
+        add_notification(target_uid, "Изменения отклонены", "Запрос на изменение данных профиля отклонен администратором.")
+        try:
+            await bot.send_message(chat_id=target_uid, text="❌ Запрос на изменение данных профиля отклонен администратором.")
+        except Exception:
+            pass
+        return web.json_response({"status": "success", "message": "Изменения отклонены"})
+
+    conn.close()
+    return web.json_response({"error": "Неизвестное действие"}, status=400)
+
+
 async def admin_verify_carrier_direct_api(request):
     """Прямое подтверждение верификации перевозчика из админки."""
     try:
@@ -8637,6 +8745,7 @@ async def web_server():
     app.router.add_post("/api/set_unload_date", set_unload_date_api)
     app.router.add_get("/api/notifications", notifications_get_api)
     app.router.add_post("/api/notifications/read", notifications_read_api)
+    app.router.add_post("/api/admin/profile_changes_action", admin_profile_changes_action_api)
     app.router.add_get("/api/profile", profile_get_api)
     app.router.add_post("/api/profile", profile_post_api)
     app.router.add_post("/api/request_verification", request_verification_api)
