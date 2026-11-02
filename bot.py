@@ -2070,7 +2070,11 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
    - quality выбирается строго из: EXCELLENT | GOOD | POOR | UNREADABLE
 
 2. driver:
-   - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА (Surname / Given names / Patronymic). Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
+   - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА / удостоверения личности (Фамилия Имя Отчество). Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
+     СТРОГИЙ ПРИОРИТЕТ ЯЗЫКА ДЛЯ full_name:
+     1) Если в паспорте / удостоверении личности есть РУССКИЙ ЯЗЫК (кириллица) — ОБЯЗАТЕЛЬНО извлекай ФИО на РУССКОМ языке (например: "ИВАНОВ ИВАН ИВАНОВИЧ").
+     2) Если русского языка в документе нет — используй АНГЛИЙСКИЙ ЯЗЫК / латинскую транслитерацию (например: "IVANOV IVAN").
+     3) Если нет ни русского, ни английского (латиницы) — используй исходный НАЦИОНАЛЬНЫЙ ЯЗЫК документа (казахский, азербайджанский, узбекский и т.д.).
    - country: гражданство водителя по паспорту (полное название на русском). Если паспорта нет — null.
    - phones: массив очищенных уникальных номеров телефона. Если нет — [].
 
@@ -2078,7 +2082,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
    - number: номер без "№" и пробелов.
    - date_of_birth: дата рождения в формате "ДД.ММ.ГГГГ". Категорически запрещено брать из MRZ.
    - issue_date / expiry_date: даты в формате "ДД.ММ.ГГГГ".
-   - issuing_authority: ТОЛЬКО краткое название или код ведомства (например: "МВД 77001", "MVD TJ", "IIB"). КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать область, регион, район, город или место рождения.
+   - issuing_authority: ТОЛЬКО краткое название или код ведомства (например: "МВД 77001", "MVD TJ", "IIB"). При наличии русского текста приоритет отдавай русскому, затем английскому, затем национальному. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать область, регион, район, город или место рождения.
    - country: страна выдачи паспорта на русском языке.
    - Если паспорта нет в переданных файлах — все поля внутри passport = null.
 
@@ -7011,15 +7015,69 @@ async def admin_add_load_api(request):
         if not route_str:
             return web.json_response({"error": "Укажите маршрут груза"}, status=400)
 
+        target_carrier_id = int(data.get('target_carrier_id') or 0)
+
         conn = sqlite3.connect("cargo_bot.db", timeout=15)
         cursor = conn.cursor()
+
+        # Режим 1: Назначение груза напрямую конкретному перевозчику
+        if target_carrier_id > 0:
+            cursor.execute("SELECT user_id, company, name FROM users WHERE user_id = ?", (target_carrier_id,))
+            carrier_row = cursor.fetchone()
+            if not carrier_row:
+                conn.close()
+                return web.json_response({"error": "Указанный перевозчик не найден в базе"}, status=404)
+
+            # Груз создается сразу закрытым для биржи
+            cursor.execute("""
+                INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, admin_comment, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')
+            """, (dest_country, date_str, route_str, cars_str, price_str, f"{route_str} {price_str}", details, car_type, cargo_type, weight, admin_comment))
+            new_cargo_id = cursor.lastrowid
+
+            # Создаем закрепленный заказ в confirmed_deals
+            m_cars = re.search(r'\d+', cars_str)
+            cars_num = int(m_cars.group(0)) if m_cars else 1
+            for _ in range(cars_num):
+                cursor.execute("""
+                    INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details, status)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, 'CONFIRMED')
+                """, (new_cargo_id, target_carrier_id, date_str, route_str, price_str, details))
+
+            conn.commit()
+            conn.close()
+
+            # Уведомление перевозчику
+            add_notification(
+                target_carrier_id,
+                "Вам назначен рейс",
+                f"Логист назначил вам рейс {route_str} ({date_str}) по ставке {price_str}."
+            )
+            try:
+                carrier_msg = (
+                    f"📦 **Вам назначен рейс от логиста**\n\n"
+                    f"📍 **{date_str} | {route_str}**\n"
+                    f"💰 **{price_str}** | 🚚 {cars_str} авто\n"
+                    f"🚛 {car_type} | {cargo_type} | {weight}"
+                )
+                if details:
+                    carrier_msg += f"\n📦 {details}"
+                if admin_comment:
+                    carrier_msg += f"\n💬 Комментарий: {admin_comment}"
+                carrier_msg += "\n\nРейс добавлен в раздел «Мои грузы». Вы можете подать данные по авто и водителю."
+                await bot.send_message(chat_id=target_carrier_id, text=carrier_msg, parse_mode="Markdown")
+            except Exception as e:
+                logging.warning(f"Не удалось отправить уведомление перевозчику {target_carrier_id}: {e}")
+
+            return web.json_response({"status": "success", "load_id": new_cargo_id, "assigned_to": target_carrier_id})
+
+        # Режим 2: Публикация в общий доступ на Биржу
         cursor.execute("""
             INSERT INTO loads (destination_country, date, route, cars_count, price, text, details, car_type, cargo_type, weight, admin_comment, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
         """, (dest_country, date_str, route_str, cars_str, price_str, f"{route_str} {price_str}", details, car_type, cargo_type, weight, admin_comment))
         new_cargo_id = cursor.lastrowid
 
-        # Публикуем в соответствующий канал направления
         clean_dir = dest_country.split()[0].strip().lower()
         target_channel_id = None
         for chan_name, chan_id in CHANNELS.items():
@@ -7059,7 +7117,6 @@ async def admin_add_load_api(request):
             except Exception as e:
                 logging.error(f"Ошибка публикации добавленного вручную груза: {e}")
 
-        # Рассылаем груз перевозчикам с этим направлением
         cursor.execute("SELECT user_id, subscriptions FROM users WHERE status != 'BLOCKED'")
         active_users = cursor.fetchall()
         conn.commit()
