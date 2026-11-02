@@ -581,7 +581,8 @@ def init_db():
         "ALTER TABLE confirmed_deals ADD COLUMN paid_date TEXT DEFAULT ''",
         "ALTER TABLE confirmed_deals ADD COLUMN is_loaded INTEGER DEFAULT 0",
         "ALTER TABLE bids ADD COLUMN admin_chat_id INTEGER",
-        "ALTER TABLE bids ADD COLUMN admin_message_id INTEGER"
+        "ALTER TABLE bids ADD COLUMN admin_message_id INTEGER",
+        "ALTER TABLE bids ADD COLUMN user_message_id INTEGER"
     ]
     for migration in migrations:
         try:
@@ -1254,7 +1255,7 @@ KAITEN_TARGET_COLUMNS = {
 
 ALLOWED_KAITEN_COLUMNS = ["в процессе", "оформлено", "едут у даника", "замена данных"]
 
-async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str):
+async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str, country_str: str, exclude_card_ids: set = None):
     debug_logs = []
     
     if not KAITEN_API_KEY:
@@ -1314,6 +1315,11 @@ async def find_kaiten_card_for_deal(deal_id: int, route_str: str, date_str: str,
 
     for card in cards:
         if not isinstance(card, dict):
+            continue
+
+        card_raw_id = card.get("id")
+        # Если эта карточка уже закреплена за другой сделкой — пропускаем её, ищем следующую свободную!
+        if exclude_card_ids and card_raw_id in exclude_card_ids:
             continue
 
         title = (card.get("title") or card.get("name") or "").strip()
@@ -1456,7 +1462,14 @@ async def push_data_to_kaiten(deal_id: int, user_id: int, admin_user_name: str =
 
     # Поиск карточки в Кайтен, если ID ещё не сохранён
     if not card_id:
-        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str)
+        # Собираем все карточки, которые уже заняты другими сделками
+        conn_check = sqlite3.connect("cargo_bot.db")
+        c_check = conn_check.cursor()
+        c_check.execute("SELECT DISTINCT kaiten_card_id FROM confirmed_deals WHERE kaiten_card_id IS NOT NULL AND id != ?", (deal_id,))
+        already_used_cards = {r[0] for r in c_check.fetchall() if r[0]}
+        conn_check.close()
+
+        res = await find_kaiten_card_for_deal(deal_id, route_str, date_str, country_str, exclude_card_ids=already_used_cards)
         card = None
         debug_text = "Не удалось выполнить поиск карточки"
 
@@ -2312,35 +2325,80 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
 
     return fallback_text, {}
 
+
+async def compile_files_to_single_pdf(raw_file_tuples: list[tuple[str, bytes]]) -> bytes:
+    """
+    Быстро объединяет список произвольных файлов (фото + PDF) в 1 единый PDF-поток
+    с предварительным масштабированием больших фото для максимального быстродействия.
+    """
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+
+    def process_image_to_pdf(img_bytes: bytes) -> bytes:
+        img = Image.open(io.BytesIO(img_bytes))
+        img = ImageOps.exif_transpose(img)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        # Оптимизация размера: не более 1800px по длинной стороне
+        max_dim = 1800
+        if max(img.width, img.height) > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PDF", quality=85)
+        return buf.getvalue()
+
+    for fname, content in raw_file_tuples:
+        mime = detect_mime_type(content, fname)
+        if mime == "application/pdf":
+            try:
+                reader = PdfReader(io.BytesIO(content))
+                for page in reader.pages:
+                    writer.add_page(page)
+            except Exception as e:
+                logging.error(f"Error merging input PDF: {e}")
+        else:
+            try:
+                page_pdf_bytes = await asyncio.to_thread(process_image_to_pdf, content)
+                reader = PdfReader(io.BytesIO(page_pdf_bytes))
+                for page in reader.pages:
+                    writer.add_page(page)
+            except Exception as e:
+                logging.error(f"Error converting image to PDF page: {e}")
+
+    out_buf = io.BytesIO()
+    writer.write(out_buf)
+    return out_buf.getvalue()
+
 async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_polyethylene=False, route_str=""):
     all_files = (photos_file_ids or []) + (doc_file_ids or [])
-    contents = ["Внимательно изучи документы. ФИО извлекай СТРОГО с ПАСПОРТА. Телефон: " + (text_notes or "Нет")]
 
-    for file_id in all_files:
+    # Параллельное скачивание файлов из Telegram
+    async def download_one_file(fid: str):
         try:
-            file_info = await bot.get_file(file_id)
+            f_info = await bot.get_file(fid)
             buf = io.BytesIO()
-            await bot.download_file(file_info.file_path, destination=buf)
-            file_bytes = buf.getvalue()
-            mime_type = detect_mime_type(file_bytes, file_info.file_path or "")
+            await bot.download_file(f_info.file_path, destination=buf)
+            return (f_info.file_path or "doc", buf.getvalue())
+        except Exception as err:
+            logging.error(f"Download error for {fid}: {err}")
+            return None
 
-            raw_imgs = []
-            if mime_type == "application/pdf":
-                extracted = extract_images_from_pdf_bytes(file_bytes)
-                raw_imgs = extracted if extracted else [file_bytes]
-            else:
-                raw_imgs = [file_bytes]
+    tasks = [download_one_file(fid) for fid in all_files]
+    downloaded_results = await asyncio.gather(*tasks)
+    valid_file_tuples = [item for item in downloaded_results if item is not None]
 
-            # Разрезаем совмещенные фото НАПЕРЕД, чтобы ИИ сразу видел каждую карточку отдельно
-            for raw_b in raw_imgs:
-                cropped_pil_list = split_and_crop_documents(raw_b)
-                for pil_item in cropped_pil_list:
-                    out_b = io.BytesIO()
-                    pil_item.save(out_b, format="JPEG", quality=90)
-                    contents.append(genai_types.Part.from_bytes(data=out_b.getvalue(), mime_type="image/jpeg"))
+    if not valid_file_tuples:
+        fallback_text, raw_json = await process_docs_bytes_with_ai([], text_notes, is_polyethylene, route_str)
+        return fallback_text, all_files, raw_json
 
-        except Exception as e:
-            logging.error(f"Download file error for AI: {e}")
+    # Склеиваем все файлы в 1 структурированный PDF для идеального считывания нейросетью
+    unified_pdf_bytes = await compile_files_to_single_pdf(valid_file_tuples)
+
+    contents = [
+        f"Изучи прикреплённый комплект документов (паспорт, водительское удостоверение, техпаспорта СТС). "
+        f"ФИО извлекай СТРОГО с ПАСПОРТА. Номера телефонов: {text_notes or 'Не указан'}",
+        genai_types.Part.from_bytes(data=unified_pdf_bytes, mime_type="application/pdf")
+    ]
 
     formatted_text, raw_json = await process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=is_polyethylene, route_str=route_str)
     return formatted_text, all_files, raw_json
@@ -3446,6 +3504,13 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     if new_driver_phone in ["Не указан", "", "—"]:
         missing_items.append("Номер телефона")
 
+    # Для полиэтилена жестко требуем наличие номера РФ (+7)
+    if is_polyethylene:
+        phones_list = [p.strip() for p in new_driver_phone.split('/') if p.strip()]
+        has_ru_phone = any(p.startswith('+7') for p in phones_list)
+        if not has_ru_phone:
+            missing_items.append("Российский номер телефона (+7) водителя (обязательно для полиэтилена)")
+
     docs_status = "FULL" if not missing_items else "PARTIAL"
     missing_docs_str = ", ".join(missing_items)
 
@@ -3699,12 +3764,17 @@ async def process_admin_pending_action(chat_id: int, message_text: str) -> bool:
                 types.InlineKeyboardButton(text="Отклонить", callback_data=f"decline_counter_{target_id}")
             )
             try:
-                await bot.send_message(
+                sent_counter_msg = await bot.send_message(
                     chat_id=user_id, 
                     text=f"Логист предложил встречную ставку **{counter_rate}** ({cars_count} авто) по грузу **{route_str}** (ваша ставка: {orig_rate}).\n\nПринимаете предложение?",
                     reply_markup=counter_builder.as_markup(),
                     parse_mode="Markdown"
                 )
+                if sent_counter_msg:
+                    c_up = sqlite3.connect("cargo_bot.db", timeout=10)
+                    c_up.execute("UPDATE bids SET user_message_id = ? WHERE bid_id = ?", (sent_counter_msg.message_id, target_id))
+                    c_up.commit()
+                    c_up.close()
             except Exception:
                 pass
 
@@ -4674,8 +4744,17 @@ async def handle_accept_counter(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("accept_counter_", ""))
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT load_id, user_id, cars, counter_rate FROM bids WHERE bid_id = ?", (bid_id,))
+    cursor.execute("SELECT load_id, user_id, cars, counter_rate, status FROM bids WHERE bid_id = ?", (bid_id,))
     bid = cursor.fetchone()
+
+    if not bid or bid[4] in ('ACCEPTED', 'DECLINED'):
+        conn.close()
+        await callback.answer("Эта заявка уже обработана ранее.", show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
 
     if not bid:
         conn.close()
@@ -4704,10 +4783,24 @@ async def handle_accept_counter(callback: types.CallbackQuery):
         cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
 
-        add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
-        await update_cargo_messages_for_all_users(load_id)
+        # Снимаем кнопки из сообщения в личном чате перевозчика
+            cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
+            u_msg_row = cursor.fetchone()
+            if u_msg_row and u_msg_row[0]:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=u_msg_row[0],
+                        text=f"✅ Вы приняли встречную ставку {counter_rate} по рейсу «{route_str}» через приложение.",
+                        reply_markup=None
+                    )
+                except Exception:
+                    pass
 
-        admin_notification = (
+            add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
+            await update_cargo_messages_for_all_users(load_id)
+
+            admin_notification = (
             f"**Перевозчик ПРИНЯЛ встречную ставку!**\n\n"
             f"• Груз #{load_id} | Маршрут: {route_str}\n"
             f"• Итоговая ставка: {counter_rate} | Авто: {requested_cars}\n\n"
@@ -5913,6 +6006,13 @@ async def direct_upload_docs_api(request):
         if new_trailer_plate in ["НЕ РАСПОЗНАН", "", "—"]: missing_items.append("Техпаспорт прицепа")
         if new_driver_phone in ["Не указан", "", "—"]: missing_items.append("Номер телефона")
 
+        # Для полиэтилена жестко требуем наличие номера РФ (+7)
+        if is_polyethylene:
+            phones_list = [p.strip() for p in new_driver_phone.split('/') if p.strip()]
+            has_ru_phone = any(p.startswith('+7') for p in phones_list)
+            if not has_ru_phone:
+                missing_items.append("Российский номер телефона (+7) водителя (обязательно для полиэтилена)")
+
         docs_status = "FULL" if not missing_items else "PARTIAL"
         missing_docs_str = ", ".join(missing_items) # <--- ИСПРАВЛЕНО (было missing_str)
 
@@ -6524,6 +6624,20 @@ async def accept_counter_api(request):
             conn.commit()
             conn.close()
 
+            # Снимаем кнопки из сообщения в личном чате перевозчика
+            cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
+            u_msg_row = cursor.fetchone()
+            if u_msg_row and u_msg_row[0]:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=u_msg_row[0],
+                        text=f"✅ Вы приняли встречную ставку {counter_rate} по рейсу «{route_str}» через приложение.",
+                        reply_markup=None
+                    )
+                except Exception:
+                    pass
+
             add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
             await update_cargo_messages_for_all_users(load_id)
 
@@ -6569,6 +6683,19 @@ async def decline_counter_api(request):
         cursor.execute("SELECT route FROM loads WHERE load_id = ?", (load_id,))
         l_row = cursor.fetchone()
         route_str = l_row[0] if l_row else "Груз"
+
+        cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
+        u_msg_row = cursor.fetchone()
+        if u_msg_row and u_msg_row[0]:
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=u_msg_row[0],
+                    text=f"❌ Вы отклонили встречную ставку по рейсу «{route_str}».",
+                    reply_markup=None
+                )
+            except Exception:
+                pass
 
         cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
@@ -8145,12 +8272,17 @@ async def admin_bid_action_api(request):
             types.InlineKeyboardButton(text="Отклонить", callback_data=f"decline_counter_{bid_id}")
         )
         try:
-            await bot.send_message(
+            sent_counter_msg = await bot.send_message(
                 chat_id=user_id,
                 text=f"• Логист предложил встречную ставку **{counter_rate}** ({counter_cars} авто) по рейсу **{route_str}** (ваша ставка: {rate}).\n\nПринимаете предложение?",
                 reply_markup=counter_builder.as_markup(),
                 parse_mode="Markdown"
             )
+            if sent_counter_msg:
+                c_up = sqlite3.connect("cargo_bot.db", timeout=10)
+                c_up.execute("UPDATE bids SET user_message_id = ? WHERE bid_id = ?", (sent_counter_msg.message_id, bid_id))
+                c_up.commit()
+                c_up.close()
         except Exception:
             pass
 
@@ -8334,6 +8466,60 @@ async def admin_trigger_backup_api(request):
     success, result_text = await push_db_backup(reason="Запрос из админ-меню Web App")
     return web.json_response({"status": "success" if success else "error", "message": result_text})
 
+
+async def admin_verify_carrier_direct_api(request):
+    """Прямое подтверждение верификации перевозчика из админки."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    user_id = int(data.get("user_id", 0))
+    if not user_id:
+        return web.json_response({"error": "ID пользователя не указан"}, status=400)
+
+    conn = sqlite3.connect("cargo_bot.db", timeout=15)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET verification_status = 'VERIFIED' WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(user_id, "Верификация подтверждена", "Ваш профиль успешно верифицирован администратором. Вам открыт полный доступ к ставкам и грузам!")
+    try:
+        await bot.send_message(chat_id=user_id, text="✅ Ваш профиль успешно верифицирован администратором! Полный доступ открыт.")
+    except Exception:
+        pass
+
+    return web.json_response({"status": "success"})
+
+
+async def admin_push_kaiten_deal_api(request):
+    """Ручная отправка данных сделки в Kaiten из веб-админки."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not is_admin_authorized(request, data):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    deal_id = int(data.get("deal_id", 0))
+    if not deal_id:
+        return web.json_response({"error": "ID сделки не указан"}, status=400)
+
+    success, result = await push_data_to_kaiten(deal_id, 0, admin_user_name="Администратор (Панель)")
+    if success and isinstance(result, dict):
+        return web.json_response({
+            "status": "success",
+            "card_id": result.get("card_id"),
+            "url": result.get("url")
+        })
+    else:
+        err_msg = result if isinstance(result, str) else "Ошибка работы с Kaiten"
+        return web.json_response({"error": err_msg}, status=400)
+
+
 async def handle_ping(request):
     return web.Response(text="Bot is running!", status=200)
 
@@ -8400,6 +8586,8 @@ async def web_server():
     app.router.add_post("/api/admin/blacklist/del", admin_del_blacklist_api)
     app.router.add_post("/api/admin/broadcast", admin_broadcast_api)
     app.router.add_post("/api/admin/trigger_backup", admin_trigger_backup_api)
+    app.router.add_post("/api/admin/verify_carrier_direct", admin_verify_carrier_direct_api)
+    app.router.add_post("/api/admin/push_kaiten_deal", admin_push_kaiten_deal_api)
     app.router.add_get("/api/admin/carriers", admin_get_carriers_api)
     app.router.add_post("/api/admin/carrier_status", admin_toggle_carrier_status_api)
     app.router.add_post("/api/admin/edit_carrier", admin_edit_carrier_api)
