@@ -81,7 +81,8 @@ except ValueError:
 
 # ===================== БЕЗОПАСНОСТЬ И БАЗА =====================
 DB_PATH = "cargo_bot.db"
-INIT_DATA_MAX_AGE = 7 * 24 * 3600  # сессия Web App может быть открыта долго
+INIT_DATA_MAX_AGE = 24 * 3600
+INIT_DATA_FUTURE_SKEW = 60
 
 def get_conn():
     """Единая точка подключения к БД: WAL, таймаут на блокировки, безопасно для параллельных запросов."""
@@ -105,7 +106,10 @@ def verify_init_data(init_data: str):
         if not hmac.compare_digest(calc_hash, received_hash):
             return None
         auth_date = int(pairs.get("auth_date", 0))
-        if time.time() - auth_date > INIT_DATA_MAX_AGE:
+        now = time.time()
+        if auth_date <= 0 or auth_date > now + INIT_DATA_FUTURE_SKEW:
+            return None
+        if now - auth_date > INIT_DATA_MAX_AGE:
             return None
         user = json.loads(pairs.get("user", "{}"))
         return int(user["id"])
@@ -125,6 +129,8 @@ async def auth_middleware(request, handler):
     request["tg_user_id"] = tg_id
 
     if "/admin" in path:
+        return await handler(request)
+    if path == "/api/carrier/activate_key":
         return await handler(request)
 
     if tg_id is None:
@@ -406,16 +412,30 @@ async def restore_db_from_telegram() -> bool:
                 os.remove(tmp_path)
             return False
 
-        # Удаляем временные файлы перед заменой
-        for suffix in ["", "-wal", "-shm"]:
-            p = f"cargo_bot.db{suffix}"
-            if os.path.exists(p):
+        # Сохраняем рабочую БД и sidecar-файлы; новая БД подменяется атомарно.
+        db_path = os.path.abspath("cargo_bot.db")
+        backup_paths = []
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                current = db_path + suffix
+                if os.path.exists(current):
+                    backup = current + ".pre_restore"
+                    if os.path.exists(backup):
+                        os.remove(backup)
+                    os.replace(current, backup)
+                    backup_paths.append((backup, current))
+            os.replace(tmp_path, db_path)
+            for backup, _current in backup_paths:
                 try:
-                    os.remove(p)
-                except Exception:
-                    pass
-
-        shutil.move(tmp_path, "cargo_bot.db")
+                    os.remove(backup)
+                except OSError:
+                    logging.warning("Не удалось удалить резервный файл %s", backup)
+        except Exception:
+            # Откат к прежней базе, если установка новой не удалась.
+            for backup, current in reversed(backup_paths):
+                if os.path.exists(backup):
+                    os.replace(backup, current)
+            raise
         logging.info("✅ База данных успешно восстановлена из закрепа Telegram-канала.")
         return True
 
@@ -1703,7 +1723,7 @@ async def parse_cargos_with_ai(raw_text: str) -> list[dict]:
         temperature=0.0
     )
 
-    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     for model_name in models_to_try:
         try:
             if hasattr(gemini_client, 'aio'):
@@ -1728,6 +1748,8 @@ class VehicleDetails(BaseModel):
     plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
     vin: Optional[str] = Field(default="Не распознан", description="VIN номер")
     country: Optional[str] = Field(default="Не распознана", description="Страна регистрации")
+    plate_number: Optional[str] = None
+    type: Optional[str] = None
 
 class DocumentDetails(BaseModel):
     full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта")
@@ -1735,12 +1757,14 @@ class DocumentDetails(BaseModel):
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
     expiry_date: Optional[str] = Field(default="Не указана", description="Срок действия документа")
     authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи")
+    issuing_authority: Optional[str] = None
+    date_of_birth: Optional[str] = None
     country: Optional[str] = Field(default="Не распознана", description="Страна выдачи")
 
 class DriverDetails(BaseModel):
     full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
-    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
+    phones: Optional[list[str] | str] = Field(default_factory=list, description="Массив уникальных номеров телефонов")
     passport: Optional[DocumentDetails] = None
     license: Optional[DocumentDetails] = None
 
@@ -1751,8 +1775,11 @@ class ImageClassification(BaseModel):
 class FullCargoSubmission(BaseModel):
     truck: Optional[VehicleDetails] = None
     trailer: Optional[VehicleDetails] = None
+    vehicles: list[VehicleDetails] = Field(default_factory=list)
     driver: Optional[DriverDetails] = None
     image_roles: Optional[list[ImageClassification]] = None
+    needs_human_review: bool = False
+    review_reasons: list[str] = Field(default_factory=list)
 
 class OrderPdfInfo(BaseModel):
     order_number: Optional[str] = Field(default="", description="Номер договора-заявки или номер заявки")
@@ -1788,9 +1815,9 @@ async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expe
     """
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
         return PaymentDocsVerificationResult(
-            has_cmr=True, has_invoice=True, has_act=True, has_signed_application=True,
-            app_signed_by_both=True, cmr_box16_stamp=True, cmr_box23_stamp=True, cmr_box24_stamp=True,
-            is_valid=True, errors=[]
+            has_cmr=False, has_invoice=False, has_act=False, has_signed_application=False,
+            app_signed_by_both=False, cmr_box16_stamp=False, cmr_box23_stamp=False, cmr_box24_stamp=False,
+            is_valid=False, errors=["Автоматическая проверка недоступна: Gemini API не настроен. Документы не могут быть автоматически одобрены."]
         )
 
     system_prompt = (
@@ -1815,12 +1842,7 @@ async def verify_payment_docs_with_ai(contents_list, expected_order_num="", expe
         temperature=0.1
     )
 
-    models_to_try = [
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash"
-    ]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
     for model_name in models_to_try:
         try:
@@ -2212,13 +2234,13 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
   "driver":{
     "full_name": "ФИО водителя строго из паспорта",
     "birth_date": "ДД.ММ.ГГГГ",
-    "phones": "номер телефона если есть",
+    "phones": ["уникальный нормализованный телефон"],
     "passport":{
       "full_name": "ФИО владельца",
       "number": "серия и номер паспорта",
       "issue_date": "ДД.ММ.ГГГГ",
       "expiry_date": "ДД.ММ.ГГГГ",
-      "authority": "орган выдачи",
+      "issuing_authority": "краткое наименование органа выдачи",
       "country": "страна выдачи"
     },
     "license":{
@@ -2228,20 +2250,18 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
       "country": "страна выдачи"
     }
   },
-  "truck":{
-    "brand": "марка тягача (например FAW / VOLVO)",
-    "model": "модель тягача",
-    "plate": "госномер тягача (например 10467QCA)",
-    "vin": "VIN тягача 17 знаков",
-    "country": "страна регистрации тягача"
-  },
-  "trailer":{
-    "brand": "марка прицепа (например SCHMITZ)",
-    "model": "модель прицепа",
-    "plate": "госномер прицепа (например 105198BA)",
-    "vin": "VIN прицепа",
-    "country": "страна регистрации прицепа"
-  }
+  "vehicles":[
+    {
+      "brand": "марка ТС или null",
+      "model": "модель ТС или null",
+      "plate_number": "госномер или null",
+      "vin": "VIN или null",
+      "country": "страна регистрации или null",
+      "type": "TRUCK | TRAILER | UNKNOWN"
+    }
+  ],
+  "needs_human_review": false,
+  "review_reasons": []
 }
 """
 
@@ -2252,21 +2272,7 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
         temperature=0.0
     )
 
-    models_to_try = [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro",
-        "gemini-3.1-flash-lite",
-        "gemini-3-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-    ]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
     response = None
     for model_name in models_to_try:
@@ -2299,18 +2305,28 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
             # Если ИИ вернул машины в общем массиве vehicles — распределяем их по типу
             vehicles_list = raw_json.get("vehicles") or []
             for v in vehicles_list:
+                if not isinstance(v, dict):
+                    continue
                 v_type = str(v.get("type") or "").upper()
                 if ("TRUCK" in v_type or "ТЯГАЧ" in v_type or "TORTUVCHI" in v_type) and not t:
-                    t = v
+                    t = {**v, "plate": v.get("plate") or v.get("plate_number")}
                 elif ("TRAILER" in v_type or "ПРИЦЕП" in v_type or "TIRKAMA" in v_type) and not tr:
-                    tr = v
+                    tr = {**v, "plate": v.get("plate") or v.get("plate_number")}
+                elif not t:
+                    t = {**v, "plate": v.get("plate") or v.get("plate_number")}
+                elif not tr:
+                    tr = {**v, "plate": v.get("plate") or v.get("plate_number")}
 
             d = raw_json.get("driver") or {}
             p = d.get("passport") or {}
             l = d.get("license") or {}
 
-            raw_phones = (d.get("phones") or "").strip()
-            phones_str = raw_phones if raw_phones and raw_phones.lower() not in ["не указан", "не распознан"] else (text_notes.strip() if text_notes else "Не указан")
+            raw_phones_value = d.get("phones") or []
+            if isinstance(raw_phones_value, list):
+                raw_phones = ", ".join(str(x).strip() for x in raw_phones_value if str(x).strip())
+            else:
+                raw_phones = str(raw_phones_value).strip()
+            phones_str = raw_phones if raw_phones and raw_phones.lower() not in ["не указан", "не распознан", "none", "null"] else (text_notes.strip() if text_notes else "Не указан")
 
             def build_brand_str(v_dict, show_model=True):
                 b = (v_dict.get('brand') or '').strip()
@@ -2321,7 +2337,7 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
                 return b
 
             # Ищем ФИО и в блоке водителя, и в блоке паспорта
-            driver_cand_name = (d.get("full_name") or p.get("full_name") or "").strip()
+            driver_cand_name = (p.get("full_name") or "").strip()
             p_num = p.get('number') or p.get('series_number') or 'Не распознан'
 
             if p_num in ["Не распознан", None, ""] and not driver_cand_name:
@@ -2330,7 +2346,7 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
                 driver_full_name = driver_cand_name or "Не распознан"
 
             # Жесткая отсечка названий областей/районов из наименования органа выдачи
-            p_auth = (p.get('authority') or 'Не распознан').strip()
+            p_auth = str(p.get('issuing_authority') or p.get('authority') or 'Не распознан').strip()
             p_auth = re.sub(r'(?i)\b(?:fergana|sughd|khatlon|gorno-badakhshan|region|oblast|obl|district)\b.*$', '', p_auth).strip(' ,.-')
             if not p_auth:
                 p_auth = "Не распознан"
@@ -2355,7 +2371,7 @@ quality: EXCELLENT | GOOD | POOR | UNREADABLE
             truck_country = translate_country(t.get('country') or 'Не распознана')
             trailer_country = translate_country(tr.get('country') or 'Не распознана')
 
-            b_date = d.get('birth_date') or 'Не распознана'
+            b_date = p.get('date_of_birth') or d.get('birth_date') or 'Не распознана'
             b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
 
             # Объединенная проверка слова полиэтилен по всем источникам
@@ -2422,10 +2438,15 @@ async def process_docs_with_ai(photos_file_ids, doc_file_ids, text_notes, is_pol
 
             raw_imgs = []
             if mime_type == "application/pdf":
-                extracted = extract_images_from_pdf_bytes(file_bytes)
-                raw_imgs = extracted if extracted else [file_bytes]
-            else:
+                raw_imgs = extract_images_from_pdf_bytes(file_bytes)
+                if not raw_imgs:
+                    logging.error("PDF не удалось отрисовать; файл пропущен для OCR")
+                    continue
+            elif mime_type.startswith("image/"):
                 raw_imgs = [file_bytes]
+            else:
+                logging.warning("Неподдерживаемый тип документа для OCR: %s", mime_type)
+                continue
 
             # Разрезаем совмещенные фото НАПЕРЕД, чтобы ИИ сразу видел каждую карточку отдельно
             for raw_b in raw_imgs:
@@ -2465,9 +2486,12 @@ async def process_order_pdf_with_ai(file_bytes: bytes) -> tuple[str, str, str]:
         temperature=0.1
     )
 
+    rendered_pages = extract_images_from_pdf_bytes(file_bytes)
+    if not rendered_pages:
+        return "", "", ""
     contents = [
         "Извлеки номер заявки, гос. номер тягача и номер прицепа с первой страницы документа:",
-        genai_types.Part.from_bytes(data=file_bytes, mime_type="application/pdf")
+        genai_types.Part.from_bytes(data=rendered_pages[0], mime_type="image/jpeg")
     ]
 
     models_to_try = [
@@ -2511,21 +2535,27 @@ async def process_order_pdf_with_ai(file_bytes: bytes) -> tuple[str, str, str]:
 
 
 def extract_images_from_pdf_bytes(pdf_bytes: bytes) -> list[bytes]:
-    """
-    Извлекает растровые изображения со всех страниц PDF документа.
-    """
+    """Рендерит каждую страницу PDF в изображение: учитывает сканы, векторную графику и смешанные страницы."""
     images_bytes = []
+    try:
+        import fitz  # PyMuPDF
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            for page in doc:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                images_bytes.append(pix.tobytes("jpeg"))
+        return images_bytes
+    except Exception as e:
+        logging.warning("PyMuPDF PDF render failed, trying embedded images: %s", e)
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(pdf_bytes))
         for page in reader.pages:
-            if hasattr(page, 'images') and page.images:
+            if hasattr(page, "images") and page.images:
                 for img_obj in page.images:
-                    if hasattr(img_obj, 'data') and img_obj.data:
+                    if getattr(img_obj, "data", None):
                         images_bytes.append(img_obj.data)
-                        break
     except Exception as e:
-        logging.error(f"Error extracting images from PDF: {e}")
+        logging.error("PDF image extraction failed: %s", e)
     return images_bytes
 
 async def generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, user_info, ai_formatted_data, raw_json=None) -> bytes:
@@ -3285,7 +3315,7 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
         p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
 
-        p_full_name = (p_data.get("full_name") or "").strip()
+        p_full_name = str(p_data.get("full_name") or "").strip()
         if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
             driver_name = "ВОДИТЕЛЬ"
         else:
@@ -3479,12 +3509,27 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     raw_json = raw_json if isinstance(raw_json, dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
     tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
+    # Совместимость с новым контрактом vehicles[] и старым truck/trailer.
+    vehicles = raw_json.get("vehicles") if isinstance(raw_json.get("vehicles"), list) else []
+    for vehicle in vehicles:
+        if not isinstance(vehicle, dict):
+            continue
+        v_type = str(vehicle.get("type") or "").upper()
+        normalized_vehicle = {**vehicle, "plate": vehicle.get("plate") or vehicle.get("plate_number")}
+        if any(tag in v_type for tag in ("TRUCK", "ТЯГАЧ")) and not t_data:
+            t_data = normalized_vehicle
+        elif any(tag in v_type for tag in ("TRAILER", "ПРИЦЕП")) and not tr_data:
+            tr_data = normalized_vehicle
+        elif not t_data:
+            t_data = normalized_vehicle
+        elif not tr_data:
+            tr_data = normalized_vehicle
     d_data = raw_json.get("driver") if isinstance(raw_json.get("driver"), dict) else {}
     p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
     l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
     # Замена / слияние данных: если в новом файле элемент не распознан, сохраняем старый
-    raw_truck = (t_data.get("plate") or "").strip()
+    raw_truck = str(t_data.get("plate") or t_data.get("plate_number") or "").strip()
     if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
         new_truck_plate = raw_truck.upper()
     elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
@@ -3492,7 +3537,7 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_truck_plate = "Не указан"
 
-    raw_trailer = (tr_data.get("plate") or "").strip()
+    raw_trailer = str(tr_data.get("plate") or tr_data.get("plate_number") or "").strip()
     if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
         new_trailer_plate = raw_trailer.upper()
     elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
@@ -3500,18 +3545,29 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_trailer_plate = "Не указан"
 
-    p_full_name = (p_data.get("full_name") or "").strip()
+    p_full_name = str(p_data.get("full_name") or "").strip()
     if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
         new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
     else:
         new_driver_short_name = extract_surname_and_name(p_full_name)
 
-    extracted_phone = (d_data.get("phones") or notes or "").strip()
+    extracted_phone_value = d_data.get("phones") or notes or ""
+    if isinstance(extracted_phone_value, list):
+        extracted_phone = ", ".join(str(x).strip() for x in extracted_phone_value if str(x).strip())
+    else:
+        extracted_phone = str(extracted_phone_value).strip()
     phone_source = extracted_phone if (extracted_phone and extracted_phone not in ["Не указан", ""]) else prev_driver_phone
     new_driver_phone = normalize_phones(phone_source)
 
     prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
     missing_items = []
+    if raw_json.get("needs_human_review"):
+        review_reasons = raw_json.get("review_reasons") or []
+        if isinstance(review_reasons, list):
+            reason_text = "; ".join(str(x) for x in review_reasons if x)
+        else:
+            reason_text = str(review_reasons)
+        missing_items.append("Требуется ручная проверка OCR" + (f": {reason_text}" if reason_text else ""))
 
     # Проверка паспорта: если в новой загрузке нет файла паспорта, но ранее паспорт был сдан — сохраняем его как правильный
     p_num = p_data.get("number")
@@ -5947,7 +6003,7 @@ async def direct_upload_docs_api(request):
             p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
             l_data = d_data.get("license") if isinstance(d_data.get("license"), dict) else {}
 
-            raw_truck = (t_data.get("plate") or "").strip()
+            raw_truck = str(t_data.get("plate") or t_data.get("plate_number") or "").strip()
             if raw_truck and raw_truck.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
                 new_truck_plate = raw_truck.upper()
             elif prev_truck_plate and prev_truck_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
@@ -5955,7 +6011,7 @@ async def direct_upload_docs_api(request):
             else:
                 new_truck_plate = "Не указан"
 
-            raw_trailer = (tr_data.get("plate") or "").strip()
+            raw_trailer = str(tr_data.get("plate") or tr_data.get("plate_number") or "").strip()
             if raw_trailer and raw_trailer.lower() not in ["не распознан", "не указан", "—", "-", "none"]:
                 new_trailer_plate = raw_trailer.upper()
             elif prev_trailer_plate and prev_trailer_plate.lower() not in ["не распознан", "не указан", "—", "-"]:
@@ -5963,7 +6019,7 @@ async def direct_upload_docs_api(request):
             else:
                 new_trailer_plate = "Не указан"
 
-            p_full_name = (p_data.get("full_name") or "").strip()
+            p_full_name = str(p_data.get("full_name") or "").strip()
             if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
                 new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
             else:
@@ -6138,7 +6194,6 @@ async def set_arrived_loading_api(request):
 
         # Оповещение логистов в админ-канал
         if d_info:
-            r_str, tr_plate, dr_name = d_info
             try:
                 await bot.send_message(
                     chat_id=ADMIN_CHANNEL_ID,
@@ -6413,10 +6468,12 @@ async def submit_docs_prompt_api(request):
         deal = cursor.fetchone()
         conn.close()
 
-        date_str = deal[0] if deal else "Ближайшая"
-        route_str = deal[1] if deal else "Маршрут"
-        price_str = deal[2] if deal else "Ставка"
-        is_replacement = bool(deal[3]) if deal else False
+        if not deal:
+            return web.json_response({"error": "Заказ не найден"}, status=404)
+        date_str = deal[0]
+        route_str = deal[1]
+        price_str = deal[2]
+        is_replacement = bool(deal[3])
 
         state_ctx = dp.fsm.get_context(bot, user_id, user_id)
         await state_ctx.set_state(DocUploadStates.waiting_for_docs)
@@ -6774,6 +6831,8 @@ def is_admin_authorized(request, data: dict = None) -> bool:
 
 
 
+_admin_login_attempts = {}
+
 async def admin_verify_pass_api(request):
     try:
         data = await request.json()
@@ -6782,11 +6841,18 @@ async def admin_verify_pass_api(request):
 
         env_key = (ADMIN_KEY or "").strip()
         is_owner_tg = bool(ADMIN_ID and request.get("tg_user_id") and str(request["tg_user_id"]) == str(ADMIN_ID).strip())
-        is_key_match = bool(env_key and entered_key == env_key)
-
+        peer = request.remote or "unknown"
+        now = time.time()
+        attempts = [t for t in _admin_login_attempts.get(peer, []) if now - t < 900]
+        if len(attempts) >= 8 and not is_owner_tg:
+            _admin_login_attempts[peer] = attempts
+            return web.json_response({"error": "Слишком много попыток. Повторите через 15 минут."}, status=429)
+        is_key_match = bool(env_key and hmac.compare_digest(entered_key, env_key))
         if is_owner_tg or is_key_match:
+            _admin_login_attempts.pop(peer, None)
             return web.json_response({"status": "success"})
-
+        attempts.append(now)
+        _admin_login_attempts[peer] = attempts
         return web.json_response({"error": "Неверный ключ администратора"}, status=403)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
@@ -7359,9 +7425,17 @@ def ensure_carrier_key_for_user(user_id: int, company_name: str = "", name: str 
 
     conn.close()
     return new_code
+_carrier_activation_attempts = {}
+
 async def activate_carrier_key_api(request):
     """Активация ключа сотрудником через веб-браузер с проверкой лимита."""
     try:
+        peer = request.remote or "unknown"
+        now = time.time()
+        attempts = [t for t in _carrier_activation_attempts.get(peer, []) if now - t < 600]
+        if len(attempts) >= 10:
+            _carrier_activation_attempts[peer] = attempts
+            return web.json_response({"error": "Слишком много попыток активации. Повторите позже."}, status=429)
         data = await request.json()
         raw_key = data.get('key_code', '').strip().upper()
         clean_key = re.sub(r'[^A-Z0-9]', '', raw_key)
@@ -7384,6 +7458,8 @@ async def activate_carrier_key_api(request):
 
         if not row:
             conn.close()
+            attempts.append(now)
+            _carrier_activation_attempts[peer] = attempts
             return web.json_response({"error": "Ключ не найден. Проверьте правильность ввода."}, status=404)
 
         key_id, k_status, saved_comp, max_users = row
@@ -7417,6 +7493,7 @@ async def activate_carrier_key_api(request):
 
         conn.commit()
         conn.close()
+        _carrier_activation_attempts.pop(peer, None)
 
         try:
             msg_text = (
@@ -7802,7 +7879,13 @@ async def admin_toggle_key_status_api(request):
 async def serve_index(request):
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        index_path = os.path.join(base_dir, "static", "index.html")
+        candidates = [
+            os.path.join(base_dir, "static", "index.html"),
+            os.path.join(base_dir, "index.html"),
+        ]
+        index_path = next((p for p in candidates if os.path.isfile(p)), None)
+        if not index_path:
+            raise FileNotFoundError("Не найден index.html (ожидался static/index.html или index.html)")
         with open(index_path, "r", encoding="utf-8") as f:
             html_content = f.read()
         return web.Response(text=html_content, content_type='text/html')
@@ -7899,6 +7982,7 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
 
     all_files = photos + documents
     contents_list = ["Изучи пакет документов на оплату:"]
+    file_processing_errors = []
 
     for fid in all_files:
         try:
@@ -7907,9 +7991,27 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
             await bot.download_file(file_info.file_path, destination=buf)
             raw_bytes = buf.getvalue()
             mime = detect_mime_type(raw_bytes, file_info.file_path or "")
-            contents_list.append(genai_types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+            if mime == "application/pdf":
+                pages = extract_images_from_pdf_bytes(raw_bytes)
+                if not pages:
+                    raise ValueError("Не удалось отрисовать страницы PDF")
+                contents_list.extend(genai_types.Part.from_bytes(data=page, mime_type="image/jpeg") for page in pages)
+            elif mime.startswith("image/"):
+                contents_list.append(genai_types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+            else:
+                raise ValueError("Неподдерживаемый формат файла")
         except Exception as e:
             logging.error(f"Error downloading file for pay docs AI: {e}")
+            file_processing_errors.append(str(e))
+
+    if file_processing_errors:
+        await state.clear()
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await message.answer("❌ Не удалось обработать один или несколько файлов. Пакет не отправлен на проверку. Пожалуйста, загрузите документы повторно.")
+        return
 
     result = await verify_payment_docs_with_ai(contents_list, expected_order_num=ord_num, expected_truck=truck_plate)
 
@@ -7918,7 +8020,7 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
 
     if not result.is_valid:
         err_msg = "Ошибки в документах на оплату:\n• " + "\n• ".join(result.errors)
-        cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ?", (err_msg, deal_id))
+        cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ? AND user_id = ?", (err_msg, deal_id, user_id))
         conn.commit()
         conn.close()
 
@@ -7933,13 +8035,6 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
     planned_pay_dt = calculate_payment_date(today_dt, 11)
     planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    cursor.execute("""
-        UPDATE confirmed_deals 
-        SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ? 
-        WHERE id = ?
-    """, (today_iso, planned_pay_str, deal_id))
-    conn.commit()
 
     cursor.execute("SELECT route, date, price FROM confirmed_deals WHERE id = ?", (deal_id,))
     deal_info = cursor.fetchone()
@@ -7968,11 +8063,22 @@ async def handle_pay_docs_finish(message: types.Message, state: FSMContext):
         pdf_bytes = await generate_single_pdf_bytes(raw_file_tuples, route_str, date_str, price_str, "", "")
         pdf_filename = f"{ord_num or 'Заявка'}.pdf"
 
-        if pdf_bytes:
-            pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-            await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+        if not pdf_bytes:
+            raise RuntimeError("Не удалось сформировать PDF для бухгалтерии")
+        pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+        await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+        conn = get_conn()
+        conn.execute("""
+            UPDATE confirmed_deals
+            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ?
+            WHERE id = ?
+        """, (today_iso, planned_pay_str, deal_id))
+        conn.commit()
+        conn.close()
     except Exception as e:
         logging.error(f"Error sending compiled PDF to payment channel: {e}")
+        await message.answer("❌ Не удалось передать документы в бухгалтерию. Статус не изменён; попробуйте отправить документы повторно.")
+        return
 
     await state.clear()
     try: await status_msg.delete()
@@ -8025,14 +8131,25 @@ async def submit_pay_docs_direct_api(request):
         contents_list = ["Изучи пакет документов на оплату:"]
         for fn, file_bytes in raw_files:
             mime = detect_mime_type(file_bytes, fn)
-            contents_list.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime))
+            if mime == "application/pdf":
+                rendered_pages = extract_images_from_pdf_bytes(file_bytes)
+                if not rendered_pages:
+                    conn.close()
+                    return web.json_response({"error": f"Не удалось визуально обработать PDF: {fn}"}, status=400)
+                for page_image in rendered_pages:
+                    contents_list.append(genai_types.Part.from_bytes(data=page_image, mime_type="image/jpeg"))
+            elif mime.startswith("image/"):
+                contents_list.append(genai_types.Part.from_bytes(data=file_bytes, mime_type=mime))
+            else:
+                conn.close()
+                return web.json_response({"error": f"Неподдерживаемый формат документа: {fn}"}, status=400)
 
         # Вызываем ИИ-агента для проверки
         result = await verify_payment_docs_with_ai(contents_list, expected_order_num=ord_num, expected_truck=truck_plate)
 
         if not result.is_valid:
             err_msg = " Ошибки в документах:\n• " + "\n• ".join(result.errors)
-            cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ?", (err_msg, deal_id))
+            cursor.execute("UPDATE confirmed_deals SET pay_docs_status = 'AI_ERROR', pay_docs_error = ? WHERE id = ? AND user_id = ?", (err_msg, deal_id, user_id))
             conn.commit()
             conn.close()
 
@@ -8045,16 +8162,12 @@ async def submit_pay_docs_direct_api(request):
         planned_pay_str = planned_pay_dt.strftime("%d.%m.%Y")
         today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-        cursor.execute("""
-            UPDATE confirmed_deals 
-            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ? 
-            WHERE id = ?
-        """, (today_iso, planned_pay_str, deal_id))
-        conn.commit()
-        conn.close()
-
-        # Генерируем 1 объединенный PDF файл
+        # Сначала готовим PDF и доставляем его в бухгалтерский канал.
+        # Статус IN_ACCOUNTING выставляем только после подтвержденной отправки.
         pdf_bytes = await generate_single_pdf_bytes(raw_files, route_str, date_str, price_str, "", "")
+        if not pdf_bytes:
+            conn.close()
+            return web.json_response({"error": "Не удалось сформировать PDF. Документы не отправлены."}, status=500)
         pdf_filename = f"{ord_num or 'Заявка'}.pdf"
 
         # Отправляем в канал документов на оплату
@@ -8064,14 +8177,24 @@ async def submit_pay_docs_direct_api(request):
             f"Дата выгрузки: {result.cmr_unloading_date or 'Не указана'}"
         )
 
-        if pdf_bytes:
-            pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
-            await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
+        pdf_file = types.BufferedInputFile(pdf_bytes, filename=pdf_filename)
+        await bot.send_document(chat_id=PAYMENT_DOCS_CHANNEL_ID, document=pdf_file, caption=caption_text)
 
+        cursor.execute("""
+            UPDATE confirmed_deals
+            SET pay_docs_status = 'IN_ACCOUNTING', pay_docs_error = '', pay_docs_submitted_at = ?, planned_payment_date = ?
+            WHERE id = ? AND user_id = ?
+        """, (today_iso, planned_pay_str, deal_id, user_id))
+        conn.commit()
+        conn.close()
         return web.json_response({"status": "success"})
     except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
         logging.error(f"Error in submit_pay_docs_direct_api: {e}", exc_info=True)
-        return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"error": "Не удалось обработать документы. Попробуйте повторить отправку."}, status=500)
 
 
 # ==================== СЕРВЕР И ЗАПУСК ====================
@@ -8138,17 +8261,27 @@ async def admin_bid_action_api(request):
     if not is_admin_authorized(request, data):
         return web.json_response({"error": "Доступ запрещен"}, status=403)
 
-    bid_id = int(data.get("bid_id", 0))
-    action = data.get("action", "")
+    try:
+        bid_id = int(data.get("bid_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "Некорректный ID заявки"}, status=400)
+    action = str(data.get("action", "")).lower()
+    if bid_id <= 0 or action not in {"accept", "partial", "counter", "decline"}:
+        return web.json_response({"error": "Некорректное действие или ID заявки"}, status=400)
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT load_id, user_id, cars, rate, comment FROM bids WHERE bid_id = ?", (bid_id,))
+    c.execute("BEGIN IMMEDIATE")
+    c.execute("SELECT load_id, user_id, cars, rate, comment, status FROM bids WHERE bid_id = ?", (bid_id,))
     bid = c.fetchone()
     if not bid:
         conn.close()
         return web.json_response({"error": "Заявка не найдена"}, status=404)
 
-    load_id, user_id, cars_count, rate, comment = bid
+    load_id, user_id, cars_count, rate, comment, bid_status = bid
+    if str(bid_status).upper() != "PENDING":
+        conn.rollback()
+        conn.close()
+        return web.json_response({"error": "Заявка уже обработана или недоступна"}, status=409)
     is_reservation = (comment == 'RESERVATION')
 
     c.execute("SELECT route, date, details, cars_count FROM loads WHERE load_id = ?", (load_id,))
