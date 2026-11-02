@@ -4762,6 +4762,16 @@ async def handle_accept_bid(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("accept_bid_", ""))
     conn = sqlite3.connect("cargo_bot.db")
     cursor = conn.cursor()
+    cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ? AND status = 'PENDING'", (bid_id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        await callback.answer("Ставка уже была подтверждена или обработана.", show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
     cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
     bid = cursor.fetchone()
 
@@ -4969,6 +4979,16 @@ async def handle_accept_reserve(callback: types.CallbackQuery):
     bid_id = int(callback.data.replace("accept_reserve_", ""))
     conn = sqlite3.connect("cargo_bot.db", timeout=15)
     cursor = conn.cursor()
+    cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ? AND status = 'PENDING'", (bid_id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        await callback.answer("Бронь уже была подтверждена ранее.", show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
     cursor.execute("SELECT load_id, user_id, cars, rate FROM bids WHERE bid_id = ?", (bid_id,))
     bid = cursor.fetchone()
 
@@ -8396,6 +8416,12 @@ async def admin_bid_action_api(request):
     route_str, date_str, details_text, cur_cars_str = l_row if l_row else ("Груз", "Срочно", "", "1")
 
     if action == "accept":
+        # Атомарная защита от дублирования при многократных кликах
+        c.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ? AND status = 'PENDING'", (bid_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return web.json_response({"error": "Заявка уже была подтверждена ранее"}, status=400)
+
         # Если это была обычная ставка (не резерв), уменьшаем остаток машин
         if not is_reservation:
             m = re.search(r'\d+', str(cur_cars_str))
@@ -8411,7 +8437,6 @@ async def admin_bid_action_api(request):
                 VALUES (?, ?, ?, ?, 1, ?, ?)
             """, (load_id, user_id, date_str, route_str, rate, details_text))
 
-        c.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
         conn.close()
         await update_cargo_messages_for_all_users(load_id)
@@ -8420,7 +8445,12 @@ async def admin_bid_action_api(request):
         return web.json_response({"status": "success"})
 
     elif action == "partial":
-        # Подтверждение части авто
+        # Атомарная защита от дублирования при частичном подтверждении
+        c.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ? AND status = 'PENDING'", (bid_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return web.json_response({"error": "Заявка уже была обработана ранее"}, status=400)
+
         confirm_cars = int(data.get("cars", 1))
         if confirm_cars <= 0:
             confirm_cars = 1
@@ -8447,6 +8477,10 @@ async def admin_bid_action_api(request):
                 INSERT INTO confirmed_deals (load_id, user_id, date, route, cars, price, details)
                 VALUES (?, ?, ?, ?, 1, ?, ?)
             """, (load_id, user_id, date_str, route_str, rate, details_text))
+
+        c.execute("UPDATE bids SET cars = ? WHERE bid_id = ?", (confirm_cars, bid_id))
+        conn.commit()
+        conn.close()
 
         c.execute("UPDATE bids SET status = 'ACCEPTED', cars = ? WHERE bid_id = ?", (confirm_cars, bid_id))
         conn.commit()
