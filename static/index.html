@@ -7,6 +7,23 @@
     
     <!-- Подключение Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Подпись Telegram для всех запросов к API (сервер проверяет её и не верит user_id из URL) -->
+    <script>
+        (function () {
+            const originalFetch = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+                init = init || {};
+                const url = typeof input === 'string' ? input : (input && input.url) || '';
+                if (url.indexOf('/api/') !== -1) {
+                    const headers = new Headers(init.headers || {});
+                    const initData = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || '';
+                    if (initData) headers.set('X-Init-Data', initData);
+                    init.headers = headers;
+                }
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
     
     <!-- Google  Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2075,7 +2092,7 @@
             let uid = getUserId();
             let key = localStorage.getItem('admin_key') || '';
             let sep = url.includes('?') ? '&' : '?';
-            let finalUrl = `${url}${sep}user_id=${uid}&admin_key=${encodeURIComponent(key)}&t=${Date.now()}`;
+            let finalUrl = `${url}${sep}user_id=${uid}&t=${Date.now()}`;
             options.headers = {
                 'Content-Type': 'application/json',
                 'X-Admin-Key': key,
@@ -2892,19 +2909,30 @@
         }
 
 
-        function downloadAdminExcel() {
+        async function downloadAdminExcel() {
             let uid = getUserId();
             let key = localStorage.getItem('admin_key') || '';
-            let downloadUrl = `/api/admin/export_excel?user_id=${uid}&admin_key=${encodeURIComponent(key)}`;
-
-            // Скачивание файла напрямую без открытия пустых окон в браузере
-            let a = document.createElement('a');
-            a.href = downloadUrl;
-            a.setAttribute('download', `deals_report_${Date.now()}.xlsx`);
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            showToast('Скачивание отчёта Excel...', 'info');
+            try {
+                // Ключ передаём в заголовке, а не в ссылке (ссылки попадают в логи и историю)
+                let res = await fetch(`/api/admin/export_excel?user_id=${uid}&t=${Date.now()}`, {
+                    headers: { 'X-Admin-Key': key }
+                });
+                if (!res.ok) {
+                    showToast('Не удалось скачать отчёт', 'error');
+                    return;
+                }
+                let blob = await res.blob();
+                let a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.setAttribute('download', `deals_report_${Date.now()}.xlsx`);
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+                showToast('Скачивание отчёта Excel...', 'info');
+            } catch (e) {
+                showToast('Ошибка сети при скачивании', 'error');
+            }
         }
 
         function setTheme(theme) {
