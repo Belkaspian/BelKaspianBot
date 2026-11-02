@@ -4780,22 +4780,20 @@ async def handle_accept_counter(callback: types.CallbackQuery):
                 VALUES (?, ?, ?, ?, 1, ?, ?)
             """, (load_id, user_id, date_str, route_str, counter_rate, details_text))
 
-        cursor.execute("UPDATE bids SET status = 'ACCEPTED' WHERE bid_id = ?", (bid_id,))
+        cursor.execute("UPDATE bids SET status = 'DECLINED' WHERE bid_id = ?", (bid_id,))
         conn.commit()
+        conn.close()
 
-        # Снимаем кнопки из сообщения в личном чате перевозчика
-            cursor.execute("SELECT user_message_id FROM bids WHERE bid_id = ?", (bid_id,))
-            u_msg_row = cursor.fetchone()
-            if u_msg_row and u_msg_row[0]:
-                try:
-                    await bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=u_msg_row[0],
-                        text=f"✅ Вы приняли встречную ставку {counter_rate} по рейсу «{route_str}» через приложение.",
-                        reply_markup=None
-                    )
-                except Exception:
-                    pass
+        if user_msg_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=user_msg_id,
+                    text=f"❌ Вы отклонили встречную ставку по рейсу «{route_str}».",
+                    reply_markup=None
+                )
+            except Exception:
+                pass
 
             add_notification(user_id, "Сделка подтверждена", f"Вы приняли встречную ставку {counter_rate} по грузу {route_str}.")
             await update_cargo_messages_for_all_users(load_id)
