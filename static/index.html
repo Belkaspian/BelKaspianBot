@@ -1524,36 +1524,36 @@
     <div class="modal-overlay" id="directUploadModal">
         <div class="modal-card">
             <div class="modal-header">
-                <div class="modal-title">Подача документов по грузу</div>
+                <div class="modal-title" id="directUploadModalTitle">Подача документов по грузу</div>
                 <div class="modal-close" onclick="closeModal('directUploadModal')">
                     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </div>
             </div>
             <input type="hidden" id="uploadModalDealId" />
-            <div class="form-group">
+            <div class="form-group" id="uploadPhoneGroup">
                 <label>Номер телефона водителя (можно несколько через /)</label>
                 <input type="text" id="uploadModalPhone" placeholder="+375291234567 / +79991234567" />
             </div>
-            <div class="form-group">
+            <div class="form-group" id="uploadCommentGroup">
                 <label>Комментарий / Текстовые данные по грузу</label>
                 <textarea id="uploadModalComment" placeholder="Сюда можно вставить текст с данными машины, прицепа, паспорта водителя или любые заметки..." rows="3"></textarea>
             </div>
             <div class="form-group">
-                <label>Документы (СТС, ВУ, Паспорт)</label>
+                <label id="uploadDocsLabel">Документы (СТС, ВУ, Паспорт)</label>
                 <div class="dropzone" id="directUploadDropzone" 
                      onclick="document.getElementById('directUploadFiles').click()"
                      ondragover="event.preventDefault(); this.style.borderColor='var(--primary)';"
                      ondragleave="this.style.borderColor='var(--border)';"
                      ondrop="handleDropFiles(event)">
                     <svg class="icon dropzone-icon" viewBox="0 0 24 24" style="width: 28px; height: 28px; margin-bottom: 6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                    <div style="font-weight: 600;">Перетащите файлы сюда или нажмите</div>
-                    <div style="font-size: 11px; color: var(--text-muted);">Поддерживаются PDF и фото документов</div>
+                    <div style="font-weight: 600;" id="uploadDropzoneMainText">Перетащите файлы сюда или нажмите</div>
+                    <div style="font-size: 11px; color: var(--text-muted);" id="uploadDropzoneSubText">Поддерживаются PDF и фото документов</div>
                 </div>
                 <input type="file" id="directUploadFiles" multiple accept="image/*,application/pdf" style="display: none;" onchange="handleDirectFileSelect(event)" />
             </div>
             <div class="file-preview-list" id="directFilePreviewList"></div>
             <div class="buttons">
-                <button class="btn btn-primary" onclick="submitDirectUploadData()">
+                <button class="btn btn-primary" id="directUploadSubmitBtn" onclick="submitDirectUploadData()">
                     Завершить и отправить
                 </button>
             </div>
@@ -3886,10 +3886,21 @@
                             </div>
                             ${d.details ? `<div class="admin-comment" style="margin-top:6px;"><b>Детали:</b> ${d.details}</div>` : ''}
 
-                            <div class="buttons" style="margin-top:10px;">
+                            ${d.pay_docs_error ? `
+                                <div class="missing-docs-box" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5; margin-top:6px;">
+                                    <b>Замечание ИИ по документам:</b><br>${d.pay_docs_error}
+                                </div>
+                            ` : ''}
+
+                            <div class="buttons" style="margin-top:10px; flex-wrap:wrap;">
                                 <button class="btn btn-primary" style="padding:6px 10px;" onclick="adminPushDealToKaiten(${d.deal_id}, event)">
                                     Подать в Kaiten
                                 </button>
+                                ${(!d.is_paid && d.pay_docs_status !== 'IN_ACCOUNTING' && d.pay_docs_status !== 'ACCEPTED') ? `
+                                    <button class="btn btn-warning" style="padding:6px 10px;" onclick="adminForceAccountingApproval(${d.deal_id}, event)">
+                                        Передать бухгалтеру вручную
+                                    </button>
+                                ` : ''}
                                 <button class="btn btn-secondary" style="padding:6px 10px;" onclick="openAdminEditDealModal(${d.deal_id})">
                                     Редактировать
                                 </button>
@@ -4063,6 +4074,31 @@
             } catch(e) {
                 showToast('Ошибка сети при связи с Kaiten', 'error');
             }
+        }
+        
+        
+        async function adminForceAccountingApproval(dealId, event) {
+            if (event) event.stopPropagation();
+            askConfirm(`Передать закрывающие документы по заказу #${dealId} в бухгалтерию вручную (в обход замечаний ИИ)?`, async (confirmed) => {
+                if (confirmed) {
+                    showToast('Передача документов бухгалтеру...', 'info');
+                    try {
+                        let res = await adminFetch('/api/admin/force_accounting_approval', {
+                            method: 'POST',
+                            body: JSON.stringify({ deal_id: dealId })
+                        });
+                        let data = await res.json();
+                        if (res.ok) {
+                            showToast(`Документы приняты! План оплаты: ${data.planned_payment_date}`, 'success');
+                            loadAdminData(true);
+                        } else {
+                            showToast(data.error || 'Ошибка передачи', 'error');
+                        }
+                    } catch(e) {
+                        showToast('Ошибка сети', 'error');
+                    }
+                }
+            });
         }
         
         
@@ -4579,10 +4615,32 @@
             directSelectedFiles = [];
             renderDirectFilePreview();
 
-            const modalTitle = document.querySelector('#directUploadModal .modal-title');
-            if (modalTitle) {
-                modalTitle.textContent = (mode === 'pay') ? 'Подача документов на оплату' : 'Подача документов по грузу';
+            const titleEl = document.getElementById('directUploadModalTitle');
+            const phoneGroup = document.getElementById('uploadPhoneGroup');
+            const commentGroup = document.getElementById('uploadCommentGroup');
+            const docsLabel = document.getElementById('uploadDocsLabel');
+            const mainText = document.getElementById('uploadDropzoneMainText');
+            const subText = document.getElementById('uploadDropzoneSubText');
+            const submitBtn = document.getElementById('directUploadSubmitBtn');
+
+            if (mode === 'pay') {
+                if (titleEl) titleEl.textContent = 'Подача документов на оплату';
+                if (phoneGroup) phoneGroup.style.display = 'none';
+                if (commentGroup) commentGroup.style.display = 'none';
+                if (docsLabel) docsLabel.textContent = 'Пакет документов на оплату';
+                if (mainText) mainText.textContent = 'Прикрепите CMR, Счёт, Акт и Заявку';
+                if (subText) subText.textContent = 'Поддерживаются PDF-файлы и фото оригиналов';
+                if (submitBtn) submitBtn.textContent = 'Отправить на проверку ИИ';
+            } else {
+                if (titleEl) titleEl.textContent = 'Подача документов по грузу';
+                if (phoneGroup) phoneGroup.style.display = 'block';
+                if (commentGroup) commentGroup.style.display = 'block';
+                if (docsLabel) docsLabel.textContent = 'Документы (СТС, ВУ, Паспорт)';
+                if (mainText) mainText.textContent = 'Перетащите файлы сюда или нажмите';
+                if (subText) subText.textContent = 'Поддерживаются PDF и фото документов';
+                if (submitBtn) submitBtn.textContent = 'Завершить и отправить';
             }
+
             document.getElementById('directUploadModal').classList.add('active');
         }
 
@@ -5080,12 +5138,22 @@
 
             let truckColHTML = '';
             if (mySubTab === 'archive') {
-                truckColHTML = `
-                    <div class="col-truck">
-                        <span style="font-size:8.5px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">План. оплата</span>
-                        <span style="font-weight:700; color:var(--primary); font-size:10.5px;">${d.planned_payment_date || '—'}</span>
-                    </div>
-                `;
+                if (d.pay_docs_status === 'PROCESSING') {
+                    truckColHTML = `
+                        <div class="col-truck">
+                            <span style="color:var(--primary); font-size:10px; font-weight:700; white-space:nowrap; display:inline-flex; align-items:center; gap:3px;">
+                                <svg class="icon spinner" viewBox="0 0 24 24" style="width:11px; height:11px;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="10"/></svg>проверка ИИ
+                            </span>
+                        </div>
+                    `;
+                } else {
+                    truckColHTML = `
+                        <div class="col-truck">
+                            <span style="font-size:8.5px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">План. оплата</span>
+                            <span style="font-weight:700; color:var(--primary); font-size:10.5px;">${d.planned_payment_date || '—'}</span>
+                        </div>
+                    `;
+                }
             } else if (isPending) {
                 truckColHTML = `<div class="col-truck"><span style="color:var(--warning); font-size:10px; font-weight:700;">Согласование</span></div>`;
             } else {
@@ -5149,10 +5217,17 @@
             let payDocsSectionHTML = '';
             if (mySubTab === 'archive') {
                 let pStatBadge = '<span class="badge">Не поданы</span>';
-                if (d.pay_docs_status === 'IN_ACCOUNTING') pStatBadge = '<span class="badge badge-today" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Проверка в бухгалтерии (2 дня)</span>';
-                else if (d.pay_docs_status === 'ACCEPTED') pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Документы приняты</span>';
-                else if (d.pay_docs_status === 'PAID') pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Оплачено</span>';
-                else if (d.pay_docs_status === 'AI_ERROR') pStatBadge = '<span class="badge" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Ошибка в документах</span>';
+                if (d.pay_docs_status === 'PROCESSING') {
+                    pStatBadge = '<span class="badge" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd; display:inline-flex; align-items:center; gap:4px;"><svg class="icon spinner" viewBox="0 0 24 24" style="width:11px; height:11px;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="10"/></svg>Идёт проверка документов ИИ...</span>';
+                } else if (d.pay_docs_status === 'IN_ACCOUNTING') {
+                    pStatBadge = '<span class="badge badge-today" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Проверка в бухгалтерии (2 дня)</span>';
+                } else if (d.pay_docs_status === 'ACCEPTED') {
+                    pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Документы приняты</span>';
+                } else if (d.pay_docs_status === 'PAID') {
+                    pStatBadge = '<span class="badge" style="background:#dcfce7; color:#15803d; border-color:#86efac;">Оплачено</span>';
+                } else if (d.pay_docs_status === 'AI_ERROR') {
+                    pStatBadge = '<span class="badge" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5;">Замечание ИИ</span>';
+                }
 
                 payDocsSectionHTML = `
                     <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);">
@@ -5160,7 +5235,7 @@
                             <span style="font-weight:700; font-size:11px; text-transform:uppercase; color:var(--text-muted);">Документы на оплату:</span>
                             ${pStatBadge}
                         </div>
-                        ${d.pay_docs_error ? `<div class="missing-docs-box" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5; margin-bottom:8px;"><b>Замечание:</b><br>${d.pay_docs_error}</div>` : ''}
+                        ${d.pay_docs_error ? `<div class="missing-docs-box" style="background:#fee2e2; color:#b91c1c; border-color:#fca5a5; margin-bottom:8px;"><b>Замечание ИИ:</b><br>${d.pay_docs_error}</div>` : ''}
                         
                         <div class="info-grid">
                             <div class="info-item">
@@ -5173,7 +5248,11 @@
                             </div>
                         </div>
 
-                        ${(!d.is_paid) ? `
+                        ${d.pay_docs_status === 'PROCESSING' ? `
+                            <div style="font-size:11px; color:var(--primary); font-weight:600; padding:6px 0;">
+                                ⏳ Пакет документов загружен и проверяется нейросетью. Результат появится автоматически...
+                            </div>
+                        ` : ((!d.is_paid) ? `
                             <div class="action-buttons-group" style="margin-top:8px;">
                                 <button class="btn btn-primary btn-main-action" onclick="openDirectUploadModal('${d.deal_id || d.id}', 'pay')">
                                     Подать документы на оплату
@@ -5185,7 +5264,7 @@
                                     </div>
                                 </button>
                             </div>
-                        ` : ''}
+                        ` : '')}
                     </div>
                 `;
             }
