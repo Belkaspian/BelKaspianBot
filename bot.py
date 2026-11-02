@@ -640,42 +640,122 @@ class AdminVerifyEditStates(StatesGroup):
 
 
 
+def get_key_category(key: str) -> str:
+    k = key.lower().strip()
+    if any(w in k for w in ['паспорт', 'passport']):
+        return 'passport'
+    if any(w in k for w in ['водительск', 'удостоверен', 'права', 'license']):
+        return 'license'
+    if any(w in k for w in ['телефон', 'тел', 'phone']):
+        return 'phone'
+    if any(w in k for w in ['водитель', 'фио', 'driver']):
+        return 'driver'
+    if any(w in k for w in ['прицеп', 'trailer']):
+        return 'trailer'
+    if any(w in k for w in ['тягач', 'truck', 'марка и модель', 'авто', 'машина', 'тс']):
+        return 'truck'
+    if any(w in k for w in ['рождения', 'birth']):
+        return 'birth_date'
+    if any(w in k for w in ['vin']):
+        return 'vin'
+    return k
+
+def is_doc_val_invalid(val: str) -> bool:
+    if not val or not val.strip():
+        return True
+    v = val.strip().lower()
+    invalid_tokens = [
+        "не распознан", "не распознано", "не распознана",
+        "не указан", "не указано", "не указана",
+        "сохранен ранее", "сохранено ранее",
+        "none", "null", "—", "-"
+    ]
+    return any(tok in v for tok in invalid_tokens)
+
 def merge_formatted_doc_text(old_text: str, new_text: str) -> str:
     if not old_text or not old_text.strip():
         return new_text.strip()
     if not new_text or not new_text.strip():
         return old_text.strip()
 
-    def parse_lines(txt):
-        lines = [l.strip() for l in txt.strip().split('\n') if l.strip()]
-        res = {}
+    def parse_blocks(txt: str):
+        lines = [l.rstrip() for l in txt.strip().split('\n')]
+        fields = []
         for line in lines:
-            if ':' in line:
-                k, v = line.split(':', 1)
-                res[k.strip()] = v.strip()
-        return res
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if ':' in line_str:
+                k, v = line_str.split(':', 1)
+                fields.append((k.strip(), v.strip(), get_key_category(k.strip())))
+            else:
+                fields.append((line_str, "", 'raw'))
+        return fields
 
-    old_map = parse_lines(old_text)
-    new_map = parse_lines(new_text)
+    old_fields = parse_blocks(old_text)
+    new_fields = parse_blocks(new_text)
 
-    merged = {}
-    all_keys = list(old_map.keys())
-    for k in new_map.keys():
-        if k not in all_keys:
-            all_keys.append(k)
+    new_by_cat = {}
+    for k, v, cat in new_fields:
+        if cat != 'raw':
+            new_by_cat[cat] = (k, v)
 
-    for key in all_keys:
-        old_val = old_map.get(key, "")
-        new_val = new_map.get(key, "")
+    merged_lines = []
+    handled_cats = set()
 
-        # Если в новых данных "Не распознан/Не указан", а в старых были данные — сохраняем старые
-        is_new_invalid = not new_val or any(inv in new_val.lower() for inv in ["не распознан", "не указан", "не распознано", "не распознана"])
-        if is_new_invalid and old_val and not any(inv in old_val.lower() for inv in ["не распознан", "не указан", "не распознано", "не распознана"]):
-            merged[key] = old_val
+    for k, v, cat in old_fields:
+        if cat == 'raw':
+            merged_lines.append(k)
+            continue
+
+        handled_cats.add(cat)
+        if cat in new_by_cat:
+            new_k, new_v = new_by_cat[cat]
+            if not is_doc_val_invalid(new_v):
+                merged_lines.append(f"{new_k}: {new_v}")
+            else:
+                merged_lines.append(f"{k}: {v}")
         else:
-            merged[key] = new_val if new_val else old_val
+            merged_lines.append(f"{k}: {v}")
 
-    return "\n".join([f"{k}: {v}" for k, v in merged.items()])
+    for k, v, cat in new_fields:
+        if cat != 'raw' and cat not in handled_cats:
+            handled_cats.add(cat)
+            if not is_doc_val_invalid(v):
+                merged_lines.append(f"{k}: {v}")
+
+    return "\n".join(merged_lines)
+
+def update_doc_text_fields(doc_text: str, phone: str = "", comment: str = "") -> str:
+    if not doc_text or not doc_text.strip():
+        return ""
+    lines = [l.rstrip() for l in doc_text.strip().split('\n')]
+    updated_lines = []
+    phone_updated = False
+
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            updated_lines.append("")
+            continue
+
+        if ':' in line_clean:
+            k, v = line_clean.split(':', 1)
+            cat = get_key_category(k.strip())
+            if cat == 'phone' and phone and phone not in ["Не указан", "—", "-"]:
+                updated_lines.append(f"{k.strip()}: {phone}")
+                phone_updated = True
+                continue
+
+        updated_lines.append(line)
+
+    if phone and not phone_updated and phone not in ["Не указан", "—", "-"]:
+        updated_lines.append(f"Номер телефона: {phone}")
+
+    if comment and comment.strip() and comment.strip() not in doc_text:
+        updated_lines.append(f"Примечание: {comment.strip()}")
+
+    return "\n".join(updated_lines)
 
 
 
@@ -1691,7 +1771,7 @@ class VehicleDetails(BaseModel):
     country: Optional[str] = Field(default="Не распознана", description="Страна регистрации")
 
 class DocumentDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта. Если нет русского языка, но есть латиница (SURNAME / GIVEN NAMES, как в Казахстане) — СТРОГО ЛАТИНИЦА!")
     number: Optional[str] = Field(default="Не распознан", description="Номер документа")
     issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
     expiry_date: Optional[str] = Field(default="Не указана", description="Срок действия документа")
@@ -1699,7 +1779,7 @@ class DocumentDetails(BaseModel):
     country: Optional[str] = Field(default="Не распознана", description="Страна выдачи")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта")
+    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта. Если нет русского языка, но есть латиница (SURNAME / GIVEN NAMES, как в Казахстане) — СТРОГО ЛАТИНИЦА!")
     birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
     phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
     passport: Optional[DocumentDetails] = None
@@ -2114,13 +2194,18 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
    - quality выбирается строго из: EXCELLENT | GOOD | POOR | UNREADABLE
 
 2. driver:
-   - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА / удостоверения личности (Фамилия Имя Отчество). Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
-     СТРОГИЙ ПРИОРИТЕТ ЯЗЫКА ДЛЯ full_name:
-     1) Если в паспорте / удостоверении личности есть РУССКИЙ ЯЗЫК (кириллица) — ОБЯЗАТЕЛЬНО извлекай ФИО на РУССКОМ языке (например: "ИВАНОВ ИВАН ИВАНОВИЧ").
-     2) Если русского языка в документе нет — используй АНГЛИЙСКИЙ ЯЗЫК / латинскую транслитерацию (например: "IVANOV IVAN"). 
-     3) И ТОЛЬКО Если нет ни русского, ни английского (латиницы) — используй исходный НАЦИОНАЛЬНЫЙ ЯЗЫК документа (казахский, азербайджанский, узбекский и т.д.).
-   - country: гражданство водителя по паспорту (полное название на русском). Если паспорта нет — null.
-   - phones: массив очищенных уникальных номеров телефона. Если нет — [].
+   - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА / удостоверения личности. Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
+     СТРОГАЯ ИЕРАРХИЯ ВЫБОРА ЯЗЫКА ДЛЯ full_name:
+     1) ПРИОРИТЕТ 1: РУССКИЙ ЯЗЫК. Если в документе присутствует РУССКИЙ язык (русская кириллица: графы Фамилия / Имя / Отчество) — извлекай ФИО строго на русском языке буква в букву.
+     2) ПРИОРИТЕТ 2: ЛАТИНИЦА / АНГЛИЙСКИЙ ЯЗЫК (SURNAME / GIVEN NAMES).
+        ЕСЛИ РУССКОГО ЯЗЫКА В ПАСПОРТЕ НЕТ, НО ЕСТЬ ЛАТИНИЦА (как в паспорте Казахстана, где указаны казахский и английский варианты) —
+        ТЫ ОБЯЗАН ИЗВЛЕЧЬ ИМЕННО ЛАТИНИЦУ (АНГЛИЙСКИЙ ВАРИАНТ)!
+        Пример для Казахстана:
+        ТЕГІ / SURNAME: ЗҰЛХАЙНАР / ZULKHAINAR
+        АТЫ / GIVEN NAMES: ЕРБОЛАТ / YERBOLAT
+        ТЫ ОБЯЗАН ИЗВЛЕЧЬ ЛАТИНИЦУ: "ZULKHAINAR YERBOLAT".
+        КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО извлекать казахскую кириллицу ("ЗҰЛХАЙНАР ЕРБОЛАТ"), если в документе напечатана латиница "ZULKHAINAR YERBOLAT"! ВСЕГДА ВЫБИРАЙ ЛАТИНИЦУ!
+     3) ПРИОРИТЕТ 3: НАЦИОНАЛЬНЫЙ ЯЗЫК. И ТОЛЬКО если в документе нет ни русского языка, ни латиницы — извлекай как есть на национальном языке строго буква в букву документа без изменений.
 
 3. driver.passport:
    - number: номер без "№" и пробелов.
@@ -3468,13 +3553,14 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     prev_docs_status = "NONE"
     prev_missing_docs = ""
 
+    prev_full_doc_text = ""
     if deal_id:
         conn = sqlite3.connect("cargo_bot.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
                    l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone,
-                   cd.docs_status, cd.missing_docs
+                   cd.docs_status, cd.missing_docs, COALESCE(cd.full_doc_text, '')
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ?
@@ -3491,9 +3577,14 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
             prev_driver_phone = row[7] or ""
             prev_docs_status = row[8] or "NONE"
             prev_missing_docs = row[9] or ""
+            prev_full_doc_text = row[10] or ""
         conn.close()
 
     ai_formatted_data, sorted_files, raw_json = await process_docs_with_ai(photos, documents, notes, is_polyethylene=is_polyethylene, route_str=route_str)
+
+    # Объединяем с ранее сохраненными полными данными: то, что не менялось, остается в оригинале
+    if was_previously_submitted and prev_full_doc_text and prev_full_doc_text.strip():
+        ai_formatted_data = merge_formatted_doc_text(prev_full_doc_text, ai_formatted_data)
 
     raw_json = raw_json if isinstance(raw_json, dict) else {}
     t_data = raw_json.get("truck") if isinstance(raw_json.get("truck"), dict) else {}
@@ -5943,7 +6034,8 @@ async def direct_upload_docs_api(request):
         cursor.execute("""
             SELECT cd.docs_submitted, cd.last_truck_plate, cd.last_driver_name,
                    l.cargo_type, l.details, l.text, cd.last_trailer_plate, cd.driver_phone, 
-                   cd.route, cd.date, cd.price, cd.docs_status, cd.missing_docs
+                   cd.route, cd.date, cd.price, cd.docs_status, cd.missing_docs,
+                   COALESCE(cd.full_doc_text, '')
             FROM confirmed_deals cd 
             LEFT JOIN loads l ON cd.load_id = l.load_id 
             WHERE cd.id = ? AND cd.user_id = ?
@@ -5961,6 +6053,7 @@ async def direct_upload_docs_api(request):
         date_str = deal_row[9] if deal_row else "Дата"
         price_str = deal_row[10] if deal_row else "Ставка"
         prev_missing_docs = deal_row[12] if deal_row else ""
+        prev_full_doc_text = deal_row[13] if deal_row else ""
 
         user_info = format_carrier_info(user_id)
 
@@ -6033,6 +6126,10 @@ async def direct_upload_docs_api(request):
                 new_driver_phone = normalize_phones(prev_driver_phone)
             else:
                 new_driver_phone = "Не указан"
+
+            # Полное сохранение неизменных данных без заглушек
+            if was_previously_submitted and prev_full_doc_text and prev_full_doc_text.strip():
+                ai_formatted_data = merge_formatted_doc_text(prev_full_doc_text, ai_formatted_data)
         else:
             raw_json = {}
             new_truck_plate = prev_truck_plate or "НЕ РАСПОЗНАН"
@@ -6040,14 +6137,17 @@ async def direct_upload_docs_api(request):
             new_driver_short_name = prev_driver_short_name or "Не распознан"
             new_driver_phone = normalize_phones(phone_input) if phone_input else (normalize_phones(prev_driver_phone) if prev_driver_phone else "Не указан")
 
-            ai_formatted_data = (
-                f"Тягач: {new_truck_plate}\n"
-                f"Прицеп: {new_trailer_plate}\n"
-                f"Водитель: {new_driver_short_name}\n"
-                f"Номера телефонов: {new_driver_phone}\n"
-                f"Паспорт: Сохранен ранее\n"
-                f"Водительское: Сохранено ранее"
-            )
+            # Если файлы не передавались, берем ПОЛНЫЕ сохраненные ранее строки паспорта и прав
+            if prev_full_doc_text and prev_full_doc_text.strip():
+                ai_formatted_data = update_doc_text_fields(prev_full_doc_text, phone=new_driver_phone, comment=comment_input)
+            else:
+                ai_formatted_data = (
+                    f"Авто: {new_truck_plate}/{new_trailer_plate}\n"
+                    f"Водитель: {new_driver_short_name}\n"
+                    f"Паспорт: Не указан\n"
+                    f"Водительское: Не указано\n"
+                    f"Номер телефона: {new_driver_phone}"
+                )
 
         prev_missing_list = [x.strip() for x in prev_missing_docs.split(',') if x.strip()]
         missing_items = []
