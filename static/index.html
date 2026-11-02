@@ -2323,11 +2323,11 @@
                                 ${!isReserve && b.comment ? `<div style="color:var(--text-muted); margin-top:2px;">Комментарий: ${b.comment}</div>` : ''}
                             </div>
                             <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
-                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'accept')">
+                                <button class="btn btn-success" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidDecision(${b.bid_id}, 'accept', this)">
                                     Подтвердить
                                 </button>
                                 ${b.cars > 1 ? `
-                                    <button class="btn btn-warning" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidPartial(${b.bid_id}, ${b.cars})">
+                                    <button class="btn btn-warning" style="padding:6px 12px; font-size:11px; flex:0 0 auto;" onclick="submitBidPartial(${b.bid_id}, ${b.cars}, this)">
                                         Часть (${b.cars})
                                     </button>
                                 ` : ''}
@@ -2344,7 +2344,16 @@
             `;
         }
 
-        async function submitBidDecision(bidId, action) {
+        let isBidActionSubmitting = false;
+
+        async function submitBidDecision(bidId, action, btnElement) {
+            if (isBidActionSubmitting) return;
+            isBidActionSubmitting = true;
+            if (btnElement) {
+                btnElement.disabled = true;
+                btnElement.style.opacity = '0.5';
+                btnElement.style.pointerEvents = 'none';
+            }
             try {
                 let res = await adminFetch('/api/admin/bid_action', {
                     method: 'POST',
@@ -2358,10 +2367,15 @@
                 } else {
                     showToast(data.error || 'Ошибка действия', 'error');
                 }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            } finally {
+                isBidActionSubmitting = false;
+            }
         }
 
-        async function submitBidPartial(bidId, maxCars) {
+        async function submitBidPartial(bidId, maxCars, btnElement) {
+            if (isBidActionSubmitting) return;
             let input = prompt(`Сколько авто подтвердить из ${maxCars}?`, '1');
             if (input === null) return;
             let count = parseInt(input);
@@ -2370,6 +2384,12 @@
             }
             if (count > maxCars) count = maxCars;
 
+            isBidActionSubmitting = true;
+            if (btnElement) {
+                btnElement.disabled = true;
+                btnElement.style.opacity = '0.5';
+                btnElement.style.pointerEvents = 'none';
+            }
             try {
                 let res = await adminFetch('/api/admin/bid_action', {
                     method: 'POST',
@@ -2383,7 +2403,11 @@
                 } else {
                     showToast(data.error || 'Ошибка действия', 'error');
                 }
-            } catch(e) { showToast('Ошибка сети', 'error'); }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            } finally {
+                isBidActionSubmitting = false;
+            }
         }
 
         async function submitBidCounter(bidId, maxCars, currentRate) {
