@@ -6624,7 +6624,6 @@ async def accept_counter_api(request):
             conn.commit()
             conn.close()
 
-            # Снимаем кнопки из сообщения в личном чате перевозчика
             if user_msg_id:
                 try:
                     await bot.edit_message_text(
