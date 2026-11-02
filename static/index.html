@@ -2125,11 +2125,14 @@
                 adminBotUsername = kData.bot_username || '';
                 adminRenderUrl = kData.render_url || '';
 
+                const pendingProfileCarriers = allAdminCarriersArray.filter(c => c.pending_company || c.pending_name || c.pending_phone);
+                const totalApprovalCount = (allAdminBidsArray ? allAdminBidsArray.length : 0) + pendingProfileCarriers.length;
+
                 const bBids = document.getElementById('badgeAdmBidsCount');
                 const bLoads = document.getElementById('badgeAdmLoadsCount');
                 const bDeals = document.getElementById('badgeAdmDealsCount');
                 const bCarriers = document.getElementById('badgeAdmCarriersCount');
-                if (bBids) bBids.textContent = allAdminBidsArray.length > 0 ? `(${allAdminBidsArray.length})` : '';
+                if (bBids) bBids.textContent = totalApprovalCount > 0 ? `(${totalApprovalCount})` : '';
                 if (bLoads) bLoads.textContent = `(${allAdminLoadsArray.length})`;
                 if (bDeals) bDeals.textContent = `(${allAdminDeals.length})`;
                 if (bCarriers) bCarriers.textContent = `(${allAdminCarriersArray.length})`;
@@ -2248,18 +2251,56 @@
         /* 2. СОГЛАСОВАНИЕ (БРОНИ И СТАВКИ) */
         function renderAdminBids() {
             let body = document.getElementById('adminContentBody');
-            if (!allAdminBidsArray || allAdminBidsArray.length === 0) {
+            let pendingProfiles = allAdminCarriersArray.filter(c => c.pending_company || c.pending_name || c.pending_phone);
+
+            if ((!allAdminBidsArray || allAdminBidsArray.length === 0) && pendingProfiles.length === 0) {
                 body.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-title">Нет заявок на согласовании</div>
-                        <div class="empty-desc">Все бронирования и ставки обработаны.</div>
+                        <div class="empty-desc">Все бронирования, ставки и изменения профилей обработаны.</div>
                     </div>`;
                 return;
             }
 
-            body.innerHTML = `
+            let profileChangesHTML = '';
+            if (pendingProfiles.length > 0) {
+                profileChangesHTML = `
+                    <div style="font-size:11px; font-weight:700; color:var(--primary); text-transform:uppercase; margin-bottom:8px;">
+                        Изменение данных перевозчиков (${pendingProfiles.length})
+                    </div>
+                    <div class="table-container" style="margin-bottom:16px;">
+                        ${pendingProfiles.map(p => `
+                            <div style="padding:12px; border-bottom:1px solid var(--border);">
+                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                                    <div>
+                                        <b style="font-size:13px; color:var(--text);">${p.company}</b>
+                                        <span style="font-size:11px; color:var(--text-muted); margin-left:6px;">#${p.user_id}</span>
+                                    </div>
+                                    <span class="badge" style="background:#fef3c7; color:#d97706; border-color:#fde68a;">Смена данных</span>
+                                </div>
+                                <div style="background:var(--bg); padding:8px 10px; border-radius:var(--radius-sm); font-size:11px; margin-bottom:8px; line-height:1.4;">
+                                    <div><b>Было:</b> ${p.company} • ${p.name} • ${p.phone}</div>
+                                    <div style="color:var(--primary); margin-top:3px;">
+                                        <b>Стало:</b> ${p.pending_company || p.company} • ${p.pending_name || p.name} • ${p.pending_phone || p.phone}
+                                    </div>
+                                </div>
+                                <div style="display:flex; gap:6px;">
+                                    <button class="btn btn-success" style="padding:5px 12px; font-size:11px;" onclick="submitProfileApproval(${p.user_id}, 'approve')">
+                                        Подтвердить
+                                    </button>
+                                    <button class="btn btn-danger" style="padding:5px 12px; font-size:11px;" onclick="submitProfileApproval(${p.user_id}, 'reject')">
+                                        Отклонить
+                                    </button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            body.innerHTML = profileChangesHTML + `
                 <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
-                    Заявки, требующие решения (${allAdminBidsArray.length})
+                    Заявки по грузам (${allAdminBidsArray ? allAdminBidsArray.length : 0})
                 </div>
                 <div class="table-container">
                     ${allAdminBidsArray.map(b => {
@@ -2442,6 +2483,26 @@
             }
         }
 
+        
+        async function submitProfileApproval(userId, action) {
+            try {
+                let res = await adminFetch('/api/admin/profile_changes_action', {
+                    method: 'POST',
+                    body: JSON.stringify({ user_id: userId, action: action })
+                });
+                let data = await res.json();
+                if (res.ok) {
+                    showToast(action === 'approve' ? 'Изменения утверждены' : 'Изменения отклонены', 'info');
+                    loadAdminData();
+                } else {
+                    showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                showToast('Ошибка сети', 'error');
+            }
+        }
+        
+        
         /* 3. БИРЖА (АККУРАТНАЯ КНОПКА ДОБАВИТЬ ГРУЗ) */
         function renderAdminLoads() {
             let body = document.getElementById('adminContentBody');
@@ -3726,6 +3787,20 @@
                             stageBadge = '<span class="badge" style="font-size:8.5px; padding:2px 5px; background:#fef3c7; color:#d97706;">Едет</span>';
                         }
 
+                        // Бейдж статуса в Kaiten (Зеленый - полные, Желтый - частичные, Серый - не подан)
+                        let kaitenBadge = '';
+                        if (d.kaiten_card_id && d.kaiten_card_id > 0) {
+                            if (d.docs_status === 'FULL') {
+                                kaitenBadge = `<span class="badge" style="font-size:8px; padding:1px 4px; background:#dcfce7; color:#15803d; border-color:#86efac; margin-top:2px;">Kaiten: полные</span>`;
+                            } else {
+                                kaitenBadge = `<span class="badge" style="font-size:8px; padding:1px 4px; background:#fef3c7; color:#d97706; border-color:#fde68a; margin-top:2px;">Kaiten: частичные</span>`;
+                            }
+                        } else {
+                            if (d.docs_status && d.docs_status !== 'NONE') {
+                                kaitenBadge = `<span class="badge" style="font-size:8px; padding:1px 4px; background:#fee2e2; color:#b91c1c; border-color:#fca5a5; margin-top:2px;">Не в Kaiten</span>`;
+                            }
+                        }
+
                         let { callPhone: admCall, waDigits: admWa } = parsePhonesForActions(d.driver_phone);
                         let adminPhoneBtnsHTML = '';
                         if (admCall || admWa) {
@@ -3753,9 +3828,10 @@
                             <div class="col-route">
                                 <div class="marquee-box"><span class="marquee-text">${d.route}</span></div>
                             </div>
-                            <div class="col-truck">
+                            <div class="col-truck" style="display:flex; flex-direction:column; align-items:center; gap:2px;">
                                 <span style="font-weight:700; color:var(--text); font-size:10px;">${cleanTruck}</span>
                                 ${stageBadge}
+                                ${kaitenBadge}
                             </div>
                             ${formatPriceHTML(d.price)}
                             <div class="col-arrow">
