@@ -1796,36 +1796,31 @@ async def parse_cargos_with_ai(raw_text: str) -> list[dict]:
 
 
 class VehicleDetails(BaseModel):
-    brand: Optional[str] = Field(default="Не распознан", description="Марка ТС")
-    model: Optional[str] = Field(default="", description="Модель ТС")
-    plate: Optional[str] = Field(default="Не распознан", description="Гос. номер ТС")
-    vin: Optional[str] = Field(default="Не распознан", description="VIN номер")
-    country: Optional[str] = Field(default="Не распознана", description="Страна регистрации")
+    brand: Optional[str] = Field(default=None, description="Марка ТС (Scania, Volvo, Schmitz, Krone, КАМАЗ и т.д.)")
+    model: Optional[str] = Field(default=None, description="Модель ТС")
+    plate: Optional[str] = Field(default=None, description="Гос. номер ТС без пробелов")
+    vin: Optional[str] = Field(default=None, description="VIN номер (17 знаков) или null")
+    country: Optional[str] = Field(default=None, description="Страна регистрации ТС на русском (Беларусь, Россия, Казахстан, Узбекистан и т.д.)")
 
 class DocumentDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО владельца паспорта. Если нет русского языка, но есть латиница (SURNAME / GIVEN NAMES, как в Казахстане) — СТРОГО ЛАТИНИЦА!")
-    number: Optional[str] = Field(default="Не распознан", description="Номер документа")
-    issue_date: Optional[str] = Field(default="Не распознана", description="Дата выдачи")
-    expiry_date: Optional[str] = Field(default="Не указана", description="Срок действия документа")
-    authority: Optional[str] = Field(default="Не распознан", description="Орган выдачи")
-    country: Optional[str] = Field(default="Не распознана", description="Страна выдачи")
+    full_name: Optional[str] = Field(default=None, description="ФИО владельца документа")
+    number: Optional[str] = Field(default=None, description="Серия и номер документа без символа № и лишних пробелов")
+    issue_date: Optional[str] = Field(default=None, description="Дата выдачи документа в формате ДД.ММ.ГГГГ")
+    expiry_date: Optional[str] = Field(default=None, description="Срок действия документа в формате ДД.ММ.ГГГГ или INDEFINITE")
+    authority: Optional[str] = Field(default=None, description="Орган выдачи документа (кратко, без областей и районов)")
+    country: Optional[str] = Field(default=None, description="Страна выдачи документа на русском")
 
 class DriverDetails(BaseModel):
-    full_name: Optional[str] = Field(default="Не распознан", description="ФИО водителя из паспорта. Если нет русского языка, но есть латиница (SURNAME / GIVEN NAMES, как в Казахстане) — СТРОГО ЛАТИНИЦА!")
-    birth_date: Optional[str] = Field(default="Не распознана", description="Дата рождения")
-    phones: Optional[str] = Field(default="Не указан", description="Номера телефонов водителя")
-    passport: Optional[DocumentDetails] = None
-    license: Optional[DocumentDetails] = None
-
-class ImageClassification(BaseModel):
-    image_index: int = Field(description="Порядковый номер")
-    category: str = Field(description="Категория документа")
+    full_name: Optional[str] = Field(default=None, description="ФИО водителя. Приоритет: паспорт (кириллица или латиница). Если паспорта нет — обязательно извлечь ФИО с водительского удостоверения!")
+    birth_date: Optional[str] = Field(default=None, description="Дата рождения водителя в формате ДД.ММ.ГГГГ")
+    phones: Optional[str] = Field(default=None, description="Номера телефонов одной строкой через слэш")
+    passport: Optional[DocumentDetails] = Field(default=None, description="Данные паспорта / ID карты")
+    license: Optional[DocumentDetails] = Field(default=None, description="Данные водительского удостоверения (прав)")
 
 class FullCargoSubmission(BaseModel):
-    truck: Optional[VehicleDetails] = None
-    trailer: Optional[VehicleDetails] = None
-    driver: Optional[DriverDetails] = None
-    image_roles: Optional[list[ImageClassification]] = None
+    truck: Optional[VehicleDetails] = Field(default=None, description="Тягач / грузовой автомобиль")
+    trailer: Optional[VehicleDetails] = Field(default=None, description="Полуприцеп / прицеп")
+    driver: Optional[DriverDetails] = Field(default=None, description="Данные водителя")
 
 class OrderPdfInfo(BaseModel):
     order_number: Optional[str] = Field(default="", description="Номер договора-заявки или номер заявки")
@@ -1983,16 +1978,8 @@ def convert_pdf_to_images(pdf_bytes: bytes) -> list[bytes]:
         except Exception as e:
             logging.error(f"PyMuPDF error: {e}")
 
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        for page in reader.pages:
-            for img in getattr(page, 'images', []):
-                if hasattr(img, 'data') and img.data:
-                    images.append(img.data)
-    except Exception as e:
-        logging.error(f"pypdf extraction error: {e}")
-
+    # Если PyMuPDF не установлен, не вырезаем случайные штампы и иконки через pypdf —
+    # возвращаем пустой список, чтобы весь PDF был передан в Gemini как application/pdf
     return images
 
 def split_and_crop_documents(image_bytes: bytes) -> list[Image.Image]:
@@ -2168,163 +2155,36 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
     if not GEMINI_API_KEY or not gemini_client or not HAS_GENAI:
         return fallback_text, {}
 
-    system_prompt = """Ты — высокоточный OCR‑аудитор транспортных и личных документов. Твоя задача — извлекать данные строго по визуальному слою изображений (Visual Ground Truth). Никаких догадок, автозамен, использования скрытых слоев PDF или словарных исправлений. Любая нормализация выполняется ИСКЛЮЧИТЕЛЬНО по правилам, явно описанным ниже.
+    system_prompt = """Ты — высокоточный эксперт-аудитор OCR транспортных и регистрационных документов.
+Твоя задача — извлечь данные строго по переданным изображениям.
 
-==================================================
-БАЗОВЫЕ ПРАВИЛА
-==================================================
-1. Читай строго то, что видно на изображении: буква в букву, цифра в цифру (за исключением явно описанной нормализации).
-2. ПОЛНЫЙ ЗАПРЕТ на машиночитаемую зону MRZ (строки со стрелками '<'), скрытые текстовые PDF-слои и сторонние сервисы OCR.
-3. Если поле отсутствует на документе или нечитаемо — возвращай null (для списков — пустой массив []). Фиксируй причины в review_reasons.
-4. Вывод — СТРОГО валидный JSON в формате raw text (без тегов ```json, префиксов, комментариев и анализа).
+ПРАВИЛА ИЗВЛЕЧЕНИЯ:
+1. В переданных файлах может быть как полный комплект документов, так и ОДИН отдельный документ (только техпаспорт, только паспорт, только водительское удостоверение).
+   Извлекай всё, что присутствует на файлах. Поля документов, которых нет в файлах, оставляй null.
+2. ТЯГАЧ (truck) и ПРИЦЕП (trailer):
+   - Различай СТС тягача (седельный тягач, грузовой) и СТС прицепа/полуприцепа (полуприцеп, прицеп, tirkama).
+   - plate: госномер без пробелов.
+   - vin: VIN-номер (17 знаков) или null.
+   - brand/model: марка и модель ТС.
+   - country: страна регистрации ТС на русском языке (Россия, Беларусь, Казахстан, Узбекистан и т.д.).
+3. ВОДИТЕЛЬ (driver):
+   - full_name: извлекай ФИО водителя.
+     * Приоритет 1: Паспорт (русская кириллица).
+     * Приоритет 2: Латиница паспорта (SURNAME / GIVEN NAMES), если русского языка в паспорте нет (как в Казахстане).
+     * Приоритет 3: ЕСЛИ ПАСПОРТА В ФАЙЛАХ НЕТ, НО ЕСТЬ ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ — ОБЯЗАТЕЛЬНО ИЗВЛЕКИ ФИО С ВОДИТЕЛЬСКОГО УДОСТОВЕРЕНИЯ!
+   - birth_date: дата рождения в формате ДД.ММ.ГГГГ (из паспорта или графы 3 прав).
+   - phones: контактные телефоны одной строкой.
+4. ПАСПОРТ (passport):
+   - number: номер без знака № и пробелов.
+   - issue_date / expiry_date: даты выдачи и окончания в формате ДД.ММ.ГГГГ.
+   - authority: орган выдачи кратко (например: МВД 77001, IIB, MVD). Не включай области и районы.
+   - country: страна выдачи на русском языке.
+5. ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ (license):
+   - number: номер ВУ без знака № и пробелов.
+   - issue_date / expiry_date: даты в формате ДД.ММ.ГГГГ.
+   - country: страна выдачи на русском языке.
 
-==================================================
-СТРОГИЕ ПРАВИЛА OCR И РАЗЛИЧЕНИЯ СИМВОЛОВ
-==================================================
-- **КОНТРОЛЬ «8» vs «6» и «8» vs «9»:**
-  * На свидетельствах о регистрации ТС (СТС Узбекистана, РФ, Казахстана, Беларуси) нанесена фоновая защитная сетка (гильош). Она пересекает символы и создает оптическую иллюзию разомкнутого кольца.
-  * Цифра «8» ВСЕГДА имеет ДВА замкнутых овала (и сверху, и снизу). Даже если верхний овал пересечен сеткой или тоньше нижнего — это «8».
-  * Цифра «6» замкнута ТОЛЬКО снизу; сверху у неё длинный открытый изогнутый хвост.
-  * В комбинациях цифр (например, «486») сравнивай соседние символы: если у левого верх замкнут, а у правого открыт — это СТРОГО «486» (писать «466» категорически запрещено).
-- **КОНТРОЛЬ «2» vs «Z»:**
-  * Цифра «2» имеет округлый верх и плавный дугообразный изгиб.
-  * Буква «Z» состоит строго из прямых угловатых линий.
-  * В позициях госномеров, VIN-кодов, сериях и номерах документов, где по стандарту ожидается ЦИФРА — это ВСЕГДА цифра «2», а НЕ буква «Z».
-- **ДРУГИЕ ПАРЫ:**
-  * Различай «0» (ноль) и «O»/«D» (буквы); «8» (восемь) и «B» (латинская буква); «1» (один) и «I»/«L»; «3» (три) и «8» (восемь).
-- **СТАНДАРТЫ ГОСНОМЕРОВ УЗБЕКИСТАНА:**
-  * Тягачи / грузовые авто юрлиц: [2 цифры региона] [3 цифры] [3 латинские буквы] (например, 10 486 QCA). Всегда исключай порядковый номер пункта бланка (например, «1.») из госномера.
-  * Прицепы: [2 цифры региона] [4 цифры] [2 латинские буквы] (например, 10 4987 BA).
-
-==================================================
-ПРАВИЛА НОРМАЛИЗАЦИИ
-==================================================
-- **Телефоны:** удалять пробелы, скобки, дефисы. Оставлять только ведущий '+' и цифры. Возвращать массив уникальных номеров.
-- **Номера документов (паспорт, ВУ):** удалять символ '№' и внутренние пробелы между серией и номером.
-- **Даты (issue_date, expiry_date, date_of_birth):**
-  * Приводить к единому формату "ДД.ММ.ГГГГ".
-  * Если указан двузначный год, дополнять: 00–40 → 20XX; 41–99 → 19XX.
-  * Если на документе указаны только месяц и год, либо двузначный год неоднозначен — возвращать null и фиксировать в review_reasons.
-  * Если документ бессрочный — в expiry_date возвращать "INDEFINITE".
-- **Коды стран:** буквенные коды (RUS, UZB, BY, KZ, PL и т.д.) конвертировать в полные официальные названия на русском языке ("Россия", "Узбекистан", "Беларусь" и т.д.).
-- **Алфавит для plate_number:**
-  * Для стран {Россия, Беларусь, Казахстан} совпадающие по начертанию буквы записывать КИРИЛЛИЦЕЙ (А, В, Е, К, М, Н, О, Р, С, Т, У, Х).
-  * Для Узбекистана, стран ЕС и прочих с латинским стандартом — писать ЛАТИНИЦЕЙ.
-  * Если страна не определена, но графемы совпадают с кириллицей — писать кириллицей и добавлять причину в review_reasons.
-  * Удалять любые пробелы и дефисы внутри номера при записи.
-- **VIN:**
-  * Удалять пробелы и дефисы перед проверкой.
-  * Допустима нормализация оптических подмен символов: 'I'→'1', 'O'→'0', 'Q'→'0'.
-  * Если после очистки длина строго 17 символов — vin валиден. Если длина ≠ 17 — vin = null.
-
-==================================================
-ПРАВИЛА ИЗВЛЕЧЕНИЯ ДАННЫХ ПО ОБЪЕКТАМ
-==================================================
-1. image_roles:
-   - Включает все переданные изображения по порядку ("Page 1", "Page 2", ...).
-   - category выбирается строго из: PASSPORT_FRONT | PASSPORT_BACK | DRIVERS_LICENSE_FRONT | DRIVERS_LICENSE_BACK | TRUCK_REGISTRATION | TRAILER_REGISTRATION | OTHER
-   - quality выбирается строго из: EXCELLENT | GOOD | POOR | UNREADABLE
-
-2. driver:
-   - full_name: СТРОГО И ИСКЛЮЧИТЕЛЬНО со страницы ПАСПОРТА / удостоверения личности. Категорически запрещено брать ФИО с водительского удостоверения или из зоны MRZ. Если паспорта в пакете нет — full_name = null.
-     СТРОГАЯ ИЕРАРХИЯ ВЫБОРА ЯЗЫКА ДЛЯ full_name:
-     1) ПРИОРИТЕТ 1: РУССКИЙ ЯЗЫК. Если в документе присутствует РУССКИЙ язык (русская кириллица: графы Фамилия / Имя / Отчество) — извлекай ФИО строго на русском языке буква в букву.
-     2) ПРИОРИТЕТ 2: ЛАТИНИЦА / АНГЛИЙСКИЙ ЯЗЫК (SURNAME / GIVEN NAMES).
-        ЕСЛИ РУССКОГО ЯЗЫКА В ПАСПОРТЕ НЕТ, НО ЕСТЬ ЛАТИНИЦА (как в паспорте Казахстана, где указаны казахский и английский варианты) —
-        ТЫ ОБЯЗАН ИЗВЛЕЧЬ ИМЕННО ЛАТИНИЦУ (АНГЛИЙСКИЙ ВАРИАНТ)!
-        Пример для Казахстана:
-        ТЕГІ / SURNAME: ЗҰЛХАЙНАР / ZULKHAINAR
-        АТЫ / GIVEN NAMES: ЕРБОЛАТ / YERBOLAT
-        ТЫ ОБЯЗАН ИЗВЛЕЧЬ ЛАТИНИЦУ: "ZULKHAINAR YERBOLAT".
-        КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО извлекать казахскую кириллицу ("ЗҰЛХАЙНАР ЕРБОЛАТ"), если в документе напечатана латиница "ZULKHAINAR YERBOLAT"! ВСЕГДА ВЫБИРАЙ ЛАТИНИЦУ!
-     3) ПРИОРИТЕТ 3: НАЦИОНАЛЬНЫЙ ЯЗЫК. И ТОЛЬКО если в документе нет ни русского языка, ни латиницы — извлекай как есть на национальном языке строго буква в букву документа без изменений.
-
-3. driver.passport:
-   - number: номер без "№" и пробелов.
-   - date_of_birth: дата рождения в формате "ДД.ММ.ГГГГ". Категорически запрещено брать из MRZ.
-   - issue_date / expiry_date: даты в формате "ДД.ММ.ГГГГ".
-   - issuing_authority: ТОЛЬКО краткое название или код ведомства (например: "МВД 77001", "MVD TJ", "IIB"). При наличии русского текста приоритет отдавай русскому, затем английскому, затем национальному. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать область, регион, район, город или место рождения.
-   - country: страна выдачи паспорта на русском языке.
-   - Если паспорта нет в переданных файлах — все поля внутри passport = null.
-
-4. driver.license:
-   - number: номер ВУ без "№" и пробелов.
-   - issue_date / expiry_date: даты в формате "ДД.ММ.ГГГГ".
-   - country: страна выдачи ВУ на русском языке.
-   - Если ВУ нет в переданных файлах — все поля внутри license = null.
-
-5. vehicles (массив объектов):
-   - Создавать отдельный объект для КАЖДОГО свидетельства о регистрации ТС (СТС / техпаспорта) в переданном пакете.
-   - Если документов на ТС нет вообще — возвращать пустой массив [].
-   - type: строго одно из TRUCK | TRAILER | UNKNOWN (Тягач, седельный тягач, грузовой → TRUCK; Прицеп, полуприцеп, YARIM TIRKAMA → TRAILER; легковые и прочие → UNKNOWN).
-   - brand: марка по визуальному слою или null.
-   - model: модель по визуальному слою или null.
-   - plate_number: госномер без пробелов с соблюдением правил алфавита или null.
-   - vin: валидный очищенный 17-значный VIN или null.
-   - country: полное наименование страны регистрации ТС на русском языке или null.
-
-==================================================
-ПРАВИЛА ВЕРИФИКАЦИИ (verification_flags)
-==================================================
-Устанавливай needs_human_review = true и добавляй краткое пояснение на русском языке в массив review_reasons (без дубликатов), если:
-- В пакете есть паспорт, но driver.full_name = null;
-- В документе на ТС отсутствует или невалиден VIN (vin = null);
-- Текст рукописный и есть сомнения хотя бы в одном знаке;
-- В дате указаны только месяц/год или двузначный год неоднозначен;
-- Есть неустранимая неоднозначность знаков в plate_number (O/0, I/1, S/5);
-- Страна ТС не определена, и алфавит plate_number выбран по эвристике;
-- Орган выдачи паспорта распознан не полностью;
-- Изображение размыто, обрезано или имеет качество POOR / UNREADABLE.
-Если замечаний и сомнений нет: needs_human_review = false, review_reasons = [].
-
-==================================================
-СТРОГАЯ СХЕМА ВЫВОДА (JSON ONLY)
-==================================================
-Выводи результат строго в следующем JSON-формате, соблюдая типы данных и регистр ключей:
-
-{
-  "image_roles": [
-    {
-      "page": "Page 1",
-      "category": "PASSPORT_FRONT",
-      "quality": "EXCELLENT"
-    }
-  ],
-  "driver": {
-    "full_name": null,
-    "country": null,
-    "phones": [],
-    "passport": {
-      "number": null,
-      "date_of_birth": null,
-      "issue_date": null,
-      "expiry_date": null,
-      "issuing_authority": null,
-      "country": null
-    },
-    "license": {
-      "number": null,
-      "issue_date": null,
-      "expiry_date": null,
-      "country": null
-    }
-  },
-  "vehicles": [
-    {
-      "type": "TRUCK",
-      "brand": null,
-      "model": null,
-      "plate_number": null,
-      "vin": null,
-      "country": null
-    }
-  ],
-  "verification_flags": {
-    "needs_human_review": false,
-    "review_reasons": []
-  }
-}
-"""
+Выводи результат строго в формате схемы JSON без сопроводительного текста."""
 
     config = genai_types.GenerateContentConfig(
         system_instruction=system_prompt,
@@ -2357,6 +2217,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
             else:
                 response = await asyncio.to_thread(gemini_client.models.generate_content, model=model_name, contents=contents, config=config)
             if response and response.text:
+                logging.info(f"✅ Успешный ответ модели {model_name} (длина {len(response.text)})")
                 break
         except Exception as e:
             logging.warning(f"⚠️ Модель {model_name} недоступна: {e}")
@@ -2373,11 +2234,11 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
                 raw_text = match_json.group(0)
 
             raw_json = json.loads(raw_text)
-            
+
             t = raw_json.get("truck") or {}
             tr = raw_json.get("trailer") or {}
-            
-            # Если ИИ вернул машины в общем массиве vehicles — распределяем их по типу
+
+            # Поддержка структуры, если модель вернула массив vehicles
             vehicles_list = raw_json.get("vehicles") or []
             for v in vehicles_list:
                 v_type = str(v.get("type") or "").upper()
@@ -2390,8 +2251,16 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
             p = d.get("passport") or {}
             l = d.get("license") or {}
 
-            raw_phones = (d.get("phones") or "").strip()
-            phones_str = raw_phones if raw_phones and raw_phones.lower() not in ["не указан", "не распознан"] else (text_notes.strip() if text_notes else "Не указан")
+            # Безопасная обработка телефонов (может прийти списком или строкой)
+            raw_phones = d.get("phones")
+            if isinstance(raw_phones, list):
+                raw_phones = " / ".join(str(x) for x in raw_phones if x)
+            elif raw_phones is not None:
+                raw_phones = str(raw_phones).strip()
+            else:
+                raw_phones = ""
+
+            phones_str = raw_phones if raw_phones and raw_phones.lower() not in ["не указан", "не распознан", "none", "null"] else (text_notes.strip() if text_notes else "Не указан")
 
             def build_brand_str(v_dict, show_model=True):
                 b = (v_dict.get('brand') or '').strip()
@@ -2401,17 +2270,12 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
                 if show_model and m and m.lower() not in b.lower(): return f"{b} {m}"
                 return b
 
-            # Ищем ФИО и в блоке водителя, и в блоке паспорта
-            driver_cand_name = (d.get("full_name") or p.get("full_name") or "").strip()
-            p_num = p.get('number') or p.get('series_number') or 'Не распознан'
+            # Ищем ФИО в водителе, паспорте или водительском удостоверении
+            driver_cand_name = (d.get("full_name") or p.get("full_name") or l.get("full_name") or "").strip()
+            driver_full_name = driver_cand_name if driver_cand_name else "Не распознан"
 
-            if p_num in ["Не распознан", None, ""] and not driver_cand_name:
-                driver_full_name = "Не распознан"
-            else:
-                driver_full_name = driver_cand_name or "Не распознан"
-
-            # Жесткая отсечка названий областей/районов из наименования органа выдачи
-            p_auth = (p.get('authority') or 'Не распознан').strip()
+            # Очистка органа выдачи от областей и районов
+            p_auth = (p.get('authority') or p.get('issuing_authority') or 'Не распознан').strip()
             p_auth = re.sub(r'(?i)\b(?:fergana|sughd|khatlon|gorno-badakhshan|region|oblast|obl|district)\b.*$', '', p_auth).strip(' ,.-')
             if not p_auth:
                 p_auth = "Не распознан"
@@ -2436,7 +2300,7 @@ async def process_docs_bytes_with_ai(contents, text_notes, is_polyethylene=False
             truck_country = translate_country(t.get('country') or 'Не распознана')
             trailer_country = translate_country(tr.get('country') or 'Не распознана')
 
-            b_date = d.get('birth_date') or 'Не распознана'
+            b_date = d.get('birth_date') or p.get('date_of_birth') or p.get('birth_date') or l.get('birth_date') or 'Не распознана'
             b_date_str = b_date if (b_date.endswith('г.') or b_date.endswith('г')) else f"{b_date}г."
 
             # Объединенная проверка слова полиэтилен по всем источникам
@@ -3424,8 +3288,8 @@ async def handle_convert_finish(message: types.Message, state: FSMContext):
         tr_data = raw_json.get("trailer") if isinstance(raw_json.get("trailer"), dict) else {}
         p_data = d_data.get("passport") if isinstance(d_data.get("passport"), dict) else {}
 
-        p_full_name = (p_data.get("full_name") or "").strip()
-        if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+        p_full_name = (p_data.get("full_name") or d_data.get("full_name") or l_data.get("full_name") or "").strip()
+        if not p_full_name or p_full_name.lower() in ["не распознан", "не указан"]:
             driver_name = "ВОДИТЕЛЬ"
         else:
             driver_name = p_full_name.upper()
@@ -3645,8 +3509,8 @@ async def handle_doc_finish(message: types.Message, state: FSMContext):
     else:
         new_trailer_plate = "Не указан"
 
-    p_full_name = (p_data.get("full_name") or "").strip()
-    if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+    p_full_name = (p_data.get("full_name") or d_data.get("full_name") or l_data.get("full_name") or "").strip()
+    if not p_full_name or p_full_name.lower() in ["не распознан", "не указан"]:
         new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
     else:
         new_driver_short_name = extract_surname_and_name(p_full_name)
@@ -6144,8 +6008,9 @@ async def direct_upload_docs_api(request):
                         out_b = io.BytesIO()
                         pil_img.save(out_b, format="JPEG", quality=90)
                         contents.append(genai_types.Part.from_bytes(data=out_b.getvalue(), mime_type="image/jpeg"))
-                    except Exception:
-                        contents.append(genai_types.Part.from_bytes(data=content, mime_type="image/jpeg"))
+                    except Exception as e:
+                        logging.warning(f"PIL process error: {e}")
+                        contents.append(genai_types.Part.from_bytes(data=content, mime_type=mime))
 
             ai_formatted_data, raw_json = await process_docs_bytes_with_ai(contents, combined_notes, is_polyethylene=is_polyethylene, route_str=route_str)
             
@@ -6172,8 +6037,8 @@ async def direct_upload_docs_api(request):
             else:
                 new_trailer_plate = "Не указан"
 
-            p_full_name = (p_data.get("full_name") or "").strip()
-            if p_data.get("number") in ["Не распознан", None, ""] or not p_full_name:
+            p_full_name = (p_data.get("full_name") or d_data.get("full_name") or l_data.get("full_name") or "").strip()
+            if not p_full_name or p_full_name.lower() in ["не распознан", "не указан"]:
                 new_driver_short_name = prev_driver_short_name if prev_driver_short_name and prev_driver_short_name != "Не распознан" else "Не распознан"
             else:
                 new_driver_short_name = extract_surname_and_name(p_full_name)
